@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=68.0", "wheel"]
+requires = ["setuptools>=68.0,<75", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -7,7 +7,7 @@ name = "nikobus-connect"
 version = "0.1.0"
 description = "Asynchronous library for Nikobus home automation with device discovery"
 requires-python = ">=3.11"
-license = "MIT"
+license = {text = "MIT"}
 dependencies = [
     "pyserial-asyncio>=0.5",
 ]
