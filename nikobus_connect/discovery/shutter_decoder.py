@@ -46,11 +46,11 @@ def decode(payload_hex: str, raw_bytes: list[str], context) -> dict[str, Any] | 
 
     t2_raw = _safe_int(raw_bytes[0][1])
     key_raw = _safe_int(raw_bytes[1][0])
-    selector_byte = _safe_int(raw_bytes[1])
+    channel_raw = _safe_int(raw_bytes[1][1])
     t1_raw = _safe_int(raw_bytes[2][0])
     mode_raw = _safe_int(raw_bytes[2][1])
 
-    if None in (key_raw, selector_byte, mode_raw):
+    if None in (key_raw, channel_raw, mode_raw):
         _LOGGER.debug(
             "Discovery skipped | type=roller module=%s reason=invalid_payload payload=%s",
             context.module_address,
@@ -66,9 +66,7 @@ def decode(payload_hex: str, raw_bytes: list[str], context) -> dict[str, Any] | 
         )
         return None
 
-    selector = selector_byte & 0x7F
-    channel_raw = selector
-    channel_decoded = (selector // 2) + 1
+    channel_decoded = (channel_raw // 2) + 1
     channel_count = context.module_channel_count
     if channel_count is not None and not (1 <= channel_decoded <= channel_count):
         _LOGGER.debug(
