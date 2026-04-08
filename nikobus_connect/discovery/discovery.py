@@ -22,7 +22,7 @@ from ..protocol import make_pc_link_inventory_command
 
 _LOGGER = logging.getLogger(__name__)
 
-DIMMER_EMPTY_RESPONSE_THRESHOLD = 8
+MODULE_EMPTY_RESPONSE_THRESHOLD = 3
 
 # ---------------------------------------------------------------------------
 # IR channel decoding (e.g. 30A=9E4E2C, 30B=DE4E2C, 31A=BE4E2C)
@@ -242,6 +242,8 @@ class NikobusDiscovery:
         self.discovery_stage: str | None = None
         self._register_scan_queue: list[str] = []
         self._inventory_addresses: set[str] = set()
+        self._module_found_data: bool = False
+        self._module_consecutive_empties: int = 0
         self.reset_state()
 
     def reset_state(self, *, update_flags: bool = True):
@@ -258,6 +260,8 @@ class NikobusDiscovery:
         self._register_scan_queue = []
         self._inventory_addresses = set()
         self._inventory_identity_queued: set[str] = set()
+        self._module_found_data = False
+        self._module_consecutive_empties = 0
         self.discovery_stage = None
         self._decoded_buffer: dict | None = None
         if update_flags:
@@ -330,6 +334,45 @@ class NikobusDiscovery:
     def _is_pc_link_inventory_terminator(self, converted_address: str, data_bytes: bytes) -> bool:
         return converted_address == "FFFFFF" or (bool(data_bytes) and all(b == 0xFF for b in data_bytes))
 
+    async def _check_early_termination(self, address: str, had_data: bool) -> bool:
+        """Track consecutive empty module inventory responses; abort when threshold is reached.
+
+        After the first real decoded relationship is seen, every frame that
+        produces no decoded commands increments a consecutive-empty counter.
+        Once that counter hits ``MODULE_EMPTY_RESPONSE_THRESHOLD`` the
+        remaining queued register-read commands are drained and the current
+        module's discovery is finalized, saving ~30 s of bus time.
+
+        Returns ``True`` when early termination was triggered (caller should
+        ``return`` immediately).
+        """
+        if had_data:
+            self._module_found_data = True
+            self._module_consecutive_empties = 0
+            return False
+
+        if not self._module_found_data:
+            # Haven't seen any real data yet — keep scanning.
+            return False
+
+        self._module_consecutive_empties += 1
+        if self._module_consecutive_empties >= MODULE_EMPTY_RESPONSE_THRESHOLD:
+            _LOGGER.info(
+                "Module inventory early termination | module=%s "
+                "consecutive_empties=%d threshold=%d",
+                address,
+                self._module_consecutive_empties,
+                MODULE_EMPTY_RESPONSE_THRESHOLD,
+            )
+            drained = self._coordinator.nikobus_command.drain_queue()
+            _LOGGER.info(
+                "Drained %d remaining discovery commands from queue", drained
+            )
+            await self._finalize_discovery(address)
+            return True
+
+        return False
+
     async def _timeout_after(self, module_address: str | None) -> None:
         try:
             await asyncio.sleep(self._module_timeout_seconds)
@@ -354,6 +397,8 @@ class NikobusDiscovery:
         self._module_address = None
         self._module_type = None
         self._module_channels = None
+        self._module_found_data = False
+        self._module_consecutive_empties = 0
 
     async def _finalize_discovery(self, module_address: str | None = None) -> None:
         self._cancel_timeout()
@@ -834,6 +879,8 @@ class NikobusDiscovery:
                 if commands:
                     self._module_address = address
                     await self._handle_decoded_commands(address, commands)
+                if await self._check_early_termination(address, bool(commands)):
+                    return
                 self._schedule_timeout()
                 return
 
@@ -871,7 +918,9 @@ class NikobusDiscovery:
             if decoded_commands:
                 await self._handle_decoded_commands(address, decoded_commands)
 
-            # --- FIX: Never abort early. Let the 5-second inactivity timeout finalize the scan ---
+            if await self._check_early_termination(address, bool(decoded_commands)):
+                return
+
             if not self._coordinator.discovery_module:
                 await self._finalize_discovery(address)
             else:
