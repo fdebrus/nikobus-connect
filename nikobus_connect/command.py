@@ -248,6 +248,22 @@ class NikobusCommandHandler:
         await self._command_queue.put(command_item)
         _LOGGER.debug("Command queued: %s", command)
 
+    def drain_queue(self) -> int:
+        """Drain all pending commands from the queue.
+
+        Used by discovery to abort remaining register reads after early
+        termination.  Returns the number of discarded commands.
+        """
+        count = 0
+        while not self._command_queue.empty():
+            try:
+                self._command_queue.get_nowait()
+                self._command_queue.task_done()
+                count += 1
+            except asyncio.QueueEmpty:
+                break
+        return count
+
     async def _send_command(self, command: str) -> None:
         """Send a command to the Nikobus system."""
         _LOGGER.debug("Sending command: %s", command)
