@@ -6,7 +6,7 @@ import logging
 from typing import Any
 
 from .base import DecodedCommand
-from .mapping import DIMMER_MODE_MAPPING
+from .mapping import DIMMER_MODE_MAPPING, DIMMER_TIMER_MAPPING
 from .protocol import (
     _format_channel,
     _is_all_ff,
@@ -21,6 +21,27 @@ from ..const import DEVICE_INVENTORY_ANSWER as DEVICE_INVENTORY
 _LOGGER = logging.getLogger(__name__)
 
 EXPECTED_CHUNK_LEN = 16
+
+
+def _timer_value(mode_raw: int | None, t1_raw: int | None) -> tuple[str | None, str | None]:
+    """Return timer/preset values for dimmer modules based on mode and raw T1."""
+
+    if mode_raw is None or t1_raw is None:
+        return None, None
+
+    timer_entry = DIMMER_TIMER_MAPPING.get(t1_raw)
+    if timer_entry is None:
+        return None, None
+
+    # Preset level (voltage) for preset modes
+    if mode_raw in (8, 9):  # M11 Preset on/off, M12 Preset on
+        return timer_entry[0], None
+
+    # Time value for timed modes
+    if mode_raw in (4, 5, 6, 7):  # M05-M08
+        return timer_entry[2], None
+
+    return None, None
 
 
 def decode(payload_hex: str, raw_bytes: list[str], context) -> dict[str, Any] | None:
@@ -44,6 +65,7 @@ def decode(payload_hex: str, raw_bytes: list[str], context) -> dict[str, Any] | 
 
     key_raw = _safe_int(raw_bytes[3][0])
     channel_raw = _safe_int(raw_bytes[3][1])
+    t1_raw = _safe_int(raw_bytes[4][0])
     mode_raw = _safe_int(raw_bytes[4][1])
 
     if None in (key_raw, channel_raw, mode_raw):
@@ -79,6 +101,8 @@ def decode(payload_hex: str, raw_bytes: list[str], context) -> dict[str, Any] | 
         getattr(context.coordinator, "get_button_channels", None),
     )
 
+    t1_val, t2_val = _timer_value(mode_raw, t1_raw)
+
     decoded = {
         "payload": payload_hex,
         "button_address": normalized_button,
@@ -87,12 +111,12 @@ def decode(payload_hex: str, raw_bytes: list[str], context) -> dict[str, Any] | 
         "channel_raw": channel_raw,
         "channel": channel_decoded,
         "mode_raw": mode_raw,
-        "t1_raw": None,
+        "t1_raw": t1_raw,
         "t2_raw": None,
         "K": key_raw,
         "C": _format_channel(channel_decoded),
-        "T1": None,
-        "T2": None,
+        "T1": t1_val,
+        "T2": t2_val,
         "M": DIMMER_MODE_MAPPING.get(mode_raw),
     }
 
