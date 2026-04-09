@@ -17,7 +17,7 @@ from .mapping import (
 )
 from .protocol import classify_device_type, convert_nikobus_address, reverse_hex
 from ..const import DEVICE_ADDRESS_INVENTORY, DEVICE_INVENTORY_ANSWER
-from .fileio import merge_discovered_links, update_button_data, update_module_data
+from .fileio import merge_linked_modules, update_button_data, update_module_data
 from ..protocol import make_pc_link_inventory_command
 
 _LOGGER = logging.getLogger(__name__)
@@ -69,6 +69,13 @@ def decode_ir_channel(ir_slot_addr: str | None, key_raw: int | None) -> str | No
 def add_to_command_mapping(command_mapping, decoded_command, module_address):
     """Store decoded command information, allowing one-to-many button mappings."""
     push_button_address = decoded_command.get("push_button_address")
+
+    # Fall back to physical device address when push_button_address could not
+    # be resolved (e.g. coordinator doesn't know the button's channel count).
+    # fileio._rebuild_address_lookup() maps physical addresses via
+    # linked_button[].address, so the match will still succeed.
+    if push_button_address is None:
+        push_button_address = decoded_command.get("button_address")
 
     # Accept legacy/new decoder fields
     key_raw = decoded_command.get("key_raw")
@@ -897,7 +904,7 @@ class NikobusDiscovery:
             len(self._decoded_buffer["commands"]),
         )
 
-        updated_buttons, links_added, outputs_added = await merge_discovered_links(
+        updated_buttons, links_added, outputs_added = await merge_linked_modules(
             self._button_config_path, command_mapping
         )
         _LOGGER.info(
