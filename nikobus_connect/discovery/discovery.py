@@ -30,9 +30,10 @@ MODULE_EMPTY_RESPONSE_THRESHOLD = 3
 # IR receivers use bus addresses XXXX81..XXXXBF for IR slots.
 # Channel number = slot_byte - 0x80  (range 01-39).
 # Bank (A/B/C/D) is determined by the key index on the button:
-#   key 0 → C,  key 1 → A,  key 2 → D,  key 3 → B
-# This matches the KEY_MAPPING labels: 1A=key1, 1B=key3, 1C=key0, 1D=key2.
-_IR_KEY_TO_BANK = {0: "C", 1: "A", 2: "D", 3: "B"}
+#   4-ch buttons: key 0→C, 1→A, 2→D, 3→B  (labels 1C, 1A, 1D, 1B)
+#   8-ch buttons: keys 0-3 = group 2 (C,A,D,B), keys 4-7 = group 1 (C,A,D,B)
+# The C,A,D,B pattern repeats every 4 keys, so bank = map[key % 4].
+_IR_BANK_CYCLE = ("C", "A", "D", "B")
 _IR_MAX_CHANNEL = 39
 
 
@@ -60,10 +61,10 @@ def decode_ir_channel(ir_slot_addr: str | None, key_raw: int | None) -> str | No
     if channel < 1 or channel > _IR_MAX_CHANNEL:
         return None
 
-    bank = _IR_KEY_TO_BANK.get(key_raw)
-    if bank is None:
+    if not isinstance(key_raw, int) or key_raw < 0 or key_raw > 7:
         return None
 
+    bank = _IR_BANK_CYCLE[key_raw % 4]
     return f"{channel:02d}{bank}"
 
 
