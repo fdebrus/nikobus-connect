@@ -335,41 +335,21 @@ class NikobusDiscovery:
         return converted_address == "FFFFFF" or (bool(data_bytes) and all(b == 0xFF for b in data_bytes))
 
     async def _check_early_termination(self, address: str, had_data: bool) -> bool:
-        """Track consecutive empty module inventory responses; abort when threshold is reached.
+        """Track consecutive empty module inventory responses for logging.
 
-        After the first real decoded relationship is seen, every frame that
-        produces no decoded commands increments a consecutive-empty counter.
-        Once that counter hits ``MODULE_EMPTY_RESPONSE_THRESHOLD`` the
-        remaining queued register-read commands are drained and the current
-        module's discovery is finalized, saving ~30 s of bus time.
+        Early termination is disabled because roller/shutter modules have
+        sparsely-programmed registers — button links are spread across the
+        full register range (0x10-0xFF) with large gaps between them.  The
+        full scan (~36 s per module) is acceptable for a one-time discovery.
 
-        Returns ``True`` when early termination was triggered (caller should
-        ``return`` immediately).
+        Always returns ``False`` so the caller continues scanning.
         """
         if had_data:
             self._module_found_data = True
             self._module_consecutive_empties = 0
-            return False
-
-        if not self._module_found_data:
-            # Haven't seen any real data yet — keep scanning.
-            return False
-
-        self._module_consecutive_empties += 1
-        if self._module_consecutive_empties >= MODULE_EMPTY_RESPONSE_THRESHOLD:
-            _LOGGER.info(
-                "Module inventory early termination | module=%s "
-                "consecutive_empties=%d threshold=%d",
-                address,
-                self._module_consecutive_empties,
-                MODULE_EMPTY_RESPONSE_THRESHOLD,
-            )
-            drained = self._coordinator.nikobus_command.drain_queue()
-            _LOGGER.info(
-                "Drained %d remaining discovery commands from queue", drained
-            )
-            await self._finalize_discovery(address)
-            return True
+        else:
+            if self._module_found_data:
+                self._module_consecutive_empties += 1
 
         return False
 
