@@ -70,6 +70,13 @@ def add_to_command_mapping(command_mapping, decoded_command, module_address):
     """Store decoded command information, allowing one-to-many button mappings."""
     push_button_address = decoded_command.get("push_button_address")
 
+    # Fall back to physical device address when push_button_address could not
+    # be resolved (e.g. coordinator doesn't know the button's channel count).
+    # fileio._rebuild_address_lookup() maps physical addresses via
+    # discovered_info[].address, so the match will still succeed.
+    if push_button_address is None:
+        push_button_address = decoded_command.get("button_address")
+
     # Accept legacy/new decoder fields
     key_raw = decoded_command.get("key_raw")
     if key_raw is None:
