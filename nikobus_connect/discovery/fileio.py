@@ -667,6 +667,22 @@ async def merge_linked_modules(file_path, command_mapping):
             linked_modules = []
             button_entry["linked_modules"] = linked_modules
 
+        # Build the set of allowed module addresses from impacted_module.
+        # When impacted_module is configured with real addresses, only those
+        # modules should appear in linked_modules.  This prevents a shared
+        # wall button from pulling in unrelated modules (e.g. a cover module
+        # being linked to a light-only button).
+        impacted_modules = button_entry.get("impacted_module", [])
+        allowed_module_addresses: set[str] | None = None
+        if isinstance(impacted_modules, list):
+            addrs = {
+                _normalize_address(m.get("address"))
+                for m in impacted_modules
+                if isinstance(m, dict) and _normalize_address(m.get("address"))
+            }
+            if addrs:
+                allowed_module_addresses = addrs
+
         updated_entry = False
         matched_addresses.add(normalized_address)
 
@@ -677,6 +693,20 @@ async def merge_linked_modules(file_path, command_mapping):
             module_address = output.get("module_address")
             if module_address is None:
                 continue
+
+            # Skip modules not listed in impacted_module when that list is
+            # configured.  A shared wall button may control multiple modules
+            # but each logical button should only link to its own modules.
+            if allowed_module_addresses is not None:
+                norm_mod_addr = _normalize_address(module_address)
+                if norm_mod_addr and norm_mod_addr not in allowed_module_addresses:
+                    _LOGGER.debug(
+                        "Skipping module %s for button %s: not in impacted_module %s",
+                        module_address,
+                        button_entry.get("description", normalized_address),
+                        allowed_module_addresses,
+                    )
+                    continue
 
             channel_number = output.get("channel")
             mode_label = output.get("mode")
