@@ -452,7 +452,7 @@ async def update_button_data(file_path, discovered_devices, key_mapping, convert
             }
             button = lookup.get(discovered_channel_address)
             if button:
-                discovered_list = button.setdefault("discovered_info", [])
+                discovered_list = button.setdefault("linked_button", [])
                 found_info = next(
                     (
                         info
@@ -482,7 +482,7 @@ async def update_button_data(file_path, discovered_devices, key_mapping, convert
                     "description": f"{description} #N{discovered_channel_address}",
                     "address": discovered_channel_address,
                     "impacted_module": [{"address": "", "group": ""}],
-                    "discovered_info": [new_info],
+                    "linked_button": [new_info],
                 }
                 updated_data.append(new_button)
                 lookup[discovered_channel_address] = new_button
@@ -498,7 +498,7 @@ def _normalize_key(value):
         return value
 
 
-async def merge_discovered_links(file_path, command_mapping):
+async def merge_linked_modules(file_path, command_mapping):
     """Merge discovery command mapping into nikobus_button_config.json.
 
     Parameters
@@ -509,15 +509,15 @@ async def merge_discovered_links(file_path, command_mapping):
         Mapping of button keys to output definitions.
 
     Notes:
-        - discovered_links blocks are grouped by module_address only.
+        - linked_modules blocks are grouped by module_address only.
         - Supports command_mapping keys:
             (push_button_address, key_raw)              [legacy]
             (push_button_address, key_raw, ir_code)     [IR-aware]
-        - We do NOT persist key/key_raw in discovered_links; key identity is tracked in discovered_info.
-        - For IR receivers, the bus-emitted address is stored in discovered_info[].address.
+        - We do NOT persist key/key_raw in linked_modules; key identity is tracked in linked_button.
+        - For IR receivers, the bus-emitted address is stored in linked_button[].address.
           Therefore we must match button entries by:
             - top-level button["address"] (legacy), OR
-            - any discovered_info[].address (IR / bus identity)
+            - any linked_button[].address (IR / bus identity)
         - If a button is not found in the JSON, it is skipped to prevent ghost/garbage buttons.
     """
 
@@ -560,9 +560,9 @@ async def merge_discovered_links(file_path, command_mapping):
             if top_addr:
                 lookup.setdefault(top_addr, button)
 
-            discovered_info = button.get("discovered_info", [])
-            if isinstance(discovered_info, list):
-                for info in discovered_info:
+            linked_button = button.get("linked_button", [])
+            if isinstance(linked_button, list):
+                for info in linked_button:
                     if not isinstance(info, dict):
                         continue
                     di_addr = _normalize_address(info.get("address"))
@@ -580,7 +580,7 @@ async def merge_discovered_links(file_path, command_mapping):
                                 shifted_addr = f"{(base_int + 1):06X}"
                                 lookup.setdefault(shifted_addr, button)
                         except ValueError:
-                            _LOGGER.debug("Invalid hex address in discovered_info: %s", di_addr)
+                            _LOGGER.debug("Invalid hex address in linked_button: %s", di_addr)
                     # ------------------------------------------------------------------
 
         return lookup
@@ -636,10 +636,10 @@ async def merge_discovered_links(file_path, command_mapping):
             unmatched_addresses.add(normalized_address)
             continue
 
-        discovered_links = button_entry.setdefault("discovered_links", [])
-        if not isinstance(discovered_links, list):
-            discovered_links = []
-            button_entry["discovered_links"] = discovered_links
+        linked_modules = button_entry.setdefault("linked_modules", [])
+        if not isinstance(linked_modules, list):
+            linked_modules = []
+            button_entry["linked_modules"] = linked_modules
 
         updated_entry = False
         matched_addresses.add(normalized_address)
@@ -669,7 +669,7 @@ async def merge_discovered_links(file_path, command_mapping):
             matching_block = next(
                 (
                     block
-                    for block in discovered_links
+                    for block in linked_modules
                     if isinstance(block, dict) and block.get("module_address") == module_address
                 ),
                 None,
@@ -677,7 +677,7 @@ async def merge_discovered_links(file_path, command_mapping):
 
             if matching_block is None:
                 matching_block = {"module_address": module_address, "outputs": []}
-                discovered_links.append(matching_block)
+                linked_modules.append(matching_block)
                 links_added += 1
                 updated_entry = True
 
@@ -732,11 +732,11 @@ async def merge_discovered_links(file_path, command_mapping):
 
         if updated_entry:
             # Sort blocks by module address
-            discovered_links.sort(
+            linked_modules.sort(
                 key=lambda block: (block.get("module_address", "") if isinstance(block, dict) else "")
             )
 
-            for block in discovered_links:
+            for block in linked_modules:
                 if not isinstance(block, dict):
                     continue
                 block_outputs = block.get("outputs", [])
