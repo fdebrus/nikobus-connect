@@ -22,8 +22,6 @@ from ..protocol import make_pc_link_inventory_command
 
 _LOGGER = logging.getLogger(__name__)
 
-MODULE_EMPTY_RESPONSE_THRESHOLD = 3
-
 # ---------------------------------------------------------------------------
 # IR channel decoding
 # ---------------------------------------------------------------------------
