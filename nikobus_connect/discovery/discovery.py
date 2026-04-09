@@ -22,90 +22,48 @@ from ..protocol import make_pc_link_inventory_command
 
 _LOGGER = logging.getLogger(__name__)
 
-MODULE_EMPTY_RESPONSE_THRESHOLD = 3
-
 # ---------------------------------------------------------------------------
-# IR channel decoding (e.g. 30A=9E4E2C, 30B=DE4E2C, 31A=BE4E2C)
+# IR channel decoding
 # ---------------------------------------------------------------------------
-BASE_LOW16 = 0x4E2C
-BASE_HIGH_30A = 0x9E
-BANK_BIT = 0x40
-CHANNEL_STEP = 0x20
+# IR receivers use bus addresses XXXX81..XXXXBF for IR slots.
+# Channel number = slot_byte - 0x80  (range 01-39).
+# Bank (A/B/C/D) is determined by the key index on the button:
+#   4-ch buttons: key 0→C, 1→A, 2→D, 3→B  (labels 1C, 1A, 1D, 1B)
+#   8-ch buttons: keys 0-3 = group 2 (C,A,D,B), keys 4-7 = group 1 (C,A,D,B)
+# The C,A,D,B pattern repeats every 4 keys, so bank = map[key % 4].
+_IR_BANK_CYCLE = ("C", "A", "D", "B")
+_IR_MAX_CHANNEL = 39
 
 
-def _normalize_hex(s: str | None) -> str | None:
-    if not s:
+def decode_ir_channel(ir_slot_addr: str | None, key_raw: int | None) -> str | None:
+    """Derive the IR channel label from a bus slot address and key index.
+
+    Example: ir_slot_addr="0D1C91", key_raw=1  → "17A"
+             ir_slot_addr="0D1C9E", key_raw=3  → "30B"
+
+    Returns the label (e.g. "17A") or None for non-IR / out-of-range addresses.
+    """
+    if not ir_slot_addr or key_raw is None:
         return None
-    s = s.strip().upper()
-    if s.startswith("0X"):
-        s = s[2:]
-    s = s.replace(" ", "")
-    return s
 
-
-def decode_ir_channel_code(ir_code_hex: str | None) -> dict | None:
-    """
-    Decode IR channel code like:
-        9E4E2C -> 30A
-        DE4E2C -> 30B
-        BE4E2C -> 31A
-
-    Returns a dict with decoded fields or None if not matching the known pattern.
-    """
-    ir_code_hex = _normalize_hex(ir_code_hex)
-    if not ir_code_hex or len(ir_code_hex) != 6:
+    a = ir_slot_addr.strip().upper()
+    if len(a) != 6:
         return None
 
     try:
-        ir_code = int(ir_code_hex, 16)
+        slot_byte = int(a[-2:], 16)
     except ValueError:
         return None
 
-    high = (ir_code >> 16) & 0xFF
-    low16 = ir_code & 0xFFFF
-
-    # Signature validation (based on observed values)
-    if low16 != BASE_LOW16:
+    channel = slot_byte - 0x80
+    if channel < 1 or channel > _IR_MAX_CHANNEL:
         return None
 
-    bank = "B" if (high & BANK_BIT) else "A"
-    high_a = high & ~BANK_BIT
-
-    delta = high_a - BASE_HIGH_30A
-    if delta < 0 or (delta % CHANNEL_STEP) != 0:
+    if not isinstance(key_raw, int) or key_raw < 0 or key_raw > 7:
         return None
 
-    channel = 30 + (delta // CHANNEL_STEP)
-
-    return {
-        "ir_channel_number": channel,        # e.g. 30, 31, ...
-        "ir_channel_bank": bank,             # "A" or "B"
-        "ir_channel": f"{channel}{bank}",    # "30A"
-        "ir_channel_code": ir_code_hex,      # original 6-hex code
-    }
-
-
-def _extract_ir_candidate(decoded_command: dict) -> str | None:
-    """
-    Try to find a 6-hex IR channel code in decoded metadata, across legacy/new fields.
-    This does NOT derive it from the IR slot address (0D1C81..FF).
-    """
-    for key in (
-        "ir_channel_code",
-        "ir_code",          # if a decoder stores 6-hex here
-        "ir",               # sometimes used as generic
-        "ir_channel",       # might already be "9E4E2C" or "30A"
-    ):
-        val = decoded_command.get(key)
-        if not val:
-            continue
-        val = _normalize_hex(str(val))
-        if not val:
-            continue
-        # Accept only a raw 6-hex code here; "30A" is a label, not a code
-        if len(val) == 6 and all(c in "0123456789ABCDEF" for c in val):
-            return val
-    return None
+    bank = _IR_BANK_CYCLE[key_raw % 4]
+    return f"{channel:02d}{bank}"
 
 
 def add_to_command_mapping(command_mapping, decoded_command, module_address):
@@ -128,19 +86,19 @@ def add_to_command_mapping(command_mapping, decoded_command, module_address):
 
     physical_push, ir_push_addr, ir_push_slot = split_ir_button_address(push_button_address)
 
-    # If the decoder provides a 6-hex IR channel code (e.g. 9E4E2C), decode it to "30A"
-    ir_candidate = _extract_ir_candidate(decoded_command)
-    ir_decoded = decode_ir_channel_code(ir_candidate) if ir_candidate else None
+    button_address = decoded_command.get("button_address")
+    physical_btn, ir_btn_addr, ir_btn_slot = split_ir_button_address(button_address)
 
-    # Mapping key: prefer logical IR channel label if present; otherwise fall back to slot byte.
-    ir_key = (ir_decoded or {}).get("ir_channel") or ir_push_slot
+    # Derive IR channel label (e.g. "17A") from the bus slot address + key.
+    ir_slot_addr = ir_btn_addr or ir_push_addr
+    ir_channel = decode_ir_channel(ir_slot_addr, key_raw) if ir_slot_addr else None
+
+    # Mapping key: prefer logical IR channel label; fall back to raw slot byte.
+    ir_key = ir_channel or ir_btn_slot or ir_push_slot
     mapping_key = (physical_push, key_raw, ir_key)
     outputs = command_mapping.setdefault(mapping_key, [])
 
     channel_number = decoded_command.get("channel")
-
-    button_address = decoded_command.get("button_address")
-    physical_btn, ir_btn_addr, ir_btn_slot = split_ir_button_address(button_address)
 
     output_definition = {
         "module_address": module_address,
@@ -154,14 +112,8 @@ def add_to_command_mapping(command_mapping, decoded_command, module_address):
         "button_address": physical_btn or physical_push or button_address,
         "ir_button_address": ir_btn_addr or ir_push_addr,
 
-        # IR slot byte (81..FF). Kept for backward compatibility / diagnostics.
-        "ir_slot": ir_btn_slot or ir_push_slot,
-
-        # True IR channel info (only if decoders provide 6-hex channel code)
-        "ir_channel_code": (ir_decoded or {}).get("ir_channel_code"),
-        "ir_channel": (ir_decoded or {}).get("ir_channel"),
-        "ir_channel_number": (ir_decoded or {}).get("ir_channel_number"),
-        "ir_channel_bank": (ir_decoded or {}).get("ir_channel_bank"),
+        # IR channel label (e.g. "17A", "30B") derived from slot address + key.
+        "ir_code": ir_channel or ir_btn_slot or ir_push_slot,
     }
 
     dedupe_key = (
@@ -170,7 +122,7 @@ def add_to_command_mapping(command_mapping, decoded_command, module_address):
         output_definition["mode"],
         output_definition["t1"],
         output_definition["t2"],
-        output_definition.get("ir_channel") or output_definition.get("ir_slot"),
+        output_definition.get("ir_code"),
         output_definition.get("ir_button_address"),
     )
 
@@ -181,7 +133,7 @@ def add_to_command_mapping(command_mapping, decoded_command, module_address):
             entry.get("mode"),
             entry.get("t1"),
             entry.get("t2"),
-            entry.get("ir_channel") or entry.get("ir_slot"),
+            entry.get("ir_code"),
             entry.get("ir_button_address"),
         )
         for entry in outputs
@@ -335,41 +287,21 @@ class NikobusDiscovery:
         return converted_address == "FFFFFF" or (bool(data_bytes) and all(b == 0xFF for b in data_bytes))
 
     async def _check_early_termination(self, address: str, had_data: bool) -> bool:
-        """Track consecutive empty module inventory responses; abort when threshold is reached.
+        """Track consecutive empty module inventory responses for logging.
 
-        After the first real decoded relationship is seen, every frame that
-        produces no decoded commands increments a consecutive-empty counter.
-        Once that counter hits ``MODULE_EMPTY_RESPONSE_THRESHOLD`` the
-        remaining queued register-read commands are drained and the current
-        module's discovery is finalized, saving ~30 s of bus time.
+        Early termination is disabled because roller/shutter modules have
+        sparsely-programmed registers — button links are spread across the
+        full register range (0x10-0xFF) with large gaps between them.  The
+        full scan (~36 s per module) is acceptable for a one-time discovery.
 
-        Returns ``True`` when early termination was triggered (caller should
-        ``return`` immediately).
+        Always returns ``False`` so the caller continues scanning.
         """
         if had_data:
             self._module_found_data = True
             self._module_consecutive_empties = 0
-            return False
-
-        if not self._module_found_data:
-            # Haven't seen any real data yet — keep scanning.
-            return False
-
-        self._module_consecutive_empties += 1
-        if self._module_consecutive_empties >= MODULE_EMPTY_RESPONSE_THRESHOLD:
-            _LOGGER.info(
-                "Module inventory early termination | module=%s "
-                "consecutive_empties=%d threshold=%d",
-                address,
-                self._module_consecutive_empties,
-                MODULE_EMPTY_RESPONSE_THRESHOLD,
-            )
-            drained = self._coordinator.nikobus_command.drain_queue()
-            _LOGGER.info(
-                "Drained %d remaining discovery commands from queue", drained
-            )
-            await self._finalize_discovery(address)
-            return True
+        else:
+            if self._module_found_data:
+                self._module_consecutive_empties += 1
 
         return False
 
