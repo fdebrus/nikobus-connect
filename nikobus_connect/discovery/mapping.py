@@ -300,6 +300,7 @@ DIMMER_TIMER_MAPPING = {
     8: ["5,0 V", None, "30 s"],
     9: ["5,5 V", None, "40 s"],
     10: ["6,0 V", None, "1 m"],
+    11: ["6,5 V", None, "90 s"],
     12: ["7,0 V", None, "2 m"],
     13: ["7,5 V", None, "3 m"],
     14: ["8,0 V", None, "4 m"],

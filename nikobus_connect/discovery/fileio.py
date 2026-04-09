@@ -549,9 +549,15 @@ async def merge_linked_modules(file_path, command_mapping):
             return mapping_key[0], mapping_key[1], mapping_key[2]
         return mapping_key[0] if mapping_key else None, None, None
 
-    def _rebuild_address_lookup() -> dict[str, dict]:
-        """Map any resolvable address to its button entry."""
+    def _rebuild_address_lookup() -> tuple[dict[str, dict], dict[str, int]]:
+        """Map any resolvable address to its button entry.
+
+        Returns (address_lookup, ir_base_lookup) where ir_base_lookup maps
+        4-char IR address prefixes to their base byte value.
+        """
         lookup: dict[str, dict] = {}
+        ir_base_lookup: dict[str, int] = {}
+
         for button in buttons:
             if not isinstance(button, dict):
                 continue
@@ -571,7 +577,7 @@ async def merge_linked_modules(file_path, command_mapping):
 
                     lookup.setdefault(di_addr, button)
 
-                    # --- FIX: Link the secondary MAC address for 8-channel switches ---
+                    # Link the secondary MAC address for 8-channel switches
                     channels = info.get("channels")
                     if channels == 8 and len(di_addr) == 6:
                         try:
@@ -581,12 +587,22 @@ async def merge_linked_modules(file_path, command_mapping):
                                 lookup.setdefault(shifted_addr, button)
                         except ValueError:
                             _LOGGER.debug("Invalid hex address in linked_button: %s", di_addr)
-                    # ------------------------------------------------------------------
 
-        return lookup
+                    # Track IR receiver base addresses for slot resolution
+                    btn_type = info.get("type", "")
+                    if "IR" in btn_type and len(di_addr) == 6:
+                        try:
+                            prefix = di_addr[:4]
+                            base_byte = int(di_addr[-2:], 16)
+                            ir_base_lookup.setdefault(prefix, base_byte)
+                        except ValueError:
+                            pass
+
+        return lookup, ir_base_lookup
 
     def _ensure_button_entry_for_address(
         address_lookup: dict[str, dict],
+        ir_base_lookup: dict[str, int],
         normalized_address: str,
         key_raw=None,
         ir_code=None,
@@ -596,14 +612,23 @@ async def merge_linked_modules(file_path, command_mapping):
         if existing:
             return existing
 
-        # --- FIX: Do not create phantom buttons for ghost links or garbage memory ---
+        # Try resolving as an IR slot: replace last byte with the IR base byte
+        if len(normalized_address) == 6:
+            prefix = normalized_address[:4]
+            base_byte = ir_base_lookup.get(prefix)
+            if base_byte is not None:
+                base_addr = f"{prefix}{base_byte:02X}"
+                existing = address_lookup.get(base_addr)
+                if existing:
+                    return existing
+
         _LOGGER.debug(
             "Ignored ghost link or garbage memory chunk for unknown button: %s",
             normalized_address
         )
         return None
 
-    address_lookup = _rebuild_address_lookup()
+    address_lookup, ir_base_lookup = _rebuild_address_lookup()
 
     updated_buttons = 0
     links_added = 0
@@ -627,6 +652,7 @@ async def merge_linked_modules(file_path, command_mapping):
         # IMPORTANT: if not found, drop it to avoid ghost buttons.
         button_entry = _ensure_button_entry_for_address(
             address_lookup,
+            ir_base_lookup,
             normalized_address,
             key_raw=key_raw,
             ir_code=ir_code_from_key,

@@ -17,7 +17,7 @@ from .mapping import (
 )
 from .protocol import classify_device_type, convert_nikobus_address, reverse_hex
 from ..const import DEVICE_ADDRESS_INVENTORY, DEVICE_INVENTORY_ANSWER
-from .fileio import merge_linked_modules, update_button_data, update_module_data
+from .fileio import merge_linked_modules, read_json_file, update_button_data, update_module_data
 from ..protocol import make_pc_link_inventory_command
 
 _LOGGER = logging.getLogger(__name__)
@@ -25,8 +25,9 @@ _LOGGER = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # IR channel decoding
 # ---------------------------------------------------------------------------
-# IR receivers use bus addresses XXXX81..XXXXBF for IR slots.
-# Channel number = slot_byte - 0x80  (range 01-39).
+# IR receivers use bus addresses where the last byte increments from a base.
+# E.g. base 0D1C80 → slots 0D1C81..0D1CBF; base 0FFEC0 → slots 0FFEC1..
+# Channel number = slot_byte - base_byte  (range 01-39).
 # Bank (A/B/C/D) is determined by the key index on the button:
 #   4-ch buttons: key 0→C, 1→A, 2→D, 3→B  (labels 1C, 1A, 1D, 1B)
 #   8-ch buttons: keys 0-3 = group 2 (C,A,D,B), keys 4-7 = group 1 (C,A,D,B)
@@ -35,11 +36,18 @@ _IR_BANK_CYCLE = ("C", "A", "D", "B")
 _IR_MAX_CHANNEL = 39
 
 
-def decode_ir_channel(ir_slot_addr: str | None, key_raw: int | None) -> str | None:
+def decode_ir_channel(ir_slot_addr: str | None, key_raw: int | None, ir_base_byte: int = 0x80) -> str | None:
     """Derive the IR channel label from a bus slot address and key index.
 
-    Example: ir_slot_addr="0D1C91", key_raw=1  → "17A"
-             ir_slot_addr="0D1C9E", key_raw=3  → "30B"
+    Parameters
+    ----------
+    ir_slot_addr : str
+        The 6-char IR slot address (e.g. "0D1C91").
+    key_raw : int
+        The raw key index (0-7).
+    ir_base_byte : int
+        The base byte of the IR receiver (default 0x80).  Channel is
+        derived as ``slot_byte - ir_base_byte``.
 
     Returns the label (e.g. "17A") or None for non-IR / out-of-range addresses.
     """
@@ -55,7 +63,7 @@ def decode_ir_channel(ir_slot_addr: str | None, key_raw: int | None) -> str | No
     except ValueError:
         return None
 
-    channel = slot_byte - 0x80
+    channel = slot_byte - ir_base_byte
     if channel < 1 or channel > _IR_MAX_CHANNEL:
         return None
 
@@ -66,7 +74,76 @@ def decode_ir_channel(ir_slot_addr: str | None, key_raw: int | None) -> str | No
     return f"{channel:02d}{bank}"
 
 
-def add_to_command_mapping(command_mapping, decoded_command, module_address):
+def build_ir_receiver_lookup(buttons: list[dict]) -> dict[str, int]:
+    """Build a mapping of 4-char IR address prefixes to their base byte.
+
+    Scans the button config for entries whose linked_button type contains "IR"
+    and extracts the physical address prefix and last byte.
+
+    Returns e.g. {"0D1C": 0x80, "0FFE": 0xC0}.
+    """
+    lookup: dict[str, int] = {}
+    for button in buttons:
+        if not isinstance(button, dict):
+            continue
+        for info in button.get("linked_button", []):
+            if not isinstance(info, dict):
+                continue
+            btn_type = info.get("type", "")
+            if "IR" not in btn_type:
+                continue
+            addr = (info.get("address") or "").strip().upper()
+            if len(addr) != 6:
+                continue
+            try:
+                prefix = addr[:4]
+                base_byte = int(addr[-2:], 16)
+                lookup.setdefault(prefix, base_byte)
+            except ValueError:
+                continue
+    return lookup
+
+
+def split_ir_button_address(
+    addr: str | None,
+    ir_receiver_lookup: dict[str, int] | None = None,
+) -> tuple[str | None, str | None, str | None]:
+    """
+    Nikobus IR receiver: physical device is XXXX{base}, IR slots are XXXX{base+1}..
+    Returns (physical_addr, ir_slot_addr, ir_slot_byte_hex).
+    Non-IR addresses return (addr, None, None).
+
+    Parameters
+    ----------
+    addr : str
+        The 6-char address to classify.
+    ir_receiver_lookup : dict
+        Mapping of 4-char prefix → base byte, built by build_ir_receiver_lookup().
+        Falls back to legacy {"0D1C": 0x80} when None.
+    """
+    if not addr:
+        return None, None, None
+
+    a = addr.strip().upper()
+    if len(a) != 6:
+        return a, None, None
+
+    if ir_receiver_lookup is None:
+        ir_receiver_lookup = {"0D1C": 0x80}
+
+    prefix = a[:4]
+    if prefix not in ir_receiver_lookup:
+        return a, None, None
+
+    base_byte = ir_receiver_lookup[prefix]
+    physical = f"{prefix}{base_byte:02X}"
+    if a == physical:
+        return physical, None, None
+
+    return physical, a, a[-2:]
+
+
+def add_to_command_mapping(command_mapping, decoded_command, module_address, ir_receiver_lookup=None):
     """Store decoded command information, allowing one-to-many button mappings."""
     push_button_address = decoded_command.get("push_button_address")
 
@@ -91,14 +168,18 @@ def add_to_command_mapping(command_mapping, decoded_command, module_address):
         if key_raw.isdigit():
             key_raw = int(key_raw)
 
-    physical_push, ir_push_addr, ir_push_slot = split_ir_button_address(push_button_address)
+    physical_push, ir_push_addr, ir_push_slot = split_ir_button_address(push_button_address, ir_receiver_lookup)
 
     button_address = decoded_command.get("button_address")
-    physical_btn, ir_btn_addr, ir_btn_slot = split_ir_button_address(button_address)
+    physical_btn, ir_btn_addr, ir_btn_slot = split_ir_button_address(button_address, ir_receiver_lookup)
 
     # Derive IR channel label (e.g. "17A") from the bus slot address + key.
     ir_slot_addr = ir_btn_addr or ir_push_addr
-    ir_channel = decode_ir_channel(ir_slot_addr, key_raw) if ir_slot_addr else None
+    ir_base_byte = 0x80
+    if ir_slot_addr and ir_receiver_lookup:
+        prefix = ir_slot_addr[:4].upper()
+        ir_base_byte = ir_receiver_lookup.get(prefix, 0x80)
+    ir_channel = decode_ir_channel(ir_slot_addr, key_raw, ir_base_byte) if ir_slot_addr else None
 
     # Mapping key: prefer logical IR channel label; fall back to raw slot byte.
     ir_key = ir_channel or ir_btn_slot or ir_push_slot
@@ -148,29 +229,6 @@ def add_to_command_mapping(command_mapping, decoded_command, module_address):
 
     if dedupe_key not in existing_keys:
         outputs.append(output_definition)
-
-
-def split_ir_button_address(addr: str | None) -> tuple[str | None, str | None, str | None]:
-    """
-    Nikobus IR receiver: physical device is XXXX80, IR slots appear as XXXX81..XXFF.
-    Returns (physical_addr, ir_slot_addr, ir_slot_byte_hex).
-    Non-IR addresses return (addr, None, None).
-    """
-    if not addr:
-        return None, None, None
-
-    a = addr.strip().upper()
-    if len(a) != 6:
-        return a, None, None
-
-    if not a.startswith("0D1C"):
-        return a, None, None
-
-    physical = a[:4] + "80"
-    if a == physical:
-        return physical, None, None
-
-    return physical, a, a[-2:]
 
 
 async def _notify_discovery_finished(discovery) -> None:
@@ -872,6 +930,15 @@ class NikobusDiscovery:
     async def _handle_decoded_commands(
         self, module_address: str | None, decoded_commands: list[DecodedCommand]
     ):
+        # Build IR receiver lookup from current button config so that
+        # split_ir_button_address and decode_ir_channel work for any IR
+        # receiver, not just hardcoded prefixes.
+        ir_receiver_lookup = None
+        existing_json = await read_json_file(self._button_config_path)
+        if existing_json:
+            buttons = existing_json.get("nikobus_button", [])
+            ir_receiver_lookup = build_ir_receiver_lookup(buttons) or None
+
         new_commands = []
         command_mapping = {}
 
@@ -890,7 +957,7 @@ class NikobusDiscovery:
             new_commands.append(decoded)
 
             if module_address:
-                add_to_command_mapping(command_mapping, decoded, module_address)
+                add_to_command_mapping(command_mapping, decoded, module_address, ir_receiver_lookup)
 
         self._decoded_buffer = {
             "module_address": module_address,
