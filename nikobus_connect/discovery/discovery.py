@@ -506,6 +506,13 @@ class NikobusDiscovery:
             normalized_address,
             len(self._register_scan_queue)
         )
+        # Reset per-module state so the next queued module is re-classified
+        # from scratch. Otherwise _module_type carries over from the previous
+        # scan and the wrong decoder runs on the current module's data.
+        self._module_type = None
+        self._module_channels = None
+        self._module_found_data = False
+        self._module_consecutive_empties = 0
         self._coordinator.discovery_running = True
         self._coordinator.discovery_module = True
         self._coordinator.discovery_module_address = normalized_address
@@ -615,7 +622,7 @@ class NikobusDiscovery:
         )
 
     async def query_module_inventory(self, device_address, *, from_queue: bool = False):
-        if device_address == "ALL":
+        if isinstance(device_address, str) and device_address.strip().upper() == "ALL":
             all_addresses = []
             dict_data = getattr(self._coordinator, "dict_module_data", {})
             for module_type, modules in dict_data.items():
@@ -627,7 +634,10 @@ class NikobusDiscovery:
                             all_addresses.append(addr)
 
             if not all_addresses:
-                _LOGGER.warning("No output modules found in config to scan.")
+                _LOGGER.warning(
+                    "No output modules found in config to scan (dict_module_data keys=%s)",
+                    list(dict_data.keys()) if isinstance(dict_data, dict) else type(dict_data).__name__,
+                )
                 self.reset_state()
                 return
 

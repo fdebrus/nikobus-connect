@@ -49,6 +49,48 @@ def _is_all_ff(payload_hex: str, expected_length: int | None = None) -> bool:
     return bool(normalized) and set(normalized) == {"F"}
 
 
+def _is_garbage_chunk(payload_hex: str) -> bool:
+    """Return True when a chunk looks like flash garbage rather than a real entry.
+
+    Applied as a secondary filter after the all-0xFF empty-slot check.
+    Catches chunks where:
+      - One byte value dominates the chunk (>= 70% of bytes)
+      - Filler bytes (0x00 + 0xFF combined) dominate the chunk (>= 70%)
+
+    Real button link entries have varied bytes (the first 3 bytes encode a
+    button address, followed by key/channel/mode/timer fields), so neither
+    condition triggers on legitimate data observed in the wild. It does
+    catch leftover flash patterns like ``F3F3F3F3F3F3F3F3``, ``0000000000FF0000``
+    or ``FFFFDC0000FF`` that otherwise pass the mode/channel sanity checks
+    and decode to phantom button addresses.
+    """
+
+    try:
+        raw = bytes.fromhex(payload_hex or "")
+    except ValueError:
+        return False
+
+    n = len(raw)
+    if n < 4:
+        return False
+
+    counts: dict[int, int] = {}
+    for byte in raw:
+        counts[byte] = counts.get(byte, 0) + 1
+
+    # Rule 1: one byte value covers >= 70% of the chunk
+    max_count = max(counts.values())
+    if max_count * 10 >= n * 7:
+        return True
+
+    # Rule 2: filler bytes (0x00 and 0xFF) cover >= 70% of the chunk
+    filler = counts.get(0x00, 0) + counts.get(0xFF, 0)
+    if filler * 10 >= n * 7:
+        return True
+
+    return False
+
+
 def _safe_int(hex_byte: str | None) -> int | None:
     """Safely convert a two-character hex byte to int."""
 
@@ -236,5 +278,6 @@ __all__ = [
     "get_push_button_address",
     "_format_channel",
     "_is_all_ff",
+    "_is_garbage_chunk",
     "_safe_int",
 ]
