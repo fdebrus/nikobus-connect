@@ -10,6 +10,7 @@ from .mapping import DIMMER_MODE_MAPPING, DIMMER_TIMER_MAPPING
 from .protocol import (
     _format_channel,
     _is_all_ff,
+    _is_garbage_chunk,
     _safe_int,
     decode_command_payload,
     get_button_address,
@@ -50,6 +51,14 @@ def decode(payload_hex: str, raw_bytes: list[str], context) -> dict[str, Any] | 
     if _is_all_ff(payload_hex, EXPECTED_CHUNK_LEN):
         _LOGGER.debug(
             "Discovery skipped | type=dimmer module=%s reason=empty_slot payload=%s",
+            context.module_address,
+            payload_hex,
+        )
+        return None
+
+    if _is_garbage_chunk(payload_hex):
+        _LOGGER.debug(
+            "Discovery skipped | type=dimmer module=%s reason=garbage_chunk payload=%s",
             context.module_address,
             payload_hex,
         )
@@ -184,6 +193,14 @@ class DimmerDecoder:
         if _is_all_ff(payload_hex, EXPECTED_CHUNK_LEN):
             _LOGGER.debug(
                 "Discovery skipped | type=dimmer module=%s payload=%s reason=empty_slot",
+                address,
+                payload_hex,
+            )
+            return []
+
+        if _is_garbage_chunk(payload_hex):
+            _LOGGER.debug(
+                "Discovery skipped | type=dimmer module=%s payload=%s reason=garbage_chunk",
                 address,
                 payload_hex,
             )
