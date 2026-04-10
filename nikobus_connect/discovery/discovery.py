@@ -506,6 +506,13 @@ class NikobusDiscovery:
             normalized_address,
             len(self._register_scan_queue)
         )
+        # Reset per-module state so the next queued module is re-classified
+        # from scratch. Otherwise _module_type carries over from the previous
+        # scan and the wrong decoder runs on the current module's data.
+        self._module_type = None
+        self._module_channels = None
+        self._module_found_data = False
+        self._module_consecutive_empties = 0
         self._coordinator.discovery_running = True
         self._coordinator.discovery_module = True
         self._coordinator.discovery_module_address = normalized_address
