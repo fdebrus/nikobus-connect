@@ -615,7 +615,7 @@ class NikobusDiscovery:
         )
 
     async def query_module_inventory(self, device_address, *, from_queue: bool = False):
-        if device_address == "ALL":
+        if isinstance(device_address, str) and device_address.strip().upper() == "ALL":
             all_addresses = []
             dict_data = getattr(self._coordinator, "dict_module_data", {})
             for module_type, modules in dict_data.items():
@@ -627,7 +627,10 @@ class NikobusDiscovery:
                             all_addresses.append(addr)
 
             if not all_addresses:
-                _LOGGER.warning("No output modules found in config to scan.")
+                _LOGGER.warning(
+                    "No output modules found in config to scan (dict_module_data keys=%s)",
+                    list(dict_data.keys()) if isinstance(dict_data, dict) else type(dict_data).__name__,
+                )
                 self.reset_state()
                 return
 
