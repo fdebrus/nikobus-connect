@@ -148,8 +148,13 @@ class NikobusEventListener:
             return
 
         # Command acknowledgments go straight to the response queue
+        # but only while a caller is actively waiting for one. Otherwise
+        # fire-and-forget bursts (discovery register scans, etc.) would
+        # flood the 200-slot queue with ACKs nobody consumes, dropping
+        # real polling responses via the "queue was full" path.
         if any(message.startswith(cmd) for cmd in COMMAND_PROCESSED):
-            self._enqueue_response(message)
+            if self._awaiting_response:
+                self._enqueue_response(message)
             if asyncio.iscoroutinefunction(self._event_callback):
                 await self._event_callback(message)
             else:
@@ -196,9 +201,14 @@ class NikobusEventListener:
                 self._event_callback(message)
             return
 
-        # All other PC-Link responses
+        # All other PC-Link responses. Only enqueue while a caller is
+        # actively waiting — otherwise discovery register-scan ACKs like
+        # $0522 (which fall through to this path) pile up in the 200-slot
+        # response queue and drop real polling answers on the floor.
         if message.startswith("$"):
-            if message.startswith("$05") or self.validate_crc(message):
+            if self._awaiting_response and (
+                message.startswith("$05") or self.validate_crc(message)
+            ):
                 self._enqueue_response(message)
             return
 
