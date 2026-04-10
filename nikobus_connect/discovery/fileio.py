@@ -4,6 +4,8 @@ import logging
 import os
 import tempfile
 
+from .mapping import KEY_MAPPING, KEY_MAPPING_MODULE
+
 _LOGGER = logging.getLogger(__name__)
 
 MODULE_TYPE_ORDER = [
@@ -127,6 +129,44 @@ async def read_json_file(file_path):
 
 def _normalize_address(address):
     return address.strip().upper() if isinstance(address, str) else ""
+
+
+def _key_label_to_raw(channels, key_label):
+    """Convert a linked_button key label (e.g. "1C") to the raw key index.
+
+    A physical wall button can have multiple operation points; each point
+    triggers a different logical button.  linked_button[].key stores the
+    operation point as a human label ("1A".."2D") while module registers
+    encode the key as a raw index (0..7).  Mapping the label back to the
+    raw index lets us disambiguate multiple logical buttons that share the
+    same physical wall button.
+
+    Returns None if the label cannot be resolved for the given channel count.
+    """
+    if not isinstance(key_label, str):
+        return None
+    label = key_label.strip()
+    if not label:
+        return None
+
+    try:
+        ch_int = int(channels) if channels is not None else None
+    except (TypeError, ValueError):
+        return None
+
+    label_map = KEY_MAPPING.get(ch_int)
+    raw_map = KEY_MAPPING_MODULE.get(ch_int)
+    if not label_map or not raw_map:
+        return None
+
+    hex_char = label_map.get(label)
+    if hex_char is None:
+        return None
+
+    for key_raw, h in raw_map.items():
+        if h == hex_char:
+            return key_raw
+    return None
 
 
 async def update_module_data(file_path, discovered_devices):
@@ -549,13 +589,25 @@ async def merge_linked_modules(file_path, command_mapping):
             return mapping_key[0], mapping_key[1], mapping_key[2]
         return mapping_key[0] if mapping_key else None, None, None
 
-    def _rebuild_address_lookup() -> tuple[dict[str, dict], dict[str, int]]:
-        """Map any resolvable address to its button entry.
+    def _rebuild_address_lookup() -> tuple[
+        dict[str, dict],
+        dict[tuple[str, int], dict],
+        dict[str, int],
+    ]:
+        """Map resolvable addresses to their button entries.
 
-        Returns (address_lookup, ir_base_lookup) where ir_base_lookup maps
-        4-char IR address prefixes to their base byte value.
+        Returns (address_lookup, keyed_lookup, ir_base_lookup):
+
+        - address_lookup: address -> button_entry for top-level button
+          addresses and linked_button entries without a resolvable key.
+        - keyed_lookup: (address, key_raw) -> button_entry for
+          linked_button entries whose ``key`` field can be resolved.
+          This lets us distinguish multiple logical buttons that share
+          the same physical wall button.
+        - ir_base_lookup: 4-char IR prefix -> base byte.
         """
         lookup: dict[str, dict] = {}
+        keyed_lookup: dict[tuple[str, int], dict] = {}
         ir_base_lookup: dict[str, int] = {}
 
         for button in buttons:
@@ -575,16 +627,32 @@ async def merge_linked_modules(file_path, command_mapping):
                     if not di_addr:
                         continue
 
-                    lookup.setdefault(di_addr, button)
+                    channels = info.get("channels")
+                    key_raw = _key_label_to_raw(channels, info.get("key"))
+
+                    # When we can resolve the specific key, use the
+                    # key-specific lookup exclusively.  Populating the
+                    # general address_lookup here would cause shared wall
+                    # buttons to leak commands to siblings with different
+                    # keys (e.g. cover outputs being attributed to the
+                    # light button sharing the same wall button).
+                    if key_raw is not None:
+                        keyed_lookup.setdefault((di_addr, key_raw), button)
+                    else:
+                        lookup.setdefault(di_addr, button)
 
                     # Link the secondary MAC address for 8-channel switches
-                    channels = info.get("channels")
                     if channels == 8 and len(di_addr) == 6:
                         try:
                             base_int = int(di_addr, 16)
                             if base_int < 0xFFFFFF:
                                 shifted_addr = f"{(base_int + 1):06X}"
-                                lookup.setdefault(shifted_addr, button)
+                                if key_raw is not None:
+                                    keyed_lookup.setdefault(
+                                        (shifted_addr, key_raw), button
+                                    )
+                                else:
+                                    lookup.setdefault(shifted_addr, button)
                         except ValueError:
                             _LOGGER.debug("Invalid hex address in linked_button: %s", di_addr)
 
@@ -598,16 +666,24 @@ async def merge_linked_modules(file_path, command_mapping):
                         except ValueError:
                             pass
 
-        return lookup, ir_base_lookup
+        return lookup, keyed_lookup, ir_base_lookup
 
     def _ensure_button_entry_for_address(
         address_lookup: dict[str, dict],
+        keyed_lookup: dict[tuple[str, int], dict],
         ir_base_lookup: dict[str, int],
         normalized_address: str,
         key_raw=None,
         ir_code=None,
     ) -> dict | None:
         """Return existing button entry, or drop it if it's a ghost/garbage."""
+        # Key-specific lookup takes priority so shared wall buttons route
+        # each command to the correct logical button based on key_raw.
+        if key_raw is not None:
+            keyed_entry = keyed_lookup.get((normalized_address, key_raw))
+            if keyed_entry is not None:
+                return keyed_entry
+
         existing = address_lookup.get(normalized_address)
         if existing:
             return existing
@@ -618,17 +694,22 @@ async def merge_linked_modules(file_path, command_mapping):
             base_byte = ir_base_lookup.get(prefix)
             if base_byte is not None:
                 base_addr = f"{prefix}{base_byte:02X}"
+                if key_raw is not None:
+                    keyed_entry = keyed_lookup.get((base_addr, key_raw))
+                    if keyed_entry is not None:
+                        return keyed_entry
                 existing = address_lookup.get(base_addr)
                 if existing:
                     return existing
 
         _LOGGER.debug(
-            "Ignored ghost link or garbage memory chunk for unknown button: %s",
-            normalized_address
+            "Ignored ghost link or garbage memory chunk for unknown button: %s (key_raw=%s)",
+            normalized_address,
+            key_raw,
         )
         return None
 
-    address_lookup, ir_base_lookup = _rebuild_address_lookup()
+    address_lookup, keyed_lookup, ir_base_lookup = _rebuild_address_lookup()
 
     updated_buttons = 0
     links_added = 0
@@ -652,6 +733,7 @@ async def merge_linked_modules(file_path, command_mapping):
         # IMPORTANT: if not found, drop it to avoid ghost buttons.
         button_entry = _ensure_button_entry_for_address(
             address_lookup,
+            keyed_lookup,
             ir_base_lookup,
             normalized_address,
             key_raw=key_raw,
@@ -667,22 +749,6 @@ async def merge_linked_modules(file_path, command_mapping):
             linked_modules = []
             button_entry["linked_modules"] = linked_modules
 
-        # Build the set of allowed module addresses from impacted_module.
-        # When impacted_module is configured with real addresses, only those
-        # modules should appear in linked_modules.  This prevents a shared
-        # wall button from pulling in unrelated modules (e.g. a cover module
-        # being linked to a light-only button).
-        impacted_modules = button_entry.get("impacted_module", [])
-        allowed_module_addresses: set[str] | None = None
-        if isinstance(impacted_modules, list):
-            addrs = {
-                _normalize_address(m.get("address"))
-                for m in impacted_modules
-                if isinstance(m, dict) and _normalize_address(m.get("address"))
-            }
-            if addrs:
-                allowed_module_addresses = addrs
-
         updated_entry = False
         matched_addresses.add(normalized_address)
 
@@ -693,20 +759,6 @@ async def merge_linked_modules(file_path, command_mapping):
             module_address = output.get("module_address")
             if module_address is None:
                 continue
-
-            # Skip modules not listed in impacted_module when that list is
-            # configured.  A shared wall button may control multiple modules
-            # but each logical button should only link to its own modules.
-            if allowed_module_addresses is not None:
-                norm_mod_addr = _normalize_address(module_address)
-                if norm_mod_addr and norm_mod_addr not in allowed_module_addresses:
-                    _LOGGER.debug(
-                        "Skipping module %s for button %s: not in impacted_module %s",
-                        module_address,
-                        button_entry.get("description", normalized_address),
-                        allowed_module_addresses,
-                    )
-                    continue
 
             channel_number = output.get("channel")
             mode_label = output.get("mode")
