@@ -413,35 +413,34 @@ async def update_module_data(file_path, discovered_devices):
     await write_json_file(file_path, ordered_inventory, inline_channels=True)
 
 
-async def update_button_data(file_path, discovered_devices, key_mapping, convert_nikobus_address):
-    """Update the button config JSON file based on discovered devices.
+def merge_discovered_buttons(
+    button_data, discovered_devices, key_mapping, convert_nikobus_address
+):
+    """Merge discovered button devices into the caller-owned ``button_data`` dict.
+
+    ``button_data`` is mutated in place and follows the shape::
+
+        {"nikobus_button": {<address>: {"description", "address",
+                                        "linked_button", "linked_modules"}}}
+
+    The dict-keyed form is authoritative. No filesystem access.
 
     Parameters
     ----------
-    file_path : str
-        Absolute path to the button config JSON file.
+    button_data : dict
+        The caller-owned live store.
     discovered_devices : dict
         Mapping of address -> device info dicts from discovery.
     key_mapping : dict
-        KEY_MAPPING from mapping module.
+        KEY_MAPPING from the mapping module.
     convert_nikobus_address : callable
         Address conversion function.
     """
-    os.makedirs(os.path.dirname(file_path) or ".", exist_ok=True)
-    existing_data = []
-    if os.path.exists(file_path):
-        existing_json = await read_json_file(file_path)
-        if existing_json:
-            existing_data = existing_json.get("nikobus_button", [])
-            if not isinstance(existing_data, list):
-                existing_data = []
 
-    updated_data = existing_data.copy()
-    lookup = {
-        button.get("address"): button
-        for button in updated_data
-        if "address" in button
-    }
+    buttons = button_data.setdefault("nikobus_button", {})
+    if not isinstance(buttons, dict):
+        buttons = {}
+        button_data["nikobus_button"] = buttons
 
     for device_address, device in discovered_devices.items():
         if device.get("category") != "Button":
@@ -449,7 +448,6 @@ async def update_button_data(file_path, discovered_devices, key_mapping, convert
         description = device.get("description", "")
         model = device.get("model", "")
         num_channels = device.get("channels", 0)
-        # Key labeling logic
         if num_channels == 1:
             keys = ["1A"]
         elif num_channels == 2:
@@ -459,7 +457,11 @@ async def update_button_data(file_path, discovered_devices, key_mapping, convert
         elif num_channels == 8:
             keys = ["1A", "1B", "1C", "1D", "2A", "2B", "2C", "2D"]
         else:
-            _LOGGER.error("Unexpected number of channels: %d for device %s", num_channels, device_address)
+            _LOGGER.error(
+                "Unexpected number of channels: %d for device %s",
+                num_channels,
+                device_address,
+            )
             continue
         mapping = key_mapping.get(num_channels, {})
         channels_data = {}
@@ -467,7 +469,11 @@ async def update_button_data(file_path, discovered_devices, key_mapping, convert
         try:
             original_nibble = int(converted_address[0], 16)
         except (ValueError, IndexError):
-            _LOGGER.error("Invalid converted address for device %s: %s", device_address, converted_address)
+            _LOGGER.error(
+                "Invalid converted address for device %s: %s",
+                device_address,
+                converted_address,
+            )
             continue
         for idx, key in enumerate(keys, start=1):
             if key in mapping:
@@ -490,14 +496,18 @@ async def update_button_data(file_path, discovered_devices, key_mapping, convert
                 "channels": num_channels,
                 "key": key,
             }
-            button = lookup.get(discovered_channel_address)
+            button = buttons.get(discovered_channel_address)
             if button:
-                discovered_list = button.setdefault("linked_button", [])
+                linked_button = button.setdefault("linked_button", [])
+                if not isinstance(linked_button, list):
+                    linked_button = []
+                    button["linked_button"] = linked_button
                 found_info = next(
                     (
                         info
-                        for info in discovered_list
-                        if info.get("key") == new_info["key"]
+                        for info in linked_button
+                        if isinstance(info, dict)
+                        and info.get("key") == new_info["key"]
                         and info.get("address") == new_info["address"]
                     ),
                     None,
@@ -516,19 +526,13 @@ async def update_button_data(file_path, discovered_devices, key_mapping, convert
                             }
                         )
                 else:
-                    discovered_list.append(new_info)
+                    linked_button.append(new_info)
             else:
-                new_button = {
+                buttons[discovered_channel_address] = {
                     "description": f"{description} #N{discovered_channel_address}",
                     "address": discovered_channel_address,
-                    "impacted_module": [{"address": "", "group": ""}],
                     "linked_button": [new_info],
                 }
-                updated_data.append(new_button)
-                lookup[discovered_channel_address] = new_button
-
-    output_json = {"nikobus_button": updated_data}
-    await write_json_file(file_path, output_json)
 
 
 def _normalize_key(value):
@@ -538,15 +542,12 @@ def _normalize_key(value):
         return value
 
 
-async def merge_linked_modules(file_path, command_mapping):
-    """Merge discovery command mapping into nikobus_button_config.json.
+def merge_linked_modules(button_data, command_mapping):
+    """Merge a discovery ``command_mapping`` into the caller-owned ``button_data`` dict.
 
-    Parameters
-    ----------
-    file_path : str
-        Absolute path to the button config JSON file.
-    command_mapping : dict
-        Mapping of button keys to output definitions.
+    ``button_data`` is mutated in place. The dict-keyed form
+    (``button_data["nikobus_button"] = {<address>: {...}}``) is authoritative.
+    No filesystem access.
 
     Notes:
         - linked_modules blocks are grouped by module_address only.
@@ -558,26 +559,13 @@ async def merge_linked_modules(file_path, command_mapping):
           Therefore we must match button entries by:
             - top-level button["address"] (legacy), OR
             - any linked_button[].address (IR / bus identity)
-        - If a button is not found in the JSON, it is skipped to prevent ghost/garbage buttons.
+        - If a button is not found in the store, it is skipped to prevent ghost/garbage buttons.
     """
 
-    file_exists_before = os.path.exists(file_path)
-    file_size_before = os.path.getsize(file_path) if file_exists_before else 0
-    _LOGGER.info("Updating button config JSON: %s", file_path)
-    _LOGGER.info(
-        "Button config JSON stats before update: cwd=%s exists=%s size=%s bytes",
-        os.getcwd(),
-        file_exists_before,
-        file_size_before,
-    )
-
-    existing_json = await read_json_file(file_path)
-    if existing_json is None:
-        existing_json = {"nikobus_button": []}
-
-    buttons = existing_json.get("nikobus_button", [])
-    if not isinstance(buttons, list):
-        buttons = []
+    buttons = button_data.get("nikobus_button")
+    if not isinstance(buttons, dict):
+        buttons = {}
+        button_data["nikobus_button"] = buttons
 
     def _unpack_mapping_key(mapping_key):
         """Return (push_button_address, key_raw, ir_code)."""
@@ -610,7 +598,7 @@ async def merge_linked_modules(file_path, command_mapping):
         keyed_lookup: dict[tuple[str, int], dict] = {}
         ir_base_lookup: dict[str, int] = {}
 
-        for button in buttons:
+        for button in buttons.values():
             if not isinstance(button, dict):
                 continue
 
@@ -866,28 +854,16 @@ async def merge_linked_modules(file_path, command_mapping):
             # Exists but nothing new (all deduped)
             pass
 
-    if any_updates:
-        os.makedirs(os.path.dirname(file_path) or ".", exist_ok=True)
-        await _write_json_atomic(file_path, {"nikobus_button": buttons})
-
-    file_exists_after = os.path.exists(file_path)
-    file_size_after = os.path.getsize(file_path) if file_exists_after else 0
-    _LOGGER.info(
-        "Button config JSON stats after update: exists=%s size=%s bytes",
-        file_exists_after,
-        file_size_after,
-    )
-
     if not any_updates:
         _LOGGER.info(
-            "Button config JSON updater ran: changes=0 (updated_buttons=%d, links_added=%d, outputs_added=%d)",
+            "Button store merge ran: changes=0 (updated_buttons=%d, links_added=%d, outputs_added=%d)",
             updated_buttons,
             links_added,
             outputs_added,
         )
     else:
         _LOGGER.info(
-            "Button config JSON summary: updated_buttons=%d, links_added=%d, outputs_added=%d",
+            "Button store merge summary: updated_buttons=%d, links_added=%d, outputs_added=%d",
             updated_buttons,
             links_added,
             outputs_added,
@@ -896,7 +872,7 @@ async def merge_linked_modules(file_path, command_mapping):
     if not matched_addresses and unmatched_addresses:
         unmatched_sample = list(unmatched_addresses)[:5]
         _LOGGER.debug(
-            "Button config JSON updater found no matching buttons. unmatched_count=%d sample=%s",
+            "Button store merge found no matching buttons. unmatched_count=%d sample=%s",
             len(unmatched_addresses),
             unmatched_sample,
         )

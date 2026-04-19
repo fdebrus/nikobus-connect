@@ -17,7 +17,7 @@ from .mapping import (
 )
 from .protocol import classify_device_type, convert_nikobus_address, reverse_hex
 from ..const import DEVICE_ADDRESS_INVENTORY, DEVICE_INVENTORY_ANSWER
-from .fileio import merge_linked_modules, read_json_file, update_button_data, update_module_data
+from .fileio import merge_discovered_buttons, merge_linked_modules, update_module_data
 from ..protocol import make_pc_link_inventory_command
 
 _LOGGER = logging.getLogger(__name__)
@@ -74,11 +74,12 @@ def decode_ir_channel(ir_slot_addr: str | None, key_raw: int | None, ir_base_byt
     return f"{channel:02d}{bank}"
 
 
-def build_ir_receiver_lookup(buttons: list[dict]) -> dict[str, int]:
+def build_ir_receiver_lookup(buttons) -> dict[str, int]:
     """Build a mapping of 4-char IR address prefixes to their base byte.
 
-    Scans the button config for entries whose linked_button type contains "IR"
-    and extracts the physical address prefix and last byte.
+    Scans button entries for ``linked_button`` entries whose type contains
+    "IR" and extracts the physical address prefix and last byte. ``buttons``
+    may be any iterable of entries (list, dict.values(), ...).
 
     Returns e.g. {"0D1C": 0x80, "0FFE": 0xC0}.
     """
@@ -240,13 +241,26 @@ async def _notify_discovery_finished(discovery) -> None:
 
 
 class NikobusDiscovery:
-    def __init__(self, coordinator, *, config_dir, create_task):
+    def __init__(
+        self,
+        coordinator,
+        *,
+        config_dir,
+        create_task,
+        button_data=None,
+        on_button_save=None,
+    ):
         self.discovered_devices = {}
         self._coordinator = coordinator
         self._config_dir = config_dir
         self._create_task = create_task
+        self._button_data = button_data
+        self._on_button_save = on_button_save
+        if button_data is not None:
+            existing = button_data.get("nikobus_button")
+            if not isinstance(existing, dict):
+                button_data["nikobus_button"] = {}
         self._module_config_path = os.path.join(config_dir, "nikobus_module_config.json")
-        self._button_config_path = os.path.join(config_dir, "nikobus_button_config.json")
         self._module_timeout_seconds = 5.0
         self._inventory_timeout_seconds = 10.0
         self._decoders = [
@@ -436,19 +450,23 @@ class NikobusDiscovery:
                 self.discovery_stage = "inventory_identity"
 
         # Stage 2: inventory complete -> persist results
-        _LOGGER.debug("Starting file IO updates for module and button data.")
+        _LOGGER.debug("Starting updates for module and button data.")
         try:
             await update_module_data(self._module_config_path, self.discovered_devices)
             _LOGGER.debug("Finished update_module_data.")
-            await update_button_data(
-                self._button_config_path,
-                self.discovered_devices,
-                KEY_MAPPING,
-                convert_nikobus_address,
-            )
-            _LOGGER.debug("Finished update_button_data.")
+            if self._button_data is not None:
+                merge_discovered_buttons(
+                    self._button_data,
+                    self.discovered_devices,
+                    KEY_MAPPING,
+                    convert_nikobus_address,
+                )
+                _LOGGER.debug("Finished merge_discovered_buttons.")
+                if self._on_button_save is not None:
+                    await self._on_button_save()
+                    _LOGGER.debug("Finished on_button_save callback.")
         except Exception:
-            _LOGGER.error("File IO error during inventory finalization", exc_info=True)
+            _LOGGER.error("Error during inventory finalization", exc_info=True)
             raise
 
         _LOGGER.info(
@@ -940,14 +958,14 @@ class NikobusDiscovery:
     async def _handle_decoded_commands(
         self, module_address: str | None, decoded_commands: list[DecodedCommand]
     ):
-        # Build IR receiver lookup from current button config so that
-        # split_ir_button_address and decode_ir_channel work for any IR
-        # receiver, not just hardcoded prefixes.
+        # Build IR receiver lookup from the current in-memory button store
+        # so that split_ir_button_address and decode_ir_channel work for
+        # any IR receiver, not just hardcoded prefixes.
         ir_receiver_lookup = None
-        existing_json = await read_json_file(self._button_config_path)
-        if existing_json:
-            buttons = existing_json.get("nikobus_button", [])
-            ir_receiver_lookup = build_ir_receiver_lookup(buttons) or None
+        if self._button_data is not None:
+            buttons = self._button_data.get("nikobus_button") or {}
+            if isinstance(buttons, dict):
+                ir_receiver_lookup = build_ir_receiver_lookup(buttons.values()) or None
 
         new_commands = []
         command_mapping = {}
@@ -981,15 +999,22 @@ class NikobusDiscovery:
             len(self._decoded_buffer["commands"]),
         )
 
-        updated_buttons, links_added, outputs_added = await merge_linked_modules(
-            self._button_config_path, command_mapping
+        if self._button_data is None:
+            return
+
+        updated_buttons, links_added, outputs_added = merge_linked_modules(
+            self._button_data, command_mapping
         )
         _LOGGER.info(
-            "Discovered links merged into config: %d buttons updated, %d link blocks added, %d outputs added.",
+            "Discovered links merged into store: %d buttons updated, %d link blocks added, %d outputs added.",
             updated_buttons,
             links_added,
             outputs_added,
         )
+        if self._on_button_save is not None and (
+            updated_buttons or links_added or outputs_added
+        ):
+            await self._on_button_save()
 
 
 def run_decoder_harness(coordinator):
