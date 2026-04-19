@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "nikobus-connect"
-version = "0.1.9"
+version = "0.2.0"
 description = "Asynchronous library for Nikobus home automation with device discovery"
 requires-python = ">=3.11"
 license = {text = "MIT"}
@@ -12,8 +12,14 @@ dependencies = [
     "pyserial-asyncio>=0.5",
 ]
 
+[project.optional-dependencies]
+test = ["pytest>=8.0"]
+
 [project.urls]
 Repository = "https://github.com/fdebrus/nikobus-connect"
 
 [tool.setuptools.packages.find]
 include = ["nikobus_connect*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
