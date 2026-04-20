@@ -169,6 +169,32 @@ def _key_label_to_raw(channels, key_label):
     return None
 
 
+def _key_raw_to_label(channels, key_raw):
+    """Inverse of :func:`_key_label_to_raw`: raw index (0..7) -> label ("1A".."2D").
+
+    Returns None if the raw index can't be resolved for the given channel count.
+    """
+
+    try:
+        ch_int = int(channels) if channels is not None else None
+    except (TypeError, ValueError):
+        return None
+
+    raw_map = KEY_MAPPING_MODULE.get(ch_int)
+    label_map = KEY_MAPPING.get(ch_int)
+    if not raw_map or not label_map:
+        return None
+
+    hex_char = raw_map.get(key_raw)
+    if hex_char is None:
+        return None
+
+    for label, h in label_map.items():
+        if h == hex_char:
+            return label
+    return None
+
+
 async def update_module_data(file_path, discovered_devices):
     """Create or merge the integration module config from discovery results.
 
@@ -413,126 +439,257 @@ async def update_module_data(file_path, discovered_devices):
     await write_json_file(file_path, ordered_inventory, inline_channels=True)
 
 
-def merge_discovered_buttons(
-    button_data, discovered_devices, key_mapping, convert_nikobus_address
-):
-    """Merge discovered button devices into the caller-owned ``button_data`` dict.
 
-    ``button_data`` is mutated in place and follows the shape::
+_BUTTON_KEYS_BY_CHANNEL_COUNT = {
+    1: ["1A"],
+    2: ["1A", "1B"],
+    4: ["1A", "1B", "1C", "1D"],
+    8: ["1A", "1B", "1C", "1D", "2A", "2B", "2C", "2D"],
+}
 
-        {"nikobus_button": {<address>: {"description", "address",
-                                        "linked_button", "linked_modules"}}}
 
-    The dict-keyed form is authoritative. No filesystem access.
-
-    Parameters
-    ----------
-    button_data : dict
-        The caller-owned live store.
-    discovered_devices : dict
-        Mapping of address -> device info dicts from discovery.
-    key_mapping : dict
-        KEY_MAPPING from the mapping module.
-    convert_nikobus_address : callable
-        Address conversion function.
-    """
+def _ensure_buttons_dict(button_data: dict) -> dict:
+    """Return the ``nikobus_button`` dict, creating it if missing."""
 
     buttons = button_data.setdefault("nikobus_button", {})
     if not isinstance(buttons, dict):
         buttons = {}
         button_data["nikobus_button"] = buttons
+    return buttons
+
+
+def migrate_button_data_v1_to_v2(button_data: dict) -> bool:
+    """Convert legacy bus-keyed button storage to physical-keyed (Option A).
+
+    Legacy (v1) shape::
+
+        {"nikobus_button": {<bus_addr>: {"description": ..., "address": <bus_addr>,
+                                          "linked_button": [{"address": <physical>,
+                                                             "key": "1A", ...}],
+                                          "linked_modules": [...]}}}
+
+    Current (v2) shape::
+
+        {"nikobus_button": {<physical_addr>: {"type", "model", "channels",
+                                               "description",
+                                               "operation_points": {
+                                                  "1A": {"bus_address", "description",
+                                                         "linked_modules": [...]},
+                                                  ...}}}}
+
+    Mutates ``button_data`` in place. Returns True when a migration was
+    performed, False when already in v2 shape (no-op).
+    """
+
+    buttons = button_data.get("nikobus_button")
+    if not isinstance(buttons, dict) or not buttons:
+        return False
+
+    # v1 detection: any entry carries a ``linked_button`` list.
+    has_v1 = any(
+        isinstance(v, dict) and "linked_button" in v for v in buttons.values()
+    )
+    if not has_v1:
+        return False
+
+    new_buttons: dict[str, dict] = {}
+
+    for bus_addr, old_entry in buttons.items():
+        if not isinstance(old_entry, dict):
+            continue
+        linked_list = old_entry.get("linked_button", [])
+        if not isinstance(linked_list, list) or not linked_list:
+            continue
+
+        # Canonical physical identity lives in the first linked_button entry.
+        lb = linked_list[0]
+        if not isinstance(lb, dict):
+            continue
+
+        physical_addr = _normalize_address(lb.get("address"))
+        key_label = lb.get("key")
+        if not physical_addr or not key_label:
+            continue
+
+        phys_entry = new_buttons.setdefault(
+            physical_addr,
+            {
+                "type": lb.get("type"),
+                "model": lb.get("model"),
+                "channels": lb.get("channels"),
+                "description": lb.get("type"),
+                "operation_points": {},
+            },
+        )
+        # Backfill physical metadata from later entries when missing.
+        for field in ("type", "model", "channels"):
+            if not phys_entry.get(field) and lb.get(field) is not None:
+                phys_entry[field] = lb.get(field)
+
+        op_points = phys_entry.setdefault("operation_points", {})
+        op_point = op_points.setdefault(
+            key_label, {"bus_address": _normalize_address(bus_addr)}
+        )
+        op_point["bus_address"] = _normalize_address(bus_addr)
+
+        old_modules = old_entry.get("linked_modules")
+        if isinstance(old_modules, list) and old_modules:
+            op_point["linked_modules"] = old_modules
+
+        # Preserve a per-op-point description when the old entry had a custom
+        # one (i.e. not the auto-generated ``"<type> #N<bus>"`` pattern).
+        old_desc = old_entry.get("description")
+        if old_desc and isinstance(old_desc, str):
+            auto_pattern = f"#N{_normalize_address(bus_addr)}"
+            if auto_pattern not in old_desc:
+                op_point.setdefault("description", old_desc)
+
+    button_data["nikobus_button"] = new_buttons
+    _LOGGER.info(
+        "Migrated button store v1 -> v2 | physical_buttons=%d",
+        len(new_buttons),
+    )
+    return True
+
+
+def find_operation_point(
+    button_data: dict, bus_address: str
+) -> tuple[str, str, dict] | None:
+    """Locate an operation point by its bus-emitted address.
+
+    Returns ``(physical_address, key_label, operation_point_dict)`` or
+    ``None`` if no operation point in the store declares this
+    ``bus_address``. Integrations can use this to route a button-press
+    event (which arrives as a bus address) to the correct op-point entry.
+    """
+
+    buttons = button_data.get("nikobus_button")
+    if not isinstance(buttons, dict):
+        return None
+
+    target = _normalize_address(bus_address)
+    if not target:
+        return None
+
+    for physical_addr, button in buttons.items():
+        if not isinstance(button, dict):
+            continue
+        op_points = button.get("operation_points")
+        if not isinstance(op_points, dict):
+            continue
+        for key_label, op_point in op_points.items():
+            if not isinstance(op_point, dict):
+                continue
+            if _normalize_address(op_point.get("bus_address")) == target:
+                return physical_addr, key_label, op_point
+    return None
+
+
+def merge_discovered_buttons(
+    button_data, discovered_devices, key_mapping, convert_nikobus_address
+):
+    """Merge discovered Button devices into the caller-owned ``button_data``.
+
+    Produces the Option-A physical-keyed shape::
+
+        {"nikobus_button": {<physical_address>: {
+             "type": "<button model description>",
+             "model": "<hw model>",
+             "channels": <int>,
+             "description": "<physical button description>",
+             "operation_points": {
+                 "<key label>": {
+                     "bus_address": "<derived bus addr>",
+                     "linked_modules": [...],
+                 },
+                 ...
+             },
+         }}}
+
+    Mutates ``button_data`` in place. Runs a one-shot v1 -> v2 migration
+    first so legacy storage upgrades on first use.
+    """
+
+    migrate_button_data_v1_to_v2(button_data)
+    buttons = _ensure_buttons_dict(button_data)
 
     for device_address, device in discovered_devices.items():
         if device.get("category") != "Button":
             continue
-        description = device.get("description", "")
-        model = device.get("model", "")
+
+        physical_addr = _normalize_address(device_address)
+        if not physical_addr:
+            continue
+
+        description = device.get("description", "") or ""
+        model = device.get("model", "") or ""
         num_channels = device.get("channels", 0)
-        if num_channels == 1:
-            keys = ["1A"]
-        elif num_channels == 2:
-            keys = ["1A", "1B"]
-        elif num_channels == 4:
-            keys = ["1A", "1B", "1C", "1D"]
-        elif num_channels == 8:
-            keys = ["1A", "1B", "1C", "1D", "2A", "2B", "2C", "2D"]
-        else:
+
+        keys = _BUTTON_KEYS_BY_CHANNEL_COUNT.get(num_channels)
+        if keys is None:
             _LOGGER.error(
-                "Unexpected number of channels: %d for device %s",
+                "Unexpected number of channels: %s for device %s",
                 num_channels,
-                device_address,
+                physical_addr,
             )
             continue
+
         mapping = key_mapping.get(num_channels, {})
-        channels_data = {}
-        converted_address = convert_nikobus_address(device_address)
+        converted_address = convert_nikobus_address(physical_addr)
         try:
             original_nibble = int(converted_address[0], 16)
         except (ValueError, IndexError):
             _LOGGER.error(
                 "Invalid converted address for device %s: %s",
-                device_address,
+                physical_addr,
                 converted_address,
             )
             continue
-        for idx, key in enumerate(keys, start=1):
-            if key in mapping:
-                add_value = int(mapping[key], 16)
-                new_nibble_value = (original_nibble + add_value) & 0xF
-                new_nibble_hex = f"{new_nibble_value:X}"
-                updated_addr = new_nibble_hex + converted_address[1:]
-                channels_data[f"channel_{idx}"] = {
-                    "key": key,
-                    "address": updated_addr,
-                }
-        device["channels_data"] = channels_data
-        for channel_info in channels_data.values():
-            discovered_channel_address = channel_info["address"]
-            key = channel_info["key"]
-            new_info = {
+
+        # Upsert the physical button record.
+        phys_entry = buttons.setdefault(
+            physical_addr,
+            {
                 "type": description,
                 "model": model,
-                "address": device_address,
                 "channels": num_channels,
-                "key": key,
+                "description": description,
+                "operation_points": {},
+            },
+        )
+        # Refresh physical metadata from the latest discovery.
+        phys_entry["type"] = description or phys_entry.get("type") or ""
+        phys_entry["model"] = model or phys_entry.get("model") or ""
+        phys_entry["channels"] = num_channels or phys_entry.get("channels")
+        phys_entry.setdefault("description", description)
+
+        op_points = phys_entry.setdefault("operation_points", {})
+        if not isinstance(op_points, dict):
+            op_points = {}
+            phys_entry["operation_points"] = op_points
+
+        channels_data: dict[str, dict] = {}
+
+        for idx, key_label in enumerate(keys, start=1):
+            if key_label not in mapping:
+                continue
+            add_value = int(mapping[key_label], 16)
+            new_nibble_value = (original_nibble + add_value) & 0xF
+            new_nibble_hex = f"{new_nibble_value:X}"
+            updated_addr = _normalize_address(new_nibble_hex + converted_address[1:])
+            channels_data[f"channel_{idx}"] = {
+                "key": key_label,
+                "address": updated_addr,
             }
-            button = buttons.get(discovered_channel_address)
-            if button:
-                linked_button = button.setdefault("linked_button", [])
-                if not isinstance(linked_button, list):
-                    linked_button = []
-                    button["linked_button"] = linked_button
-                found_info = next(
-                    (
-                        info
-                        for info in linked_button
-                        if isinstance(info, dict)
-                        and info.get("key") == new_info["key"]
-                        and info.get("address") == new_info["address"]
-                    ),
-                    None,
-                )
-                if found_info:
-                    if (
-                        found_info.get("type") != new_info["type"]
-                        or found_info.get("model") != new_info["model"]
-                        or found_info.get("channels") != new_info["channels"]
-                    ):
-                        found_info.update(
-                            {
-                                "type": new_info["type"],
-                                "model": new_info["model"],
-                                "channels": new_info["channels"],
-                            }
-                        )
-                else:
-                    linked_button.append(new_info)
-            else:
-                buttons[discovered_channel_address] = {
-                    "description": f"{description} #N{discovered_channel_address}",
-                    "address": discovered_channel_address,
-                    "linked_button": [new_info],
-                }
+            op_point = op_points.setdefault(
+                key_label, {"bus_address": updated_addr}
+            )
+            op_point["bus_address"] = updated_addr
+
+        # Surface channel-address mapping on the discovered device so later
+        # merge steps (which consume ``command_mapping`` keyed by bus
+        # addresses) can correlate without recomputing the transform.
+        device["channels_data"] = channels_data
 
 
 def _normalize_key(value):
@@ -542,162 +699,148 @@ def _normalize_key(value):
         return value
 
 
-def merge_linked_modules(button_data, command_mapping):
-    """Merge a discovery ``command_mapping`` into the caller-owned ``button_data`` dict.
+def _build_bus_to_op_index(buttons: dict) -> dict[str, tuple[str, str]]:
+    """Map bus_address -> (physical_address, key_label).
 
-    ``button_data`` is mutated in place. The dict-keyed form
-    (``button_data["nikobus_button"] = {<address>: {...}}``) is authoritative.
-    No filesystem access.
-
-    Notes:
-        - linked_modules blocks are grouped by module_address only.
-        - Supports command_mapping keys:
-            (push_button_address, key_raw)              [legacy]
-            (push_button_address, key_raw, ir_code)     [IR-aware]
-        - We do NOT persist key/key_raw in linked_modules; key identity is tracked in linked_button.
-        - For IR receivers, the bus-emitted address is stored in linked_button[].address.
-          Therefore we must match button entries by:
-            - top-level button["address"] (legacy), OR
-            - any linked_button[].address (IR / bus identity)
-        - If a button is not found in the store, it is skipped to prevent ghost/garbage buttons.
+    Includes the +1 alias for 8-channel wall buttons: the bus traffic for
+    those can arrive on either the declared bus address or its +1 sibling.
     """
 
-    buttons = button_data.get("nikobus_button")
-    if not isinstance(buttons, dict):
-        buttons = {}
-        button_data["nikobus_button"] = buttons
+    index: dict[str, tuple[str, str]] = {}
+    for physical_addr, button in buttons.items():
+        if not isinstance(button, dict):
+            continue
+        phys = _normalize_address(physical_addr)
+        if not phys:
+            continue
+        channels = button.get("channels")
+        op_points = button.get("operation_points")
+        if not isinstance(op_points, dict):
+            continue
+        for key_label, op_point in op_points.items():
+            if not isinstance(op_point, dict):
+                continue
+            bus_addr = _normalize_address(op_point.get("bus_address"))
+            if not bus_addr:
+                continue
+            index.setdefault(bus_addr, (phys, key_label))
+            if channels == 8 and len(bus_addr) == 6:
+                try:
+                    shifted = f"{(int(bus_addr, 16) + 1) & 0xFFFFFF:06X}"
+                    index.setdefault(shifted, (phys, key_label))
+                except ValueError:
+                    _LOGGER.debug(
+                        "Invalid hex bus address in operation point: %s", bus_addr
+                    )
+    return index
+
+
+def _build_ir_base_lookup(buttons: dict) -> dict[str, int]:
+    """Map 4-char IR prefix -> base byte, derived from physical IR receivers."""
+
+    lookup: dict[str, int] = {}
+    for physical_addr, button in buttons.items():
+        if not isinstance(button, dict):
+            continue
+        if "IR" not in (button.get("type") or ""):
+            continue
+        addr = _normalize_address(physical_addr)
+        if len(addr) != 6:
+            continue
+        try:
+            prefix = addr[:4]
+            base_byte = int(addr[-2:], 16)
+        except ValueError:
+            continue
+        lookup.setdefault(prefix, base_byte)
+    return lookup
+
+
+def _resolve_operation_point(
+    push_button_address: str,
+    key_raw,
+    buttons: dict,
+    bus_to_op: dict[str, tuple[str, str]],
+    ir_base_lookup: dict[str, int],
+):
+    """Find the (physical_addr, key_label, operation_point) tuple for a press.
+
+    Returns ``None`` when nothing matches — the caller should drop the link
+    rather than invent a ghost button.
+    """
+
+    normalized = _normalize_address(push_button_address)
+    if not normalized:
+        return None
+
+    # 1) Direct physical-address match.
+    physical = buttons.get(normalized)
+    if isinstance(physical, dict):
+        channels = physical.get("channels")
+        key_label = _key_raw_to_label(channels, key_raw)
+        if key_label:
+            op_point = (physical.get("operation_points") or {}).get(key_label)
+            if isinstance(op_point, dict):
+                return normalized, key_label, op_point
+
+    # 2) Bus-address match (the usual case for wall buttons).
+    bus_hit = bus_to_op.get(normalized)
+    if bus_hit is not None:
+        phys_addr, key_label = bus_hit
+        physical = buttons.get(phys_addr)
+        if isinstance(physical, dict):
+            op_point = (physical.get("operation_points") or {}).get(key_label)
+            if isinstance(op_point, dict):
+                return phys_addr, key_label, op_point
+
+    # 3) IR-slot fallback: resolve the physical IR receiver from the prefix
+    # table and pick the operation point from key_raw.
+    if len(normalized) == 6:
+        prefix = normalized[:4]
+        base_byte = ir_base_lookup.get(prefix)
+        if base_byte is not None:
+            base_addr = f"{prefix}{base_byte:02X}"
+            physical = buttons.get(base_addr)
+            if isinstance(physical, dict):
+                channels = physical.get("channels")
+                key_label = _key_raw_to_label(channels, key_raw)
+                if key_label:
+                    op_point = (
+                        physical.get("operation_points") or {}
+                    ).get(key_label)
+                    if isinstance(op_point, dict):
+                        return base_addr, key_label, op_point
+
+    return None
+
+
+def merge_linked_modules(button_data, command_mapping):
+    """Merge a discovery ``command_mapping`` into the caller-owned ``button_data``.
+
+    Operates on the Option-A physical-keyed shape. Automatically upgrades
+    legacy (v1) stores on first call.
+
+    ``command_mapping`` keys are ``(push_button_address, key_raw, ir_code)``
+    tuples; values are lists of output definitions produced by the
+    discovery decoders.
+
+    Returns ``(updated_buttons, links_added, outputs_added)``.
+    """
+
+    migrate_button_data_v1_to_v2(button_data)
+    buttons = _ensure_buttons_dict(button_data)
 
     def _unpack_mapping_key(mapping_key):
-        """Return (push_button_address, key_raw, ir_code)."""
         if not isinstance(mapping_key, tuple):
             return mapping_key, None, None
         if len(mapping_key) == 2:
             return mapping_key[0], mapping_key[1], None
         if len(mapping_key) == 3:
             return mapping_key[0], mapping_key[1], mapping_key[2]
-        return mapping_key[0] if mapping_key else None, None, None
+        return (mapping_key[0] if mapping_key else None), None, None
 
-    def _rebuild_address_lookup() -> tuple[
-        dict[str, dict],
-        dict[tuple[str, int], dict],
-        dict[str, int],
-    ]:
-        """Map resolvable addresses to their button entries.
-
-        Returns (address_lookup, keyed_lookup, ir_base_lookup):
-
-        - address_lookup: address -> button_entry for top-level button
-          addresses and linked_button entries without a resolvable key.
-        - keyed_lookup: (address, key_raw) -> button_entry for
-          linked_button entries whose ``key`` field can be resolved.
-          This lets us distinguish multiple logical buttons that share
-          the same physical wall button.
-        - ir_base_lookup: 4-char IR prefix -> base byte.
-        """
-        lookup: dict[str, dict] = {}
-        keyed_lookup: dict[tuple[str, int], dict] = {}
-        ir_base_lookup: dict[str, int] = {}
-
-        for button in buttons.values():
-            if not isinstance(button, dict):
-                continue
-
-            top_addr = _normalize_address(button.get("address"))
-            if top_addr:
-                lookup.setdefault(top_addr, button)
-
-            linked_button = button.get("linked_button", [])
-            if isinstance(linked_button, list):
-                for info in linked_button:
-                    if not isinstance(info, dict):
-                        continue
-                    di_addr = _normalize_address(info.get("address"))
-                    if not di_addr:
-                        continue
-
-                    channels = info.get("channels")
-                    key_raw = _key_label_to_raw(channels, info.get("key"))
-
-                    # When we can resolve the specific key, use the
-                    # key-specific lookup exclusively.  Populating the
-                    # general address_lookup here would cause shared wall
-                    # buttons to leak commands to siblings with different
-                    # keys (e.g. cover outputs being attributed to the
-                    # light button sharing the same wall button).
-                    if key_raw is not None:
-                        keyed_lookup.setdefault((di_addr, key_raw), button)
-                    else:
-                        lookup.setdefault(di_addr, button)
-
-                    # Link the secondary MAC address for 8-channel switches
-                    if channels == 8 and len(di_addr) == 6:
-                        try:
-                            base_int = int(di_addr, 16)
-                            if base_int < 0xFFFFFF:
-                                shifted_addr = f"{(base_int + 1):06X}"
-                                if key_raw is not None:
-                                    keyed_lookup.setdefault(
-                                        (shifted_addr, key_raw), button
-                                    )
-                                else:
-                                    lookup.setdefault(shifted_addr, button)
-                        except ValueError:
-                            _LOGGER.debug("Invalid hex address in linked_button: %s", di_addr)
-
-                    # Track IR receiver base addresses for slot resolution
-                    btn_type = info.get("type", "")
-                    if "IR" in btn_type and len(di_addr) == 6:
-                        try:
-                            prefix = di_addr[:4]
-                            base_byte = int(di_addr[-2:], 16)
-                            ir_base_lookup.setdefault(prefix, base_byte)
-                        except ValueError:
-                            pass
-
-        return lookup, keyed_lookup, ir_base_lookup
-
-    def _ensure_button_entry_for_address(
-        address_lookup: dict[str, dict],
-        keyed_lookup: dict[tuple[str, int], dict],
-        ir_base_lookup: dict[str, int],
-        normalized_address: str,
-        key_raw=None,
-        ir_code=None,
-    ) -> dict | None:
-        """Return existing button entry, or drop it if it's a ghost/garbage."""
-        # Key-specific lookup takes priority so shared wall buttons route
-        # each command to the correct logical button based on key_raw.
-        if key_raw is not None:
-            keyed_entry = keyed_lookup.get((normalized_address, key_raw))
-            if keyed_entry is not None:
-                return keyed_entry
-
-        existing = address_lookup.get(normalized_address)
-        if existing:
-            return existing
-
-        # Try resolving as an IR slot: replace last byte with the IR base byte
-        if len(normalized_address) == 6:
-            prefix = normalized_address[:4]
-            base_byte = ir_base_lookup.get(prefix)
-            if base_byte is not None:
-                base_addr = f"{prefix}{base_byte:02X}"
-                if key_raw is not None:
-                    keyed_entry = keyed_lookup.get((base_addr, key_raw))
-                    if keyed_entry is not None:
-                        return keyed_entry
-                existing = address_lookup.get(base_addr)
-                if existing:
-                    return existing
-
-        _LOGGER.debug(
-            "Ignored ghost link or garbage memory chunk for unknown button: %s (key_raw=%s)",
-            normalized_address,
-            key_raw,
-        )
-        return None
-
-    address_lookup, keyed_lookup, ir_base_lookup = _rebuild_address_lookup()
+    bus_to_op = _build_bus_to_op_index(buttons)
+    ir_base_lookup = _build_ir_base_lookup(buttons)
 
     updated_buttons = 0
     links_added = 0
@@ -707,43 +850,40 @@ def merge_linked_modules(button_data, command_mapping):
     unmatched_addresses: set[str] = set()
 
     for mapping_key, outputs in command_mapping.items():
-        push_button_address, key_raw, ir_code_from_key = _unpack_mapping_key(mapping_key)
+        push_button_address, key_raw, ir_code_from_key = _unpack_mapping_key(
+            mapping_key
+        )
         if push_button_address is None:
             continue
-
-        normalized_address = _normalize_address(push_button_address)
-        if not normalized_address:
-            continue
-
         if not isinstance(outputs, list) or not outputs:
             continue
 
-        # IMPORTANT: if not found, drop it to avoid ghost buttons.
-        button_entry = _ensure_button_entry_for_address(
-            address_lookup,
-            keyed_lookup,
+        resolved = _resolve_operation_point(
+            push_button_address,
+            key_raw,
+            buttons,
+            bus_to_op,
             ir_base_lookup,
-            normalized_address,
-            key_raw=key_raw,
-            ir_code=ir_code_from_key,
         )
-
-        if button_entry is None:
-            unmatched_addresses.add(normalized_address)
+        if resolved is None:
+            normalized = _normalize_address(push_button_address)
+            if normalized:
+                unmatched_addresses.add(normalized)
             continue
 
-        linked_modules = button_entry.setdefault("linked_modules", [])
+        _, _key_label, op_point = resolved
+        matched_addresses.add(_normalize_address(push_button_address))
+
+        linked_modules = op_point.setdefault("linked_modules", [])
         if not isinstance(linked_modules, list):
             linked_modules = []
-            button_entry["linked_modules"] = linked_modules
+            op_point["linked_modules"] = linked_modules
 
         updated_entry = False
-        matched_addresses.add(normalized_address)
 
         for output in outputs:
             if not isinstance(output, dict):
                 continue
-
             module_address = output.get("module_address")
             if module_address is None:
                 continue
@@ -753,31 +893,26 @@ def merge_linked_modules(button_data, command_mapping):
             t1_val = output.get("t1")
             t2_val = output.get("t2")
             payload_val = output.get("payload")
-
-            # Backward compatible physical identity
             button_address = output.get("button_address")
-
-            # Optional IR identity
             ir_button_address = output.get("ir_button_address")
             ir_code = output.get("ir_code") or ir_code_from_key
 
-            # Match block by module_address only (as before)
             matching_block = next(
                 (
                     block
                     for block in linked_modules
-                    if isinstance(block, dict) and block.get("module_address") == module_address
+                    if isinstance(block, dict)
+                    and block.get("module_address") == module_address
                 ),
                 None,
             )
-
             if matching_block is None:
                 matching_block = {"module_address": module_address, "outputs": []}
                 linked_modules.append(matching_block)
                 links_added += 1
                 updated_entry = True
 
-            existing_outputs = matching_block.get("outputs", [])
+            existing_outputs = matching_block.get("outputs")
             if not isinstance(existing_outputs, list):
                 existing_outputs = []
                 matching_block["outputs"] = existing_outputs
@@ -790,14 +925,11 @@ def merge_linked_modules(button_data, command_mapping):
                 "payload": payload_val,
                 "button_address": button_address,
             }
-
-            # Only persist IR fields when present
             if ir_button_address:
                 output_entry["ir_button_address"] = ir_button_address
             if ir_code:
                 output_entry["ir_code"] = ir_code
 
-            # Dedupe must include IR identity; otherwise IR variants collapse
             dedupe_key = (
                 output_entry.get("channel"),
                 output_entry.get("mode"),
@@ -806,7 +938,6 @@ def merge_linked_modules(button_data, command_mapping):
                 output_entry.get("ir_code"),
                 output_entry.get("ir_button_address"),
             )
-
             existing_keys = {
                 (
                     entry.get("channel"),
@@ -819,51 +950,51 @@ def merge_linked_modules(button_data, command_mapping):
                 for entry in existing_outputs
                 if isinstance(entry, dict)
             }
-
             if dedupe_key not in existing_keys:
                 existing_outputs.append(output_entry)
-                matching_block["outputs"] = existing_outputs
                 outputs_added += 1
                 updated_entry = True
 
         if updated_entry:
-            # Sort blocks by module address
             linked_modules.sort(
-                key=lambda block: (block.get("module_address", "") if isinstance(block, dict) else "")
+                key=lambda block: (
+                    block.get("module_address", "") if isinstance(block, dict) else ""
+                )
             )
-
             for block in linked_modules:
                 if not isinstance(block, dict):
                     continue
-                block_outputs = block.get("outputs", [])
+                block_outputs = block.get("outputs") or []
                 if not isinstance(block_outputs, list):
                     block_outputs = []
                 block_outputs.sort(
                     key=lambda out: (
-                        out.get("channel") if isinstance(out, dict) and out.get("channel") is not None else -1,
+                        out.get("channel")
+                        if isinstance(out, dict) and out.get("channel") is not None
+                        else -1,
                         out.get("mode", "") if isinstance(out, dict) else "",
                         (out.get("ir_code", "") or "") if isinstance(out, dict) else "",
-                        (out.get("ir_button_address", "") or "") if isinstance(out, dict) else "",
+                        (out.get("ir_button_address", "") or "")
+                        if isinstance(out, dict)
+                        else "",
                     )
                 )
                 block["outputs"] = block_outputs
-
             updated_buttons += 1
             any_updates = True
-        else:
-            # Exists but nothing new (all deduped)
-            pass
 
     if not any_updates:
         _LOGGER.info(
-            "Button store merge ran: changes=0 (updated_buttons=%d, links_added=%d, outputs_added=%d)",
+            "Button store merge ran: changes=0 (updated_buttons=%d, "
+            "links_added=%d, outputs_added=%d)",
             updated_buttons,
             links_added,
             outputs_added,
         )
     else:
         _LOGGER.info(
-            "Button store merge summary: updated_buttons=%d, links_added=%d, outputs_added=%d",
+            "Button store merge summary: updated_buttons=%d, links_added=%d, "
+            "outputs_added=%d",
             updated_buttons,
             links_added,
             outputs_added,
