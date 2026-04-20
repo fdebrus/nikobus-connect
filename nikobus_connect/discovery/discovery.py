@@ -16,7 +16,15 @@ from .mapping import (
     get_module_type_from_device_type,
 )
 from .protocol import classify_device_type, convert_nikobus_address, reverse_hex
-from ..const import DEVICE_ADDRESS_INVENTORY, DEVICE_INVENTORY_ANSWER
+from ..const import (
+    COMMAND_EXECUTION_DELAY,
+    DEVICE_ADDRESS_INVENTORY,
+    DEVICE_INVENTORY_ANSWER,
+    MODULE_SCAN_ACK_TIMEOUT,
+    MODULE_SCAN_DATA_TIMEOUT,
+    MODULE_SCAN_RETRY_LIMIT,
+    MODULE_SCAN_TRAILER_PREFIX,
+)
 from .fileio import merge_discovered_buttons, merge_linked_modules, update_module_data
 from ..protocol import make_pc_link_inventory_command
 
@@ -241,6 +249,27 @@ async def _notify_discovery_finished(discovery) -> None:
         await callback()
 
 
+def _is_inventory_trailer(message: str) -> bool:
+    """Detect a "$18<all-FF><CRC>" trailer frame.
+
+    The module emits one of these during a register scan to signal that
+    the remaining registers are unprogrammed. The payload between the
+    ``$18`` header and the trailing 3-byte CRC is all 0xFF. Treat any
+    all-FF payload of length >= 1 byte as a trailer.
+    """
+
+    if not isinstance(message, str):
+        return False
+    if not message.startswith(MODULE_SCAN_TRAILER_PREFIX):
+        return False
+    # 3 chars header + 6 chars CRC = 9 chars of bookkeeping; payload
+    # lives in-between.
+    body = message[len(MODULE_SCAN_TRAILER_PREFIX) : -6]
+    if not body:
+        return False
+    return all(ch == "F" for ch in body.upper())
+
+
 class NikobusDiscovery:
     def __init__(
         self,
@@ -276,6 +305,16 @@ class NikobusDiscovery:
         self._inventory_addresses: set[str] = set()
         self._module_found_data: bool = False
         self._module_consecutive_empties: int = 0
+        # Sequential register-scan coordination. The listener dispatches
+        # $2E / $1E / $18 frames directly to the event callback (they
+        # bypass the command-handler response queue). During a scan we
+        # hook the parser entry points to notify this event so the
+        # per-command loop can wake up when a data frame or trailer
+        # arrives, without rewriting the listener.
+        self._scan_event: asyncio.Event = asyncio.Event()
+        self._scan_trailer_seen: bool = False
+        self._scan_active: bool = False
+        self._scan_lock: asyncio.Lock = asyncio.Lock()
         self.reset_state()
 
     def reset_state(self, *, update_flags: bool = True):
@@ -361,6 +400,190 @@ class NikobusDiscovery:
             )
 
         return config_type or inventory_type
+
+    # ------------------------------------------------------------------
+    # Sequential register scan
+    # ------------------------------------------------------------------
+
+    def _notify_scan_frame(self, message: str) -> None:
+        """Wake the sequential scan loop on each inbound discovery frame.
+
+        Called from ``parse_module_inventory_response`` and
+        ``handle_device_address_inventory`` for every ``$2E`` / ``$1E``
+        / ``$18`` message while a scan is running. A $18 frame whose
+        payload is all-FF is treated as a trailer — the module has no
+        more programmed memory and the scan should short-circuit.
+        """
+
+        if not self._scan_active:
+            return
+        if message.startswith(MODULE_SCAN_TRAILER_PREFIX) and _is_inventory_trailer(
+            message
+        ):
+            self._scan_trailer_seen = True
+        self._scan_event.set()
+
+    async def _scan_module_registers(
+        self,
+        normalized_address: str,
+        base_command: str,
+        command_range,
+    ) -> None:
+        """Read each register one at a time, waiting for ACK + optional data.
+
+        Replaces the former fire-and-forget queue fill. Per register:
+
+        1. Send the inventory read command.
+        2. Wait up to ``MODULE_SCAN_ACK_TIMEOUT`` for a ``$05…`` ACK.
+           Retry once on timeout; skip the register if still missing.
+        3. Wait up to ``MODULE_SCAN_DATA_TIMEOUT`` for the matching
+           ``$2E`` / ``$1E`` data frame. Silence is legitimate — empty
+           registers produce no data.
+        4. If a ``$18`` trailer arrives, break; the module has signalled
+           end-of-programmed-memory.
+
+        Two concurrent scans are prevented by ``self._scan_lock``; the
+        second caller awaits the first.
+        """
+
+        listener = self._coordinator.nikobus_command._listener
+        connection = self._coordinator.nikobus_command._connection
+
+        async with self._scan_lock:
+            self._scan_active = True
+            self._scan_trailer_seen = False
+            self._scan_event.clear()
+            try:
+                registers_sent = 0
+                for reg in command_range:
+                    if self._scan_trailer_seen:
+                        _LOGGER.info(
+                            "Register scan short-circuited by trailer | module=%s "
+                            "last_register=0x%02X sent=%d",
+                            normalized_address,
+                            reg,
+                            registers_sent,
+                        )
+                        break
+                    partial_hex = f"{base_command}{reg:02X}04"
+                    pc_link_command = make_pc_link_inventory_command(partial_hex)
+                    await self._read_register_once(
+                        pc_link_command,
+                        reg,
+                        normalized_address,
+                        listener,
+                        connection,
+                    )
+                    registers_sent += 1
+                    await asyncio.sleep(COMMAND_EXECUTION_DELAY)
+                else:
+                    _LOGGER.info(
+                        "Register scan completed full range | module=%s sent=%d",
+                        normalized_address,
+                        registers_sent,
+                    )
+            finally:
+                self._scan_active = False
+                self._scan_trailer_seen = False
+
+    async def _read_register_once(
+        self,
+        command: str,
+        reg: int,
+        module_address: str,
+        listener,
+        connection,
+    ) -> bool:
+        """Send a single register-read and wait for ACK + optional data frame.
+
+        Returns True when the ACK was observed (whether or not a data
+        frame followed), False when all retries failed to see an ACK.
+        """
+
+        ack_prefix = f"$05{command[3:5]}"
+
+        for attempt in range(MODULE_SCAN_RETRY_LIMIT + 1):
+            # Drain any stale entries from the response queue — we are
+            # the only consumer while _awaiting_response is set.
+            while not listener.response_queue.empty():
+                try:
+                    listener.response_queue.get_nowait()
+                    listener.response_queue.task_done()
+                except asyncio.QueueEmpty:
+                    break
+
+            self._scan_event.clear()
+            listener._awaiting_response = True
+            try:
+                try:
+                    await connection.send(command)
+                except Exception:
+                    _LOGGER.warning(
+                        "Register scan send failed | module=%s reg=0x%02X attempt=%d",
+                        module_address,
+                        reg,
+                        attempt + 1,
+                        exc_info=True,
+                    )
+                    continue
+
+                # Wait for the ACK that matches our command.
+                ack_ok = await self._await_matching_ack(
+                    listener.response_queue, ack_prefix
+                )
+                if not ack_ok:
+                    _LOGGER.debug(
+                        "Register scan ACK timeout | module=%s reg=0x%02X attempt=%d",
+                        module_address,
+                        reg,
+                        attempt + 1,
+                    )
+                    continue
+
+                # ACK in hand: wait briefly for an accompanying data frame.
+                # Silence is valid for empty registers — don't treat it as
+                # an error.
+                try:
+                    await asyncio.wait_for(
+                        self._scan_event.wait(),
+                        timeout=MODULE_SCAN_DATA_TIMEOUT,
+                    )
+                except asyncio.TimeoutError:
+                    pass
+                return True
+            finally:
+                listener._awaiting_response = False
+
+        _LOGGER.warning(
+            "Register scan gave up on register | module=%s reg=0x%02X",
+            module_address,
+            reg,
+        )
+        return False
+
+    @staticmethod
+    async def _await_matching_ack(queue, ack_prefix: str) -> bool:
+        """Drain the response queue until an ACK with ``ack_prefix`` is seen.
+
+        Returns False if ``MODULE_SCAN_ACK_TIMEOUT`` elapses with no match.
+        """
+
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + MODULE_SCAN_ACK_TIMEOUT
+        while True:
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                return False
+            try:
+                msg = await asyncio.wait_for(queue.get(), timeout=remaining)
+            except asyncio.TimeoutError:
+                return False
+            try:
+                queue.task_done()
+            except ValueError:
+                pass
+            if isinstance(msg, str) and msg.startswith(ack_prefix):
+                return True
 
     def _is_known_module_address(self, address: str | None) -> bool:
         normalized = (address or "").upper()
@@ -589,6 +812,11 @@ class NikobusDiscovery:
         self._schedule_inventory_timeout()
 
     def handle_device_address_inventory(self, message: str) -> None:
+        # Signal the sequential scan loop first. A $18 frame that hits
+        # this handler during a register scan is either an (unexpected)
+        # address-inventory record or an end-of-memory trailer; either
+        # way the scan loop needs to wake.
+        self._notify_scan_frame(message)
         clean_message = message.strip("\x02\x03\r\n")
         marker_index = clean_message.find(DEVICE_ADDRESS_INVENTORY)
         if marker_index == -1:
@@ -755,10 +983,10 @@ class NikobusDiscovery:
             await self._finalize_discovery(normalized_address)
             return
 
-        for cmd in command_range:
-            partial_hex = f"{base_command}{cmd:02X}04"
-            pc_link_command = make_pc_link_inventory_command(partial_hex)
-            await self._coordinator.nikobus_command.queue_command(pc_link_command)
+        await self._scan_module_registers(
+            normalized_address, base_command, command_range
+        )
+        await self._finalize_discovery(normalized_address)
 
     async def parse_inventory_response(self, payload) -> InventoryResult | None:
         result = InventoryResult()
@@ -890,6 +1118,11 @@ class NikobusDiscovery:
             return None
 
     async def parse_module_inventory_response(self, message):
+        # Wake the sequential scan loop as soon as a data/trailer frame
+        # arrives. Parsing the frame still runs below; this hook only
+        # signals the scan coordinator.
+        self._notify_scan_frame(message)
+
         # --- Route PC-Link frames to the correct parser ---
         if self._coordinator.inventory_query_type == InventoryQueryType.PC_LINK:
             await self.parse_inventory_response(message)
