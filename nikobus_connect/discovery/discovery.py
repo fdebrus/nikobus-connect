@@ -684,9 +684,14 @@ class NikobusDiscovery:
             self._coordinator.discovery_module_address = normalized_address
 
         if self._module_type is None:
-            self._module_type = discovered_device.get("module_type") or self._coordinator.get_module_type(
+            # Coordinator config is authoritative when present — the user's
+            # dict_module_data reflects the physical hardware layout, whereas
+            # the inventory self-report can be wrong (observed: a physical
+            # switch module self-reporting device_type=0x03). Fall back to
+            # the inventory classification only when config has no entry.
+            self._module_type = self._coordinator.get_module_type(
                 normalized_address
-            )
+            ) or discovered_device.get("module_type")
 
         non_output_modules = {"pc_link", "pc_logic", "feedback_module", "other_module"}
         is_output_module = self._module_type not in non_output_modules
@@ -872,10 +877,12 @@ class NikobusDiscovery:
             self._module_address = address
 
             if self._module_type is None:
+                # Prefer coordinator config over inventory self-report; see
+                # query_module_inventory for rationale.
                 discovered = self.discovered_devices.get(address, {})
-                self._module_type = discovered.get("module_type") or self._coordinator.get_module_type(
+                self._module_type = self._coordinator.get_module_type(
                     address
-                )
+                ) or discovered.get("module_type")
 
             coordinator_channels = (
                 self._coordinator.get_module_channel_count(address)
