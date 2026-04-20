@@ -12,7 +12,7 @@ _LOGGER = logging.getLogger(__name__)
 
 
 _CRC_LEN = 6
-_CHUNK_LENGTHS = {"switch_module": 12, "roller_module": 12}
+_CHUNK_LENGTHS = {"switch_module": 12, "roller_module": 12, "dimmer_module": 16}
 
 
 class BaseChunkingDecoder:

@@ -5,19 +5,16 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from .base import DecodedCommand
+from .chunk_decoder import BaseChunkingDecoder
 from .mapping import DIMMER_MODE_MAPPING, DIMMER_TIMER_MAPPING
 from .protocol import (
     _format_channel,
     _is_all_ff,
     _is_garbage_chunk,
     _safe_int,
-    decode_command_payload,
     get_button_address,
     get_push_button_address,
-    reverse_hex,
 )
-from ..const import DEVICE_INVENTORY_ANSWER as DEVICE_INVENTORY
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -141,96 +138,9 @@ def decode(payload_hex: str, raw_bytes: list[str], context) -> dict[str, Any] | 
     return decoded
 
 
-class DimmerDecoder:
-    module_type = "dimmer_module"
-
+class DimmerDecoder(BaseChunkingDecoder):
     def __init__(self, coordinator):
-        self._coordinator = coordinator
-        self._module_channel_count: int | None = None
-
-    def can_handle(self, module_type: str) -> bool:
-        return module_type == self.module_type
-
-    def set_module_channel_count(self, module_channel_count: int | None) -> None:
-        self._module_channel_count = module_channel_count
-
-    def _chunk_from_message(self, message: str) -> tuple[str | None, str | None, str | None]:
-        matched_header = next((candidate for candidate in DEVICE_INVENTORY if message.startswith(candidate)), None)
-        if matched_header is None:
-            return None, None, None
-
-        header_suffix = matched_header.split("$")[-1]
-        frame_body = message[len(matched_header) :]
-        if len(frame_body) < 4:
-            return header_suffix, None, None
-
-        address = (header_suffix + frame_body[:4]).upper()
-        payload_and_crc = frame_body[4:]
-        return address, payload_and_crc[:EXPECTED_CHUNK_LEN], payload_and_crc[EXPECTED_CHUNK_LEN:]
-
-    def decode(self, message: str) -> list[DecodedCommand]:
-        message = message.strip()
-        address, chunk_hex, crc_region = self._chunk_from_message(message)
-
-        if chunk_hex is None or address is None:
-            _LOGGER.debug(
-                "Discovery skipped | type=dimmer module=%s reason=invalid_length payload=%s",
-                address,
-                message,
-            )
-            return []
-
-        chunk_hex = chunk_hex.upper()
-        if len(chunk_hex) != EXPECTED_CHUNK_LEN:
-            _LOGGER.debug(
-                "Discovery skipped | type=dimmer module=%s reason=invalid_length payload=%s",
-                address,
-                chunk_hex,
-            )
-            return []
-
-        payload_hex = reverse_hex(chunk_hex)
-        if _is_all_ff(payload_hex, EXPECTED_CHUNK_LEN):
-            _LOGGER.debug(
-                "Discovery skipped | type=dimmer module=%s payload=%s reason=empty_slot",
-                address,
-                payload_hex,
-            )
-            return []
-
-        if _is_garbage_chunk(payload_hex):
-            _LOGGER.debug(
-                "Discovery skipped | type=dimmer module=%s payload=%s reason=garbage_chunk",
-                address,
-                payload_hex,
-            )
-            return []
-
-        decoded_fields = decode_command_payload(
-            payload_hex,
-            self.module_type,
-            self._coordinator,
-            module_address=address,
-            reverse_before_decode=False,
-            raw_chunk_hex=chunk_hex,
-            module_channel_count=self._module_channel_count,
-        )
-
-        if decoded_fields is None:
-            return []
-
-        decoded_fields.update({"crc_region": crc_region, "module_address": address})
-
-        command = DecodedCommand(
-            module_type=self.module_type,
-            raw_message=message,
-            prefix_hex=address,
-            chunk_hex=chunk_hex,
-            payload_hex=payload_hex,
-            metadata=decoded_fields,
-        )
-
-        return [command]
+        super().__init__(coordinator, "dimmer_module")
 
 
 __all__ = ["DimmerDecoder", "decode", "EXPECTED_CHUNK_LEN"]
