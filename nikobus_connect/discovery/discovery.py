@@ -899,16 +899,6 @@ class NikobusDiscovery:
             if hasattr(decoder, "set_module_channel_count"):
                 decoder.set_module_channel_count(self._module_channels)
 
-            if decoder.module_type == "dimmer_module":
-                commands = decoder.decode(message)
-                if commands:
-                    self._module_address = address
-                    await self._handle_decoded_commands(address, commands)
-                if await self._check_early_termination(address, bool(commands)):
-                    return
-                self._schedule_timeout()
-                return
-
             analysis = decoder.analyze_frame_payload(self._payload_buffer, payload_and_crc)
             if analysis is None:
                 self._schedule_timeout()
