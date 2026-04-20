@@ -23,6 +23,16 @@ COMMAND_ANSWER_WAIT_TIMEOUT: Final[int] = 5
 COMMAND_POST_ACK_ANSWER_TIMEOUT: Final[float] = 1.5
 MAX_ATTEMPTS: Final[int] = 3
 
+# Module register scan (sequential send-and-wait). Each register read is
+# sent one at a time; the scan loop waits for the ACK, then up to
+# DATA_TIMEOUT for the matching data frame. An empty register legitimately
+# produces no data frame — DATA_TIMEOUT expiring there is not an error.
+# A "$18FFFF…" trailer frame short-circuits the remaining reads.
+MODULE_SCAN_ACK_TIMEOUT: Final[float] = 0.3
+MODULE_SCAN_DATA_TIMEOUT: Final[float] = 0.2
+MODULE_SCAN_RETRY_LIMIT: Final[int] = 1
+MODULE_SCAN_TRAILER_PREFIX: Final[str] = "$18"
+
 # Message prefixes and markers
 BUTTON_COMMAND_PREFIX: Final[str] = "#N"
 COMMAND_PROCESSED: Final[tuple[str, str]] = ("$0515", "$0516")
