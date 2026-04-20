@@ -458,114 +458,6 @@ def _ensure_buttons_dict(button_data: dict) -> dict:
     return buttons
 
 
-def migrate_button_data_v1_to_v2(button_data: dict) -> bool:
-    """Convert legacy bus-keyed button storage to physical-keyed (Option A).
-
-    Legacy (v1) shape::
-
-        {"nikobus_button": {<bus_addr>: {"description": ..., "address": <bus_addr>,
-                                          "linked_button": [{"address": <physical>,
-                                                             "key": "1A", ...}],
-                                          "linked_modules": [...]}}}
-
-    Current (v2) shape::
-
-        {"nikobus_button": {<physical_addr>: {"type", "model", "channels",
-                                               "description",
-                                               "operation_points": {
-                                                  "1A": {"bus_address", "description",
-                                                         "linked_modules": [...]},
-                                                  ...}}}}
-
-    Mutates ``button_data`` in place. Returns True when a migration was
-    performed, False when already in v2 shape (no-op).
-    """
-
-    buttons = button_data.get("nikobus_button")
-    if not isinstance(buttons, dict) or not buttons:
-        return False
-
-    # v1 detection: any entry carries a ``linked_button`` list.
-    has_v1 = any(
-        isinstance(v, dict) and "linked_button" in v for v in buttons.values()
-    )
-    if not has_v1:
-        return False
-
-    new_buttons: dict[str, dict] = {}
-
-    for bus_addr, old_entry in buttons.items():
-        if not isinstance(old_entry, dict):
-            continue
-        linked_list = old_entry.get("linked_button", [])
-        if not isinstance(linked_list, list) or not linked_list:
-            continue
-
-        # Canonical physical identity lives in the first linked_button entry.
-        lb = linked_list[0]
-        if not isinstance(lb, dict):
-            continue
-
-        physical_addr = _normalize_address(lb.get("address"))
-        key_label = lb.get("key")
-        if not physical_addr or not key_label:
-            continue
-
-        normalized_bus = _normalize_address(bus_addr)
-        phys_type = lb.get("type") or ""
-        generated_phys_desc = (
-            f"{phys_type} #N{physical_addr}" if phys_type else f"#N{physical_addr}"
-        )
-        phys_entry = new_buttons.setdefault(
-            physical_addr,
-            {
-                "type": lb.get("type"),
-                "model": lb.get("model"),
-                "channels": lb.get("channels"),
-                "description": generated_phys_desc,
-                "operation_points": {},
-            },
-        )
-        # Backfill physical metadata from later entries when missing.
-        for field in ("type", "model", "channels"):
-            if not phys_entry.get(field) and lb.get(field) is not None:
-                phys_entry[field] = lb.get(field)
-
-        op_points = phys_entry.setdefault("operation_points", {})
-
-        generated_op_desc = f"Push button {key_label} #N{normalized_bus}"
-        op_point = op_points.setdefault(
-            key_label,
-            {"bus_address": normalized_bus, "description": generated_op_desc},
-        )
-        op_point["bus_address"] = normalized_bus
-
-        old_modules = old_entry.get("linked_modules")
-        if isinstance(old_modules, list) and old_modules:
-            op_point["linked_modules"] = old_modules
-
-        # Preserve a per-op-point description when the old v1 entry had a
-        # custom name (i.e. not the auto-generated ``"<type> #N<bus>"``
-        # pattern). Otherwise use the new generated form.
-        old_desc = old_entry.get("description")
-        auto_pattern = f"#N{normalized_bus}"
-        if (
-            old_desc
-            and isinstance(old_desc, str)
-            and auto_pattern not in old_desc
-        ):
-            op_point["description"] = old_desc
-        else:
-            op_point["description"] = generated_op_desc
-
-    button_data["nikobus_button"] = new_buttons
-    _LOGGER.info(
-        "Migrated button store v1 -> v2 | physical_buttons=%d",
-        len(new_buttons),
-    )
-    return True
-
-
 def find_operation_point(
     button_data: dict, bus_address: str
 ) -> tuple[str, str, dict] | None:
@@ -620,11 +512,9 @@ def merge_discovered_buttons(
              },
          }}}
 
-    Mutates ``button_data`` in place. Runs a one-shot v1 -> v2 migration
-    first so legacy storage upgrades on first use.
+    Mutates ``button_data`` in place.
     """
 
-    migrate_button_data_v1_to_v2(button_data)
     buttons = _ensure_buttons_dict(button_data)
 
     for device_address, device in discovered_devices.items():
@@ -845,8 +735,7 @@ def _resolve_operation_point(
 def merge_linked_modules(button_data, command_mapping):
     """Merge a discovery ``command_mapping`` into the caller-owned ``button_data``.
 
-    Operates on the Option-A physical-keyed shape. Automatically upgrades
-    legacy (v1) stores on first call.
+    Operates on the Option-A physical-keyed shape.
 
     ``command_mapping`` keys are ``(push_button_address, key_raw, ir_code)``
     tuples; values are lists of output definitions produced by the
@@ -855,7 +744,6 @@ def merge_linked_modules(button_data, command_mapping):
     Returns ``(updated_buttons, links_added, outputs_added)``.
     """
 
-    migrate_button_data_v1_to_v2(button_data)
     buttons = _ensure_buttons_dict(button_data)
 
     def _unpack_mapping_key(mapping_key):
