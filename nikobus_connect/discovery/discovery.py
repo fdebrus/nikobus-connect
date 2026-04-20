@@ -288,6 +288,7 @@ class NikobusDiscovery:
         self._module_address = None
         self._module_type = None
         self._module_channels: int | None = None
+        self._scan_response_index = 0
         self._register_scan_queue = []
         self._inventory_addresses = set()
         self._inventory_identity_queued: set[str] = set()
@@ -330,6 +331,35 @@ class NikobusDiscovery:
             if decoder.can_handle(self._module_type):
                 return decoder
         return None
+
+    def _resolve_module_type(
+        self, address: str, discovered_device: dict | None
+    ) -> str | None:
+        """Resolve the module type for ``address``.
+
+        Coordinator config is authoritative — it reflects the user's
+        physical wiring via ``dict_module_data``. The inventory
+        self-report is only used when config has no entry for the
+        address (first-time scan of a newly-added module).
+
+        When both sources disagree, log at INFO so the override is
+        visible in ordinary HA logs. This has been observed in the
+        wild: a physical switch module self-reporting device_type=0x03
+        during the PC-Link identity phase.
+        """
+
+        config_type = self._coordinator.get_module_type(address)
+        inventory_type = (discovered_device or {}).get("module_type")
+
+        if config_type and inventory_type and config_type != inventory_type:
+            _LOGGER.info(
+                "Module type conflict | address=%s config=%s inventory=%s — using config",
+                address,
+                config_type,
+                inventory_type,
+            )
+
+        return config_type or inventory_type
 
     def _is_known_module_address(self, address: str | None) -> bool:
         normalized = (address or "").upper()
@@ -410,6 +440,7 @@ class NikobusDiscovery:
         self._module_channels = None
         self._module_found_data = False
         self._module_consecutive_empties = 0
+        self._scan_response_index = 0
 
     async def _finalize_discovery(self, module_address: str | None = None) -> None:
         self._cancel_timeout()
@@ -531,6 +562,7 @@ class NikobusDiscovery:
         self._module_channels = None
         self._module_found_data = False
         self._module_consecutive_empties = 0
+        self._scan_response_index = 0
         self._coordinator.discovery_running = True
         self._coordinator.discovery_module = True
         self._coordinator.discovery_module_address = normalized_address
@@ -684,14 +716,9 @@ class NikobusDiscovery:
             self._coordinator.discovery_module_address = normalized_address
 
         if self._module_type is None:
-            # Coordinator config is authoritative when present — the user's
-            # dict_module_data reflects the physical hardware layout, whereas
-            # the inventory self-report can be wrong (observed: a physical
-            # switch module self-reporting device_type=0x03). Fall back to
-            # the inventory classification only when config has no entry.
-            self._module_type = self._coordinator.get_module_type(
-                normalized_address
-            ) or discovered_device.get("module_type")
+            self._module_type = self._resolve_module_type(
+                normalized_address, discovered_device
+            )
 
         non_output_modules = {"pc_link", "pc_logic", "feedback_module", "other_module"}
         is_output_module = self._module_type not in non_output_modules
@@ -740,6 +767,12 @@ class NikobusDiscovery:
                 payload = payload.split("$")[-1]
             payload = payload.lstrip("$")
             payload_bytes = bytes.fromhex(payload)
+
+            _LOGGER.debug(
+                "Inventory raw frame | length=%d hex=%s",
+                len(payload_bytes),
+                payload_bytes.hex().upper(),
+            )
 
             # --- FIX 1: The data payload starts at byte 3 ---
             data_bytes = payload_bytes[3:19] if len(payload_bytes) >= 19 else payload_bytes[3:]
@@ -831,11 +864,15 @@ class NikobusDiscovery:
             self.discovered_devices[converted_address] = device_entry
 
             _LOGGER.debug(
-                "Inventory classification | module_address=%s device_type=%s model=%s channels=%s",
+                "Inventory classification | module_address=%s device_type=%s module_type=%s "
+                "model=%s channels=%s raw_type_byte=0x%02X raw_addr_bytes=%s",
                 converted_address,
                 device_type_hex,
+                module_type,
                 model,
                 channels,
+                payload_bytes[7] if len(payload_bytes) > 7 else 0,
+                payload_bytes[11:slice_end].hex().upper() if len(payload_bytes) >= slice_end else "",
             )
 
             _LOGGER.info(
@@ -877,12 +914,8 @@ class NikobusDiscovery:
             self._module_address = address
 
             if self._module_type is None:
-                # Prefer coordinator config over inventory self-report; see
-                # query_module_inventory for rationale.
                 discovered = self.discovered_devices.get(address, {})
-                self._module_type = self._coordinator.get_module_type(
-                    address
-                ) or discovered.get("module_type")
+                self._module_type = self._resolve_module_type(address, discovered)
 
             coordinator_channels = (
                 self._coordinator.get_module_channel_count(address)
@@ -913,6 +946,18 @@ class NikobusDiscovery:
 
             self._module_address = address
             self._payload_buffer = analysis["remainder"]
+            self._scan_response_index += 1
+            response_index = self._scan_response_index
+
+            _LOGGER.debug(
+                "Register scan response | module=%s response_index=%d frame_hex=%s "
+                "buffered_chunks=%d remainder_len=%d",
+                address,
+                response_index,
+                payload_and_crc.upper(),
+                len(analysis["chunks"]),
+                len(analysis["remainder"]),
+            )
 
             decoded_commands: list[DecodedCommand] = []
             for chunk in analysis["chunks"]:
@@ -920,14 +965,16 @@ class NikobusDiscovery:
                 if not normalized_chunk:
                     continue
                 _LOGGER.debug(
-                    "Discovery relationship chunk | module=%s chunk=%s",
+                    "Discovery relationship chunk | module=%s response_index=%d chunk=%s",
                     address,
+                    response_index,
                     normalized_chunk,
                 )
                 if normalized_chunk == "FFFFFFFFFFFF":
                     _LOGGER.debug(
-                        "Discovery relationship empty chunk detected | module=%s chunk=%s",
+                        "Discovery relationship empty chunk detected | module=%s response_index=%d chunk=%s",
                         address,
+                        response_index,
                         normalized_chunk,
                     )
                     # Just skip the empty chunk, do NOT abort the scan!
