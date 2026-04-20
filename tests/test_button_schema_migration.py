@@ -116,6 +116,48 @@ def test_migration_collapses_four_bus_entries_into_one_physical():
         assert "linked_modules" not in op_points[other]
 
 
+def test_migration_generates_new_format_descriptions():
+    """After migration, descriptions follow the new generated format."""
+
+    store = _sample_v1_store()
+    migrate_button_data_v1_to_v2(store)
+
+    phys = store["nikobus_button"]["182F18"]
+    assert phys["description"] == "Button with 4 Operation Points #N182F18"
+
+    op_points = phys["operation_points"]
+    assert op_points["1A"]["description"] == "Push button 1A #N863D06"
+    assert op_points["1B"]["description"] == "Push button 1B #NC63D06"
+    assert op_points["1C"]["description"] == "Push button 1C #N063D06"
+    assert op_points["1D"]["description"] == "Push button 1D #N463D06"
+
+
+def test_migration_preserves_custom_v1_descriptions():
+    """A v1 description that doesn't match the auto pattern survives migration."""
+
+    store = {
+        "nikobus_button": {
+            "863D06": {
+                "description": "Kitchen ceiling light",
+                "address": "863D06",
+                "linked_button": [
+                    {
+                        "type": "Button with 4 Operation Points",
+                        "model": "05-346",
+                        "address": "182F18",
+                        "channels": 4,
+                        "key": "1A",
+                    }
+                ],
+            }
+        }
+    }
+    migrate_button_data_v1_to_v2(store)
+
+    op_1a = store["nikobus_button"]["182F18"]["operation_points"]["1A"]
+    assert op_1a["description"] == "Kitchen ceiling light"
+
+
 def test_migration_is_noop_on_v2_shape():
     store = {
         "nikobus_button": {

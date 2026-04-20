@@ -79,6 +79,96 @@ def test_merge_discovered_buttons_produces_physical_keyed_shape():
     assert len(bus_addrs) == 4
 
 
+def test_merge_discovered_buttons_generates_unique_descriptions():
+    """Physical-button description = "{type} #N{physical_addr}"; op-point
+    description = "Push button {key} #N{bus_addr}". Every description in
+    the store must be globally unique so HA entities don't collide.
+    """
+
+    button_data: dict = {"nikobus_button": {}}
+    discovered = {
+        "0083C6": {
+            "category": "Button",
+            "description": "Button with 4 Operation Points",
+            "model": "05-346",
+            "channels": 4,
+            "address": "0083C6",
+        },
+        "17C554": {
+            "category": "Button",
+            "description": "Button with 4 Operation Points",
+            "model": "05-346",
+            "channels": 4,
+            "address": "17C554",
+        },
+    }
+
+    merge_discovered_buttons(
+        button_data, discovered, KEY_MAPPING, convert_nikobus_address
+    )
+
+    buttons = button_data["nikobus_button"]
+    assert buttons["0083C6"]["description"] == "Button with 4 Operation Points #N0083C6"
+    assert buttons["17C554"]["description"] == "Button with 4 Operation Points #N17C554"
+
+    # Op-point descriptions follow "Push button {key} #N{bus_addr}".
+    for physical_addr, entry in buttons.items():
+        for key_label, op_point in entry["operation_points"].items():
+            bus_addr = op_point["bus_address"]
+            assert (
+                op_point["description"]
+                == f"Push button {key_label} #N{bus_addr}"
+            )
+
+    # Collect every description string — must be globally unique.
+    all_descs = [entry["description"] for entry in buttons.values()] + [
+        op["description"]
+        for entry in buttons.values()
+        for op in entry["operation_points"].values()
+    ]
+    assert len(all_descs) == len(set(all_descs))
+
+
+def test_merge_discovered_buttons_preserves_user_renamed_descriptions():
+    """Custom descriptions survive a re-discovery; auto ones get refreshed."""
+
+    button_data: dict = {"nikobus_button": {}}
+    discovered = {
+        "0083C6": {
+            "category": "Button",
+            "description": "Button with 4 Operation Points",
+            "model": "05-346",
+            "channels": 4,
+            "address": "0083C6",
+        }
+    }
+    merge_discovered_buttons(
+        button_data, discovered, KEY_MAPPING, convert_nikobus_address
+    )
+
+    # User renames physical button and one op-point in the HA UI.
+    button_data["nikobus_button"]["0083C6"]["description"] = "Living room 4-key"
+    first_key = next(iter(button_data["nikobus_button"]["0083C6"]["operation_points"]))
+    button_data["nikobus_button"]["0083C6"]["operation_points"][first_key][
+        "description"
+    ] = "Living room ceiling light"
+
+    # Re-discovery must not clobber the renames.
+    merge_discovered_buttons(
+        button_data, discovered, KEY_MAPPING, convert_nikobus_address
+    )
+
+    assert (
+        button_data["nikobus_button"]["0083C6"]["description"] == "Living room 4-key"
+    )
+    assert (
+        button_data["nikobus_button"]["0083C6"]["operation_points"][first_key][
+            "description"
+        ]
+        == "Living room ceiling light"
+    )
+
+
 def test_merge_discovered_buttons_is_idempotent():
     button_data: dict = {"nikobus_button": {}}
     discovered = {

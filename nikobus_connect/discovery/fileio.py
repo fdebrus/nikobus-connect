@@ -511,13 +511,18 @@ def migrate_button_data_v1_to_v2(button_data: dict) -> bool:
         if not physical_addr or not key_label:
             continue
 
+        normalized_bus = _normalize_address(bus_addr)
+        phys_type = lb.get("type") or ""
+        generated_phys_desc = (
+            f"{phys_type} #N{physical_addr}" if phys_type else f"#N{physical_addr}"
+        )
         phys_entry = new_buttons.setdefault(
             physical_addr,
             {
                 "type": lb.get("type"),
                 "model": lb.get("model"),
                 "channels": lb.get("channels"),
-                "description": lb.get("type"),
+                "description": generated_phys_desc,
                 "operation_points": {},
             },
         )
@@ -527,22 +532,31 @@ def migrate_button_data_v1_to_v2(button_data: dict) -> bool:
                 phys_entry[field] = lb.get(field)
 
         op_points = phys_entry.setdefault("operation_points", {})
+
+        generated_op_desc = f"Push button {key_label} #N{normalized_bus}"
         op_point = op_points.setdefault(
-            key_label, {"bus_address": _normalize_address(bus_addr)}
+            key_label,
+            {"bus_address": normalized_bus, "description": generated_op_desc},
         )
-        op_point["bus_address"] = _normalize_address(bus_addr)
+        op_point["bus_address"] = normalized_bus
 
         old_modules = old_entry.get("linked_modules")
         if isinstance(old_modules, list) and old_modules:
             op_point["linked_modules"] = old_modules
 
-        # Preserve a per-op-point description when the old entry had a custom
-        # one (i.e. not the auto-generated ``"<type> #N<bus>"`` pattern).
+        # Preserve a per-op-point description when the old v1 entry had a
+        # custom name (i.e. not the auto-generated ``"<type> #N<bus>"``
+        # pattern). Otherwise use the new generated form.
         old_desc = old_entry.get("description")
-        if old_desc and isinstance(old_desc, str):
-            auto_pattern = f"#N{_normalize_address(bus_addr)}"
-            if auto_pattern not in old_desc:
-                op_point.setdefault("description", old_desc)
+        auto_pattern = f"#N{normalized_bus}"
+        if (
+            old_desc
+            and isinstance(old_desc, str)
+            and auto_pattern not in old_desc
+        ):
+            op_point["description"] = old_desc
+        else:
+            op_point["description"] = generated_op_desc
 
     button_data["nikobus_button"] = new_buttons
     _LOGGER.info(
@@ -646,6 +660,10 @@ def merge_discovered_buttons(
             )
             continue
 
+        generated_phys_desc = (
+            f"{description} #N{physical_addr}" if description else f"#N{physical_addr}"
+        )
+
         # Upsert the physical button record.
         phys_entry = buttons.setdefault(
             physical_addr,
@@ -653,7 +671,7 @@ def merge_discovered_buttons(
                 "type": description,
                 "model": model,
                 "channels": num_channels,
-                "description": description,
+                "description": generated_phys_desc,
                 "operation_points": {},
             },
         )
@@ -661,7 +679,12 @@ def merge_discovered_buttons(
         phys_entry["type"] = description or phys_entry.get("type") or ""
         phys_entry["model"] = model or phys_entry.get("model") or ""
         phys_entry["channels"] = num_channels or phys_entry.get("channels")
-        phys_entry.setdefault("description", description)
+        # Only (re)generate the description when none exists or the stored
+        # one is still the auto-generated form — never overwrite a custom
+        # name a user may have set downstream.
+        current_desc = phys_entry.get("description")
+        if not current_desc or current_desc.endswith(f"#N{physical_addr}"):
+            phys_entry["description"] = generated_phys_desc
 
         op_points = phys_entry.setdefault("operation_points", {})
         if not isinstance(op_points, dict):
@@ -681,10 +704,15 @@ def merge_discovered_buttons(
                 "key": key_label,
                 "address": updated_addr,
             }
+            generated_op_desc = f"Push button {key_label} #N{updated_addr}"
             op_point = op_points.setdefault(
-                key_label, {"bus_address": updated_addr}
+                key_label,
+                {"bus_address": updated_addr, "description": generated_op_desc},
             )
             op_point["bus_address"] = updated_addr
+            current_op_desc = op_point.get("description")
+            if not current_op_desc or current_op_desc.endswith(f"#N{updated_addr}"):
+                op_point["description"] = generated_op_desc
 
         # Surface channel-address mapping on the discovered device so later
         # merge steps (which consume ``command_mapping`` keyed by bus
