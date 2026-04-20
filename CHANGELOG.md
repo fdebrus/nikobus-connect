@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.3.2
+
+### Fixed
+
+- **Register-scan ACK timeout was too tight for real hardware.** ACKs from
+  live modules land 300–700 ms after the send (the first register of a
+  scan hitting the top of that range because the module wakes up on the
+  initial command). The 0.3.1 default of 300 ms was catching the edge:
+  scans completed but the first register's ACK+data arrived 30–70 ms
+  after both retries had timed out. Raised `MODULE_SCAN_ACK_TIMEOUT` to
+  1.5 s and `MODULE_SCAN_DATA_TIMEOUT` to 0.5 s. Downstream overrides
+  still supported via the const names.
+- **Drift-on-timeout produced phantom records.** When a register's
+  retries were exhausted and the ACK+data arrived moments later, the
+  late ACK matched the next register's wait and the late data frame
+  concatenated with that register's buffer — every chunk after the
+  timeout was misaligned by 4 bytes. `_read_register_once` now flushes
+  `_payload_buffer` and drains the response queue when it gives up on a
+  register, so the next register starts from a clean slate.
+
+### Added
+
+- Regression test `test_giveup_on_ack_timeout_flushes_buffer_and_queue`
+  pinning the flush behaviour.
+
 ## 0.3.1
 
 ### Fixed

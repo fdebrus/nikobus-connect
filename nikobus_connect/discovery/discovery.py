@@ -559,6 +559,18 @@ class NikobusDiscovery:
             module_address,
             reg,
         )
+        # The ACK+data for this register can still arrive moments later.
+        # If we leave stale bytes in the payload buffer or in the response
+        # queue, subsequent registers will decode against the wrong
+        # remainder (one-register drift producing phantom records).
+        # Flush both so the next register starts from a clean slate.
+        self._payload_buffer = ""
+        while not listener.response_queue.empty():
+            try:
+                listener.response_queue.get_nowait()
+                listener.response_queue.task_done()
+            except asyncio.QueueEmpty:
+                break
         return False
 
     @staticmethod
