@@ -77,31 +77,32 @@ def decode_ir_channel(ir_slot_addr: str | None, key_raw: int | None, ir_base_byt
 def build_ir_receiver_lookup(buttons) -> dict[str, int]:
     """Build a mapping of 4-char IR address prefixes to their base byte.
 
-    Scans button entries for ``linked_button`` entries whose type contains
-    "IR" and extracts the physical address prefix and last byte. ``buttons``
-    may be any iterable of entries (list, dict.values(), ...).
+    Operates on the Option-A physical-keyed button store. ``buttons`` may
+    be the ``nikobus_button`` dict itself (physical_address -> entry) or
+    any iterable of ``(physical_address, entry)`` pairs.
 
     Returns e.g. {"0D1C": 0x80, "0FFE": 0xC0}.
     """
+    if isinstance(buttons, dict):
+        items = buttons.items()
+    else:
+        items = buttons
+
     lookup: dict[str, int] = {}
-    for button in buttons:
+    for physical_addr, button in items:
         if not isinstance(button, dict):
             continue
-        for info in button.get("linked_button", []):
-            if not isinstance(info, dict):
-                continue
-            btn_type = info.get("type", "")
-            if "IR" not in btn_type:
-                continue
-            addr = (info.get("address") or "").strip().upper()
-            if len(addr) != 6:
-                continue
-            try:
-                prefix = addr[:4]
-                base_byte = int(addr[-2:], 16)
-                lookup.setdefault(prefix, base_byte)
-            except ValueError:
-                continue
+        if "IR" not in (button.get("type") or ""):
+            continue
+        addr = (physical_addr or "").strip().upper()
+        if len(addr) != 6:
+            continue
+        try:
+            prefix = addr[:4]
+            base_byte = int(addr[-2:], 16)
+            lookup.setdefault(prefix, base_byte)
+        except ValueError:
+            continue
     return lookup
 
 
@@ -1009,7 +1010,7 @@ class NikobusDiscovery:
         if self._button_data is not None:
             buttons = self._button_data.get("nikobus_button") or {}
             if isinstance(buttons, dict):
-                ir_receiver_lookup = build_ir_receiver_lookup(buttons.values()) or None
+                ir_receiver_lookup = build_ir_receiver_lookup(buttons) or None
 
         new_commands = []
         command_mapping = {}
