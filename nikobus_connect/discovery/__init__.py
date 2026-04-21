@@ -1,6 +1,6 @@
 """Nikobus Discovery - PyPI library for Nikobus device discovery."""
 
-__version__ = "0.3.3"
+__version__ = "0.3.4"
 
 from .discovery import NikobusDiscovery
 from .base import DecodedCommand, InventoryQueryType, InventoryResult, Decoder
