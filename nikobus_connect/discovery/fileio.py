@@ -938,15 +938,15 @@ def merge_linked_modules(button_data, command_mapping):
 
 # Pair / group keys for paired-button modes.
 #
-# Nikobus dimmer M01 ("Dim on/off (2 buttons)") uses two physical keys per
-# output (one ON, one OFF) but stores only one link record on the module.
-# M02 ("Dim on/off (4 buttons)") uses four keys per output (on/off/+/-)
-# and stores the record on the master key (1A for row 1, 2A for row 2 on
-# 8-op units). The other keys act on the same output but have no memory
-# entry — they need to be inferred post-scan.
+# These modes use more than one physical key per output but store only
+# one link record on the module. The peer keys need inference post-scan.
 #
-# Mirroring fires only on these specific mode strings; every other mode
-# is single-key.
+#   Dimmer M01 ("Dim on/off (2 buttons)")  — 2 keys (on/off)
+#   Dimmer M02 ("Dim on/off (4 buttons)")  — 4 keys (on/off/+/-), master=1A/2A
+#   Roller M01 ("Open - stop - close")     — 2 keys (up=open, down=close;
+#                                            either stops during movement)
+#
+# Every other mode across switch/dimmer/roller is single-key.
 _TWO_BUTTON_PAIRS: dict[str, tuple[str, ...]] = {
     "1A": ("1B",),
     "1B": ("1A",),
@@ -966,6 +966,22 @@ _FOUR_BUTTON_GROUPS: dict[str, tuple[str, ...]] = {
     "2A": ("2B", "2C", "2D"),
 }
 
+# Exact mode-text matchers. Pulled from ``mapping`` so rename drift on
+# either side stays in sync automatically.
+from .mapping import DIMMER_MODE_MAPPING, ROLLER_MODE_MAPPING  # noqa: E402
+
+_TWO_BUTTON_MODE_TEXTS: frozenset[str] = frozenset(
+    {
+        DIMMER_MODE_MAPPING[0],  # "M01 (Dim on/off (2 buttons))"
+        ROLLER_MODE_MAPPING[0],  # "M01 (Open - stop - close)"
+    }
+)
+_FOUR_BUTTON_MODE_TEXTS: frozenset[str] = frozenset(
+    {
+        DIMMER_MODE_MAPPING[1],  # "M02 (Dim on/off (4 buttons))"
+    }
+)
+
 
 def _peers_for_mirror(source_key: str, mode_text: str) -> tuple[str, ...]:
     """Return the keys that should mirror ``source_key`` for ``mode_text``.
@@ -975,9 +991,9 @@ def _peers_for_mirror(source_key: str, mode_text: str) -> tuple[str, ...]:
 
     if not isinstance(mode_text, str):
         return ()
-    if "2 buttons" in mode_text:
+    if mode_text in _TWO_BUTTON_MODE_TEXTS:
         return _TWO_BUTTON_PAIRS.get(source_key, ())
-    if "4 buttons" in mode_text:
+    if mode_text in _FOUR_BUTTON_MODE_TEXTS:
         return _FOUR_BUTTON_GROUPS.get(source_key, ())
     return ()
 

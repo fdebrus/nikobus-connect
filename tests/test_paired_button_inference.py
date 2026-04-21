@@ -103,8 +103,8 @@ def test_m01_mirrors_in_both_directions():
 
 
 def test_m01_per_output_filtering_does_not_mirror_other_modes():
-    """A 1C op-point with both an M01 (2-button) and a non-paired
-    record must mirror only the paired one to 1D."""
+    """A 1C op-point with both an M01 (2-button) dimmer record and a
+    single-key dimmer record (M06) must mirror only the paired one."""
 
     paired = {
         "channel": 4,
@@ -116,10 +116,10 @@ def test_m01_per_output_filtering_does_not_mirror_other_modes():
     }
     not_paired = {
         "channel": 2,
-        "mode": "M01 (Open - stop - close)",
-        "t1": "Turned off",
+        "mode": "M06 (Off (eventually with operating time))",
+        "t1": "1 s",
         "t2": None,
-        "payload": "00030050155F",  # phantom slice; not eligible
+        "payload": "XX",
         "button_address": "17C554",
     }
     store = {
@@ -152,9 +152,68 @@ def test_m01_per_output_filtering_does_not_mirror_other_modes():
     one_d = store["nikobus_button"]["17C554"]["operation_points"]["1D"]
     assert "linked_modules" in one_d
     assert one_d["linked_modules"][0]["outputs"] == [paired]
-    # The roller-mode phantom did NOT propagate to the peer.
+    # The single-key M06 record did NOT propagate to the peer.
     for output in one_d["linked_modules"][0]["outputs"]:
-        assert "Open - stop - close" not in output["mode"]
+        assert "M06" not in output["mode"]
+
+
+def test_roller_m01_mirrors_between_up_and_down_keys():
+    """Roller M01 ("Open - stop - close") is a 2-button mode: up-key
+    opens, down-key closes, either key stops during movement. The module
+    stores one record; the peer key needs inference."""
+
+    # Up key (1A) holds the record; 1B (down key) should receive it.
+    output = {
+        "channel": 2,
+        "mode": "M01 (Open - stop - close)",
+        "t1": "50 s",
+        "t2": None,
+        "payload": "FF12E02C7234",
+        "button_address": "0D1C80",
+    }
+    store = _store_with_master_record(
+        "0D1C80",
+        4,
+        "1A",
+        {"1A": "804E2C", "1B": "C04E2C", "1C": "004E2C", "1D": "404E2C"},
+        output,
+        module_address="9105",
+    )
+
+    merge_linked_modules(store, {})
+
+    op_points = store["nikobus_button"]["0D1C80"]["operation_points"]
+    assert op_points["1B"]["linked_modules"][0]["outputs"][0] == output
+    # 1C/1D are not in the 1A↔1B pair; they stay untouched.
+    assert "linked_modules" not in op_points["1C"]
+    assert "linked_modules" not in op_points["1D"]
+
+
+def test_roller_m02_open_only_is_single_key():
+    """Roller M02 ("Open") and M03 ("Close") are single-key modes —
+    they drive one direction, no pairing."""
+
+    for mode in ["M02 (Open)", "M03 (Close)", "M04 (Stop)"]:
+        output = {
+            "channel": 3,
+            "mode": mode,
+            "t1": None, "t2": None, "payload": "X",
+            "button_address": "999999",
+        }
+        store = _store_with_master_record(
+            "999999",
+            4,
+            "1A",
+            {"1A": "AAAA", "1B": "BBBB", "1C": "CCCC", "1D": "DDDD"},
+            output,
+            module_address="9105",
+        )
+        merge_linked_modules(store, {})
+        op_points = store["nikobus_button"]["999999"]["operation_points"]
+        for peer in ("1B", "1C", "1D"):
+            assert "linked_modules" not in op_points[peer], (
+                f"roller {mode!r} should NOT trigger mirroring to {peer}"
+            )
 
 
 def test_m01_mirror_dedupes_against_existing_peer_records():
@@ -312,12 +371,13 @@ def test_m02_on_8op_unit_uses_row_groups_independently():
 
 
 def test_non_paired_modes_never_mirror():
-    """Switch M01 (On/off), roller modes, M03+ dimmer — all single-key.
+    """Switch modes, rollers other than M01, dimmer M03+ — all single-key.
     Mirroring must not fire."""
 
     for mode in [
         "M01 (On / off)",  # switch
-        "M01 (Open - stop - close)",  # roller
+        "M02 (Open)",  # roller single-direction
+        "M03 (Close)",  # roller single-direction
         "M03 (Light scene on/off)",  # dimmer M03
         "M06 (Off (eventually with operating time))",  # dimmer M06
         "M14 (Light scene on)",  # switch M14
