@@ -423,6 +423,41 @@ def find_operation_point(
     return None
 
 
+def find_ir_operation_point(
+    button_data: dict, receiver_address: str, ir_code: str
+) -> tuple[str, str, dict] | None:
+    """Locate a virtual IR op-point on a given IR receiver.
+
+    Returns ``(receiver_address, storage_key, op_point_dict)`` where
+    ``storage_key`` is the ``"IR:{code}"`` entry inside the receiver's
+    ``operation_points``. Returns ``None`` if the receiver is missing
+    or carries no op-point for that IR code.
+    """
+
+    if not isinstance(button_data, dict):
+        return None
+    buttons = button_data.get("nikobus_button")
+    if not isinstance(buttons, dict):
+        return None
+
+    receiver = _normalize_address(receiver_address)
+    if not receiver or not ir_code:
+        return None
+
+    physical = buttons.get(receiver)
+    if not isinstance(physical, dict):
+        return None
+    op_points = physical.get("operation_points")
+    if not isinstance(op_points, dict):
+        return None
+
+    storage_key = _ir_op_point_key(ir_code)
+    op_point = op_points.get(storage_key)
+    if isinstance(op_point, dict):
+        return receiver, storage_key, op_point
+    return None
+
+
 def merge_discovered_buttons(
     button_data, discovered_devices, key_mapping, convert_nikobus_address
 ):
@@ -664,6 +699,54 @@ def _resolve_operation_point(
     return None
 
 
+IR_OP_POINT_PREFIX = "IR:"
+
+
+def _ir_op_point_key(ir_code: str) -> str:
+    """Storage key for an IR virtual op-point — always prefixed to avoid
+    any theoretical collision with wall keys like ``1A``/``2D``."""
+
+    return f"{IR_OP_POINT_PREFIX}{ir_code}"
+
+
+def _generated_ir_description(ir_code: str) -> str:
+    return f"IR code {ir_code} #I{ir_code}"
+
+
+def _ensure_ir_op_point(
+    physical_entry: dict, ir_code: str
+) -> dict:
+    """Return the IR virtual op-point, creating it if missing.
+
+    Sits in ``operation_points`` next to the wall keys, keyed ``IR:{code}``.
+    Unlike wall op-points it carries no ``bus_address`` (IR presses don't
+    have one) — just ``ir_code`` + ``description``.
+    """
+
+    op_points = physical_entry.setdefault("operation_points", {})
+    if not isinstance(op_points, dict):
+        op_points = {}
+        physical_entry["operation_points"] = op_points
+
+    storage_key = _ir_op_point_key(ir_code)
+    op_point = op_points.get(storage_key)
+    if not isinstance(op_point, dict):
+        op_point = {
+            "ir_code": ir_code,
+            "description": _generated_ir_description(ir_code),
+        }
+        op_points[storage_key] = op_point
+        return op_point
+
+    # Refresh ir_code field in case the entry was hand-written without one.
+    op_point["ir_code"] = ir_code
+    current_desc = op_point.get("description")
+    auto_desc = _generated_ir_description(ir_code)
+    if not current_desc or current_desc == auto_desc:
+        op_point["description"] = auto_desc
+    return op_point
+
+
 def merge_linked_modules(button_data, command_mapping):
     """Merge a discovery ``command_mapping`` into the caller-owned ``button_data``.
 
@@ -672,6 +755,10 @@ def merge_linked_modules(button_data, command_mapping):
     ``command_mapping`` keys are ``(push_button_address, key_raw, ir_code)``
     tuples; values are lists of output definitions produced by the
     discovery decoders.
+
+    When a mapping entry carries an ``ir_code``, the resulting link lands
+    on a virtual IR op-point (``operation_points["IR:{code}"]``) on the
+    physical IR receiver, not on one of its wall keys (``1A``-``1D``).
 
     Returns ``(updated_buttons, links_added, outputs_added)``.
     """
@@ -719,8 +806,17 @@ def merge_linked_modules(button_data, command_mapping):
                 unmatched_addresses.add(normalized)
             continue
 
-        _, _key_label, op_point = resolved
+        physical_addr, _key_label, op_point = resolved
         matched_addresses.add(_normalize_address(push_button_address))
+
+        # IR presses: redirect to a virtual IR op-point alongside the
+        # receiver's wall keys. The resolver already landed us on the
+        # right physical IR receiver; we just swap which op_point the
+        # link attaches to.
+        if ir_code_from_key:
+            physical_entry = buttons.get(physical_addr)
+            if isinstance(physical_entry, dict):
+                op_point = _ensure_ir_op_point(physical_entry, ir_code_from_key)
 
         linked_modules = op_point.setdefault("linked_modules", [])
         if not isinstance(linked_modules, list):

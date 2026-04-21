@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.4.2
+
+### Added
+
+- **IR codes now surface as virtual op-points on the IR receiver.**
+  Records that carry an ``ir_code`` (from module-config scans of IR
+  receivers) no longer collapse onto the receiver's wall keys
+  (``1A``-``1D``). Each distinct IR code gets its own sibling
+  op-point under ``operation_points["IR:{code}"]``, so they appear in
+  the UI next to the wall keys of the same receiver.
+
+  IR op-point shape mirrors wall op-points for consistency, with two
+  differences: the storage key is always prefixed ``IR:`` (so it can
+  never collide with wall keys like ``1A`` / ``2D``); and the entry
+  carries ``ir_code`` + auto-description ``IR code {code} #I{code}``
+  instead of a ``bus_address``. User-edited descriptions are
+  preserved across re-discovery.
+
+  New public helpers: ``find_ir_operation_point(button_data,
+  receiver_address, ir_code)`` and ``IR_OP_POINT_PREFIX`` for callers
+  that walk the store directly.
+
 ## 0.4.1
 
 ### Fixed
