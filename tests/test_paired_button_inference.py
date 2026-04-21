@@ -370,17 +370,56 @@ def test_m02_on_8op_unit_uses_row_groups_independently():
 # --- Negative coverage ---------------------------------------------------
 
 
+def test_switch_m01_mirrors_between_on_and_off_keys():
+    """Switch ``M01 (On / off)`` is functionally a 2-button pair: 1A
+    turns the output on, paired 1B turns it off. The module stores the
+    link record on one key only, same implicit-pairing pattern as
+    dimmer M01 and roller M01.
+
+    Regression: pre-0.4.1 the switch M01 mode was missing from the
+    pair-match set, so the paired key stayed empty after scan even
+    though it physically controls the output.
+    """
+
+    output = {
+        "channel": 7,
+        "mode": "M01 (On / off)",
+        "t1": None,
+        "t2": None,
+        "payload": "FF16F0583160",
+        "button_address": "180C56",
+    }
+    store = _store_with_master_record(
+        "180C56",
+        2,
+        "1A",
+        {"1A": "9A8C06", "1B": "DA8C06"},
+        output,
+        module_address="C9A5",
+    )
+
+    merge_linked_modules(store, {})
+
+    op_points = store["nikobus_button"]["180C56"]["operation_points"]
+    assert op_points["1B"]["linked_modules"][0]["outputs"][0] == output
+
+
+# --- Negative coverage ---------------------------------------------------
+
+
 def test_non_paired_modes_never_mirror():
-    """Switch modes, rollers other than M01, dimmer M03+ — all single-key.
-    Mirroring must not fire."""
+    """Modes that don't represent a paired function must not mirror."""
 
     for mode in [
-        "M01 (On / off)",  # switch
+        "M02 (On, with operating time)",  # switch — separate key
+        "M03 (Off, with operation time)",  # switch — separate key
+        "M04 (Pushbutton)",  # switch — momentary single key
         "M02 (Open)",  # roller single-direction
         "M03 (Close)",  # roller single-direction
-        "M03 (Light scene on/off)",  # dimmer M03
+        "M03 (Light scene on/off)",  # dimmer M03 (explicitly excluded)
         "M06 (Off (eventually with operating time))",  # dimmer M06
-        "M14 (Light scene on)",  # switch M14
+        "M14 (Light scene on)",  # switch M14 — scene recall, single key
+        "M15 (Light scene on / off)",  # switch M15 (explicitly excluded)
     ]:
         output = {
             "channel": 1,

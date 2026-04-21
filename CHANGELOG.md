@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.4.1
+
+### Fixed
+
+- **Switch ``M01 (On / off)`` is now recognised as a 2-button pair.**
+  Previously only dimmer M01/M02 and roller M01 were mirrored; switch
+  M01 was wrongly treated as a single-key toggle. On real hardware
+  it's an on/off pair — 1A turns the output on, 1B (or the A↔B
+  partner on the wall unit) turns it off, with only one link record
+  stored on the module. Paired keys now receive the mirror on
+  discovery, same logic as the other 2-button modes.
+
+  Regression test: `test_switch_m01_mirrors_between_on_and_off_keys`.
+
+- ``M15 (Light scene on / off)`` (switch) and ``M03 (Light scene
+  on/off)`` (dimmer) are intentionally kept out of the pair set until
+  a real-hardware example confirms their pairing convention —
+  explicit negative test coverage added.
+
 ## 0.4.0
 
 ### Breaking
