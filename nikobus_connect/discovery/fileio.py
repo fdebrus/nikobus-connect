@@ -924,4 +924,174 @@ def merge_linked_modules(button_data, command_mapping):
             unmatched_sample,
         )
 
+    mirrored = _mirror_paired_button_links(buttons)
+    if mirrored:
+        outputs_added += mirrored
+        _LOGGER.info(
+            "Paired-button inference added %d mirrored output(s) for "
+            "M01/M02 dimmer modes",
+            mirrored,
+        )
+
     return updated_buttons, links_added, outputs_added
+
+
+# Pair / group keys for paired-button modes.
+#
+# Nikobus dimmer M01 ("Dim on/off (2 buttons)") uses two physical keys per
+# output (one ON, one OFF) but stores only one link record on the module.
+# M02 ("Dim on/off (4 buttons)") uses four keys per output (on/off/+/-)
+# and stores the record on the master key (1A for row 1, 2A for row 2 on
+# 8-op units). The other keys act on the same output but have no memory
+# entry — they need to be inferred post-scan.
+#
+# Mirroring fires only on these specific mode strings; every other mode
+# is single-key.
+_TWO_BUTTON_PAIRS: dict[str, tuple[str, ...]] = {
+    "1A": ("1B",),
+    "1B": ("1A",),
+    "1C": ("1D",),
+    "1D": ("1C",),
+    "2A": ("2B",),
+    "2B": ("2A",),
+    "2C": ("2D",),
+    "2D": ("2C",),
+}
+
+# M02 master keys mirror to the rest of their row. Only fired when the
+# source key is the master (1A or 2A) — a record on a non-master key is
+# left alone, since we'd be guessing the role assignment.
+_FOUR_BUTTON_GROUPS: dict[str, tuple[str, ...]] = {
+    "1A": ("1B", "1C", "1D"),
+    "2A": ("2B", "2C", "2D"),
+}
+
+
+def _peers_for_mirror(source_key: str, mode_text: str) -> tuple[str, ...]:
+    """Return the keys that should mirror ``source_key`` for ``mode_text``.
+
+    Empty tuple = no mirroring (single-key mode, or non-master M02 source).
+    """
+
+    if not isinstance(mode_text, str):
+        return ()
+    if "2 buttons" in mode_text:
+        return _TWO_BUTTON_PAIRS.get(source_key, ())
+    if "4 buttons" in mode_text:
+        return _FOUR_BUTTON_GROUPS.get(source_key, ())
+    return ()
+
+
+def _output_dedupe_key(output: dict) -> tuple:
+    """Same shape used by ``merge_linked_modules`` so mirrored outputs
+    dedupe identically against existing entries on the peer key."""
+
+    return (
+        output.get("channel"),
+        output.get("mode"),
+        output.get("t1"),
+        output.get("t2"),
+        output.get("ir_code"),
+        output.get("ir_button_address"),
+    )
+
+
+def _mirror_paired_button_links(buttons: dict) -> int:
+    """Synthesize linked_modules entries on paired keys for M01/M02 modes.
+
+    Walks every operation_point's outputs. When an output's mode text
+    indicates a 2-button or 4-button dimmer pairing, copy that output to
+    the paired peer key(s) on the same physical button. Dedupes against
+    whatever's already there.
+
+    Returns the number of mirrored output entries added.
+    """
+
+    if not isinstance(buttons, dict):
+        return 0
+
+    added = 0
+
+    for physical_addr, entry in buttons.items():
+        if not isinstance(entry, dict):
+            continue
+        op_points = entry.get("operation_points")
+        if not isinstance(op_points, dict):
+            continue
+
+        # Snapshot keys/items first; we mutate op_point dicts in place but
+        # the mapping itself doesn't change shape during the pass.
+        for source_key, source_op in list(op_points.items()):
+            if not isinstance(source_op, dict):
+                continue
+            source_modules = source_op.get("linked_modules")
+            if not isinstance(source_modules, list):
+                continue
+
+            for source_block in source_modules:
+                if not isinstance(source_block, dict):
+                    continue
+                module_address = source_block.get("module_address")
+                if not module_address:
+                    continue
+                source_outputs = source_block.get("outputs")
+                if not isinstance(source_outputs, list):
+                    continue
+
+                for source_output in source_outputs:
+                    if not isinstance(source_output, dict):
+                        continue
+                    peers = _peers_for_mirror(
+                        source_key, source_output.get("mode", "")
+                    )
+                    if not peers:
+                        continue
+
+                    for peer_key in peers:
+                        peer_op = op_points.get(peer_key)
+                        if not isinstance(peer_op, dict):
+                            continue  # peer key not present on this device
+
+                        peer_modules = peer_op.setdefault(
+                            "linked_modules", []
+                        )
+                        if not isinstance(peer_modules, list):
+                            peer_modules = []
+                            peer_op["linked_modules"] = peer_modules
+
+                        # Find or create the matching module block on
+                        # the peer.
+                        peer_block = next(
+                            (
+                                blk
+                                for blk in peer_modules
+                                if isinstance(blk, dict)
+                                and blk.get("module_address") == module_address
+                            ),
+                            None,
+                        )
+                        if peer_block is None:
+                            peer_block = {
+                                "module_address": module_address,
+                                "outputs": [],
+                            }
+                            peer_modules.append(peer_block)
+
+                        peer_outputs = peer_block.setdefault("outputs", [])
+                        if not isinstance(peer_outputs, list):
+                            peer_outputs = []
+                            peer_block["outputs"] = peer_outputs
+
+                        target = _output_dedupe_key(source_output)
+                        existing = {
+                            _output_dedupe_key(o)
+                            for o in peer_outputs
+                            if isinstance(o, dict)
+                        }
+                        if target in existing:
+                            continue
+
+                        peer_outputs.append(dict(source_output))
+                        added += 1
+
+    return added
