@@ -35,7 +35,11 @@ from ..const import (
     MODULE_SCAN_RETRY_LIMIT,
     MODULE_SCAN_TRAILER_PREFIX,
 )
-from .fileio import merge_discovered_buttons, merge_linked_modules, update_module_data
+from .fileio import (
+    merge_discovered_buttons,
+    merge_discovered_modules,
+    merge_linked_modules,
+)
 from ..protocol import make_pc_link_inventory_command
 
 _LOGGER = logging.getLogger(__name__)
@@ -289,6 +293,8 @@ class NikobusDiscovery:
         create_task,
         button_data=None,
         on_button_save=None,
+        module_data=None,
+        on_module_save=None,
         on_progress=None,
     ):
         self.discovered_devices = {}
@@ -297,6 +303,12 @@ class NikobusDiscovery:
         self._create_task = create_task
         self._button_data = button_data
         self._on_button_save = on_button_save
+        self._module_data = module_data
+        self._on_module_save = on_module_save
+        if module_data is not None:
+            existing_modules = module_data.get("nikobus_module")
+            if not isinstance(existing_modules, dict):
+                module_data["nikobus_module"] = {}
         self._on_progress = on_progress
         # Running counters reflected in every ``DiscoveryProgress``.
         self._progress_module_index = 0
@@ -307,7 +319,6 @@ class NikobusDiscovery:
             existing = button_data.get("nikobus_button")
             if not isinstance(existing, dict):
                 button_data["nikobus_button"] = {}
-        self._module_config_path = os.path.join(config_dir, "nikobus_module_config.json")
         self._module_timeout_seconds = 5.0
         self._inventory_timeout_seconds = 10.0
         self._decoders = [
@@ -783,8 +794,14 @@ class NikobusDiscovery:
         # Stage 2: inventory complete -> persist results
         _LOGGER.debug("Starting updates for module and button data.")
         try:
-            await update_module_data(self._module_config_path, self.discovered_devices)
-            _LOGGER.debug("Finished update_module_data.")
+            if self._module_data is not None:
+                merge_discovered_modules(
+                    self._module_data, self.discovered_devices
+                )
+                _LOGGER.debug("Finished merge_discovered_modules.")
+                if self._on_module_save is not None:
+                    await self._on_module_save()
+                    _LOGGER.debug("Finished on_module_save callback.")
             if self._button_data is not None:
                 merge_discovered_buttons(
                     self._button_data,

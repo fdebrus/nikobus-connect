@@ -195,35 +195,46 @@ def _key_raw_to_label(channels, key_raw):
     return None
 
 
-async def update_module_data(file_path, discovered_devices):
-    """Create or merge the integration module config from discovery results.
+def merge_discovered_modules(module_data, discovered_devices):
+    """Merge discovery results into the caller-owned module store in place.
+
+    Option-A shape (keyed by physical address, parallel to the button
+    store)::
+
+        {"nikobus_module": {
+            "<address>": {
+                "module_type": "switch_module" | "dimmer_module" | ...,
+                "description": "<user-editable name>",
+                "model": "<hw model>",
+                "channels": [
+                    {"description": "...", "entity_type": "light",
+                     "led_on": ..., "led_off": ...,
+                     "operation_time_up": ..., "operation_time_down": ...},
+                    ...
+                ],
+                "discovered_info": {"name", "device_type", "channels_count"},
+            }
+        }}
+
+    User-owned fields (``description`` at both module and channel level,
+    ``entity_type``, ``led_on``/``led_off``, ``operation_time_*``) are
+    preserved verbatim — discovery never overwrites them. Discovery
+    owns ``model``, ``address``, ``discovered_info``, the
+    ``module_type`` bucket, and defaults for channels newly appended
+    beyond the previous ``channels_count``.
 
     Parameters
     ----------
-    file_path : str
-        Absolute path to the module config JSON file.
+    module_data : dict
+        The caller-owned live store (mutated in place).
     discovered_devices : dict
-        Mapping of address -> device info dicts from discovery.
+        ``address -> device`` mapping from discovery.
     """
 
-    def _ensure_inventory(data: dict | None) -> dict[str, list]:
-        data = data or {}
-
-        def _as_list(value):
-            if isinstance(value, list):
-                return [item for item in value if isinstance(item, dict)]
-            if isinstance(value, dict):
-                return [item for item in value.values() if isinstance(item, dict)]
-            return []
-
-        inventory: dict[str, list] = {}
-        for module_type, modules in data.items():
-            inventory[module_type] = _as_list(modules)
-
-        for module_type in MODULE_TYPE_ORDER:
-            inventory.setdefault(module_type, [])
-
-        return inventory
+    modules = module_data.setdefault("nikobus_module", {})
+    if not isinstance(modules, dict):
+        modules = {}
+        module_data["nikobus_module"] = modules
 
     def _default_channel(module_type: str, index: int) -> dict:
         channel = {"description": f"not_in_use output_{index}"}
@@ -231,151 +242,63 @@ async def update_module_data(file_path, discovered_devices):
             channel["operation_time_up"] = "30"
         return channel
 
-    def _sanitize_channel(module_type: str, channel: dict, index: int) -> dict:
-        # Preserve any existing user keys (entity_type, led_on/off, etc.)
-        sanitized: dict = dict(channel) if isinstance(channel, dict) else {}
+    def _pad_channels(
+        module_type: str, existing: list, channels_count: int
+    ) -> list:
+        """Return a channel list of length ``channels_count``.
 
-        # Normalize / guarantee description
-        sanitized["description"] = (sanitized.get("description") or "").strip()
+        Keeps every existing entry verbatim (user fields preserved);
+        appends defaults for any index beyond the current length. Never
+        shrinks — if discovery reports fewer channels than the store
+        has, extras stay (safer than dropping user data).
+        """
 
-        # Normalize / guarantee operation_time_up only for roller_module
-        if module_type == "roller_module":
-            op = sanitized.get("operation_time_up", "30")
-            sanitized["operation_time_up"] = str(op) if op not in (None, "") else "60"
-        else:
-            # If other module types accidentally carry operation_time_up, keep it or drop it:
-            # safest is to keep it as-is (do nothing), so we don't destroy user data.
-            pass
-
-        return sanitized
-
-    def _build_channels(module_type: str, channels: list, channels_count: int) -> list:
         if channels_count <= 0:
-            return []
-
-        sanitized_channels: list[dict] = []
-        channels_list = channels if isinstance(channels, list) else []
-
-        for idx in range(channels_count):
-            if idx < len(channels_list):
-                sanitized_channel = _sanitize_channel(
-                    module_type, channels_list[idx], idx + 1
-                )
+            return list(existing) if isinstance(existing, list) else []
+        out: list[dict] = []
+        source = existing if isinstance(existing, list) else []
+        for idx in range(max(channels_count, len(source))):
+            if idx < len(source) and isinstance(source[idx], dict):
+                out.append(source[idx])
             else:
-                sanitized_channel = _default_channel(module_type, idx + 1)
-
-            sanitized_channels.append(sanitized_channel)
-
-        return sanitized_channels
-
-    def _sanitize_discovered_info(info: dict | None) -> dict:
-        info = info or {}
-        sanitized: dict = {}
-        for key in ("name", "device_type", "channels_count"):
-            if key not in info:
-                continue
-            value = info.get(key)
-            if value in (None, ""):
-                continue
-            if key == "channels_count":
-                try:
-                    value = int(value)
-                except (TypeError, ValueError):
-                    continue
-                if value <= 0:
-                    continue
-            sanitized[key] = value
-        return sanitized
-
-    def _canonical_module(module: dict, module_type: str) -> dict:
-        address = _normalize_address(module.get("address"))
-        description = module.get("description", "") or ""
-        model = module.get("model", "") or ""
-        discovered_info = _sanitize_discovered_info(module.get("discovered_info"))
-
-        channels_from_discovery = discovered_info.get("channels_count")
-        fallback_channel_count = module.get(
-            "channels_count", len(module.get("channels", []))
-        )
-        try:
-            fallback_channel_count = int(fallback_channel_count)
-        except (TypeError, ValueError):
-            fallback_channel_count = None
-
-        if channels_from_discovery is None:
-            channels_from_discovery = (
-                fallback_channel_count if fallback_channel_count is not None else 0
-            )
-            if channels_from_discovery > 0:
-                discovered_info["channels_count"] = channels_from_discovery
-
-        channels_list = _build_channels(
-            module_type, module.get("channels", []), channels_from_discovery or 0
-        )
-
-        canonical = {
-            "description": description,
-            "model": model,
-            "address": address,
-        }
-
-        if channels_list:
-            canonical["channels"] = channels_list
-
-        # Append discovered_info at the bottom
-        canonical["discovered_info"] = discovered_info
-
-        return canonical
-
-    def _inventory_to_map(inventory: dict[str, list]) -> dict[str, dict]:
-        mapped: dict[str, dict] = {}
-        for module_type, modules in inventory.items():
-            module_lookup: dict[str, dict] = {}
-            for module in modules:
-                address = _normalize_address(module.get("address"))
-                if not address:
-                    continue
-                module_lookup[address] = _canonical_module(module, module_type)
-            mapped[module_type] = module_lookup
-        return mapped
-
-    def _generate_description(module_type: str, module_lookup: dict[str, dict]) -> str:
-        prefix = DESCRIPTION_PREFIX.get(module_type, f"{module_type}_")
-        existing = {module.get("description") for module in module_lookup.values()}
-        counter = 1
-        candidate = f"{prefix}{counter}"
-        while candidate in existing:
-            counter += 1
-            candidate = f"{prefix}{counter}"
-        return candidate
+                out.append(_default_channel(module_type, idx + 1))
+        return out
 
     def _refresh_discovered_info(channels_count: int, device: dict) -> dict:
-        discovery_info = {
+        info = {
             "name": device.get("discovered_name") or device.get("description", ""),
             "device_type": device.get("device_type"),
         }
         if channels_count > 0:
-            discovery_info["channels_count"] = channels_count
-        return discovery_info
+            info["channels_count"] = channels_count
+        return info
 
-    filtered_devices = [
-        device
-        for device in discovered_devices.values()
-        if device.get("category") == "Module"
-    ]
+    def _generate_description(module_type: str) -> str:
+        prefix = DESCRIPTION_PREFIX.get(module_type, f"{module_type}_")
+        existing = {
+            m.get("description")
+            for m in modules.values()
+            if isinstance(m, dict) and m.get("module_type") == module_type
+        }
+        counter = 1
+        while f"{prefix}{counter}" in existing:
+            counter += 1
+        return f"{prefix}{counter}"
 
-    existing_data = await read_json_file(file_path)
+    updated = 0
+    added = 0
 
-    inventory = _ensure_inventory(existing_data)
-    inventory_map = _inventory_to_map(inventory)
+    for device in discovered_devices.values():
+        if not isinstance(device, dict):
+            continue
+        if device.get("category") != "Module":
+            continue
 
-    for device in filtered_devices:
-        module_type = device.get("module_type", "unknown_module")
         address = _normalize_address(device.get("address"))
         if not address:
             continue
 
-        module_lookup = inventory_map.setdefault(module_type, {})
+        module_type = device.get("module_type", "other_module")
 
         channels_count = device.get("channels_count")
         if channels_count is None:
@@ -385,58 +308,67 @@ async def update_module_data(file_path, discovered_devices):
         except (TypeError, ValueError):
             channels_count = 0
 
-        discovered_info = _refresh_discovered_info(channels_count, device)
-
-        existing_module = module_lookup.get(address)
-        if existing_module:
-            description = existing_module.get("description") or _generate_description(
-                module_type, module_lookup
-            )
-            model_value = existing_module.get("model")
-            discovered_model = device.get("model", "")
-            if not model_value or (
-                discovered_model and discovered_model != model_value
+        existing = modules.get(address)
+        if isinstance(existing, dict):
+            # Refresh discovery-owned fields only; keep everything else.
+            existing["module_type"] = module_type
+            discovered_model = device.get("model", "") or ""
+            if discovered_model and (
+                not existing.get("model")
+                or existing.get("model") != discovered_model
             ):
-                model_value = discovered_model
-            channels = existing_module.get("channels", [])
-        else:
-            description = _generate_description(module_type, module_lookup)
-            model_value = device.get("model", "")
-            channels = []
-
-        updated_module = {
-            "description": description,
-            "model": model_value,
-            "address": address,
-        }
-
-        if channels_count > 0:
-            updated_module["channels"] = _build_channels(
-                module_type, channels, channels_count
+                existing["model"] = discovered_model
+            existing["discovered_info"] = _refresh_discovered_info(
+                channels_count, device
             )
+            if channels_count > 0:
+                existing["channels"] = _pad_channels(
+                    module_type, existing.get("channels", []), channels_count
+                )
+            updated += 1
+        else:
+            # New module — insert with generated description + defaults.
+            entry: dict = {
+                "module_type": module_type,
+                "description": _generate_description(module_type),
+                "model": device.get("model", "") or "",
+                "discovered_info": _refresh_discovered_info(
+                    channels_count, device
+                ),
+            }
+            if channels_count > 0:
+                entry["channels"] = _pad_channels(
+                    module_type, [], channels_count
+                )
+            modules[address] = entry
+            added += 1
 
-        # Append discovered_info at the bottom
-        updated_module["discovered_info"] = discovered_info
+    if added or updated:
+        _LOGGER.info(
+            "Module store merge summary: new=%d refreshed=%d", added, updated
+        )
+    return added, updated
 
-        module_lookup[address] = updated_module
 
-    # Rebuild inventory lists with canonical ordering and sanitization
-    ordered_inventory: dict[str, list] = {}
-    for module_type in MODULE_TYPE_ORDER:
-        module_entries = inventory_map.get(module_type, {})
-        ordered_inventory[module_type] = [
-            _canonical_module(module, module_type)
-            for module in module_entries.values()
-        ]
+def find_module(module_data: dict, address: str) -> tuple[str, dict] | None:
+    """Locate a module entry by address in the Option-A module store.
 
-    for module_type, modules in inventory_map.items():
-        if module_type in MODULE_TYPE_ORDER:
-            continue
-        ordered_inventory[module_type] = [
-            _canonical_module(module, module_type) for module in modules.values()
-        ]
+    Returns ``(normalized_address, entry_dict)`` or ``None``.
+    """
 
-    await write_json_file(file_path, ordered_inventory, inline_channels=True)
+    if not isinstance(module_data, dict):
+        return None
+    modules = module_data.get("nikobus_module")
+    if not isinstance(modules, dict):
+        return None
+    target = _normalize_address(address)
+    if not target:
+        return None
+    entry = modules.get(target)
+    if isinstance(entry, dict):
+        return target, entry
+    return None
+
 
 
 

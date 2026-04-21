@@ -1,6 +1,6 @@
 """Nikobus Discovery - PyPI library for Nikobus device discovery."""
 
-__version__ = "0.3.5"
+__version__ = "0.4.0"
 
 from .discovery import NikobusDiscovery
 from .base import (
@@ -14,7 +14,7 @@ from .base import (
     PHASE_INVENTORY,
     PHASE_REGISTER_SCAN,
 )
-from .fileio import find_operation_point
+from .fileio import find_module, find_operation_point
 from ..const import DEVICE_ADDRESS_INVENTORY, DEVICE_INVENTORY_ANSWER
 
 __all__ = [
@@ -30,5 +30,6 @@ __all__ = [
     "PHASE_REGISTER_SCAN",
     "DEVICE_ADDRESS_INVENTORY",
     "DEVICE_INVENTORY_ANSWER",
+    "find_module",
     "find_operation_point",
 ]
