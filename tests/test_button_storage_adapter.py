@@ -216,12 +216,14 @@ def test_merge_linked_modules_routes_by_bus_address_to_op_point():
     }
 
     # Press emitted on bus address 863D06 (= physical 182F18 key 1A).
+    # Use a single-key mode (M04 Pushbutton) so this test stays focused on
+    # command-mapping routing — pair inference has its own test file.
     mapping = {
         ("863D06", 1, None): [
             {
                 "module_address": "C9A5",
                 "channel": 4,
-                "mode": "M01 (On / off)",
+                "mode": "M04 (Pushbutton)",
                 "t1": None,
                 "t2": None,
                 "payload": "FF13F060BC60",

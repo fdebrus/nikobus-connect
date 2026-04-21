@@ -900,12 +900,17 @@ _FOUR_BUTTON_GROUPS: dict[str, tuple[str, ...]] = {
 
 # Exact mode-text matchers. Pulled from ``mapping`` so rename drift on
 # either side stays in sync automatically.
-from .mapping import DIMMER_MODE_MAPPING, ROLLER_MODE_MAPPING  # noqa: E402
+from .mapping import (  # noqa: E402
+    DIMMER_MODE_MAPPING,
+    ROLLER_MODE_MAPPING,
+    SWITCH_MODE_MAPPING,
+)
 
 _TWO_BUTTON_MODE_TEXTS: frozenset[str] = frozenset(
     {
         DIMMER_MODE_MAPPING[0],  # "M01 (Dim on/off (2 buttons))"
         ROLLER_MODE_MAPPING[0],  # "M01 (Open - stop - close)"
+        SWITCH_MODE_MAPPING[0],  # "M01 (On / off)"
     }
 )
 _FOUR_BUTTON_MODE_TEXTS: frozenset[str] = frozenset(
