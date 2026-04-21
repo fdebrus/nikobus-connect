@@ -1,5 +1,52 @@
 # Changelog
 
+## 0.3.5
+
+### Added
+
+- **`on_progress` callback for discovery tracking.** New optional
+  kwarg on `NikobusDiscovery.__init__` that receives a
+  `DiscoveryProgress` snapshot at phase transitions and on every
+  register read:
+
+  ```python
+  def on_progress(progress: DiscoveryProgress) -> None | Awaitable[None]:
+      ...
+
+  NikobusDiscovery(..., on_progress=on_progress)
+  ```
+
+  Phases (exported as module-level constants
+  `PHASE_INVENTORY` / `PHASE_IDENTITY` / `PHASE_REGISTER_SCAN` /
+  `PHASE_FINALIZING`):
+
+  1. `inventory` — PC-Link `#A` enumeration started.
+  2. `identity` — per-address device_type queries queued.
+  3. `register_scan` — emitted once at the start of each module's
+     scan, then again after each register read with `register`
+     populated. `module_index` / `module_total` describe position
+     within the scan queue.
+  4. `finalizing` — discovery finished.
+
+  `DiscoveryProgress` fields: `phase`, `module_address`,
+  `module_index`, `module_total`, `register`, `register_total`,
+  `decoded_records`. `register_total` drops to the actual sent count
+  when a `$18` trailer short-circuits the loop, so a progress bar
+  driven by `register / register_total` lands at 100% cleanly at the
+  break.
+
+  Both sync and async callbacks are accepted. Exceptions raised by
+  the callback are logged at WARNING and swallowed — a misbehaving
+  tracker cannot abort a scan.
+
+  Backwards-compatible: existing callers that don't supply
+  `on_progress` run unchanged.
+
+- 6 regression tests covering the phase sequence across a full scan,
+  trailer-driven `register_total` drop, exception resilience, sync
+  vs async callback support, the no-callback path, and the
+  `DiscoveryProgress` defaults.
+
 ## 0.3.4
 
 ### Added
