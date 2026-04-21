@@ -1,10 +1,20 @@
 import asyncio
+import inspect
 import json
 import logging
 import os
 from datetime import datetime, timezone
 
-from .base import DecodedCommand, InventoryQueryType, InventoryResult
+from .base import (
+    DecodedCommand,
+    DiscoveryProgress,
+    InventoryQueryType,
+    InventoryResult,
+    PHASE_FINALIZING,
+    PHASE_IDENTITY,
+    PHASE_INVENTORY,
+    PHASE_REGISTER_SCAN,
+)
 from .dimmer_decoder import DimmerDecoder, EXPECTED_CHUNK_LEN
 from .shutter_decoder import ShutterDecoder
 from .switch_decoder import SwitchDecoder
@@ -279,6 +289,7 @@ class NikobusDiscovery:
         create_task,
         button_data=None,
         on_button_save=None,
+        on_progress=None,
     ):
         self.discovered_devices = {}
         self._coordinator = coordinator
@@ -286,6 +297,12 @@ class NikobusDiscovery:
         self._create_task = create_task
         self._button_data = button_data
         self._on_button_save = on_button_save
+        self._on_progress = on_progress
+        # Running counters reflected in every ``DiscoveryProgress``.
+        self._progress_module_index = 0
+        self._progress_module_total = 0
+        self._progress_register_total = 0
+        self._progress_decoded_records = 0
         if button_data is not None:
             existing = button_data.get("nikobus_button")
             if not isinstance(existing, dict):
@@ -453,6 +470,12 @@ class NikobusDiscovery:
             self._scan_active = True
             self._scan_trailer_seen = False
             self._scan_event.clear()
+            # Progress: reset the register counter to the full scan range;
+            # it drops to ``registers_sent`` when a trailer short-circuits.
+            try:
+                self._progress_register_total = len(command_range)
+            except TypeError:
+                self._progress_register_total = 0
             try:
                 registers_sent = 0
                 for reg in command_range:
@@ -464,6 +487,7 @@ class NikobusDiscovery:
                             reg,
                             registers_sent,
                         )
+                        self._progress_register_total = registers_sent
                         break
                     partial_hex = f"{base_command}{reg:02X}04"
                     pc_link_command = make_pc_link_inventory_command(partial_hex)
@@ -475,6 +499,11 @@ class NikobusDiscovery:
                         connection,
                     )
                     registers_sent += 1
+                    await self._emit_progress(
+                        PHASE_REGISTER_SCAN,
+                        module_address=normalized_address,
+                        register=reg,
+                    )
                     await asyncio.sleep(COMMAND_EXECUTION_DELAY)
                 else:
                     _LOGGER.info(
@@ -669,6 +698,41 @@ class NikobusDiscovery:
             _LOGGER.error("CRITICAL ERROR in _finalize_inventory_phase: %s", err, exc_info=True)
             self.reset_state()
 
+    async def _emit_progress(
+        self,
+        phase: str,
+        *,
+        module_address: str | None = None,
+        register: int | None = None,
+    ) -> None:
+        """Invoke the caller-supplied ``on_progress`` callback (if any).
+
+        The callback is optional, runs asynchronously, and must not be
+        allowed to abort the scan if it raises — log and swallow.
+        """
+
+        callback = self._on_progress
+        if callback is None:
+            return
+        progress = DiscoveryProgress(
+            phase=phase,
+            module_address=module_address,
+            module_index=self._progress_module_index,
+            module_total=self._progress_module_total,
+            register=register,
+            register_total=self._progress_register_total,
+            decoded_records=self._progress_decoded_records,
+        )
+        try:
+            result = callback(progress)
+            if inspect.isawaitable(result):
+                await result
+        except Exception:
+            _LOGGER.warning(
+                "Discovery on_progress callback raised; continuing scan",
+                exc_info=True,
+            )
+
     def _reset_module_context(self) -> None:
         self._payload_buffer = ""
         self._module_address = None
@@ -755,6 +819,7 @@ class NikobusDiscovery:
         return
 
     async def _run_inventory_identity_queries(self, addresses: set[str]) -> None:
+        await self._emit_progress(PHASE_IDENTITY)
         for address in sorted(addresses):
             bus_order_address = address[2:4] + address[:2]
 
@@ -802,11 +867,16 @@ class NikobusDiscovery:
         self._coordinator.discovery_running = True
         self._coordinator.discovery_module = True
         self._coordinator.discovery_module_address = normalized_address
+        self._progress_module_index += 1
+        await self._emit_progress(
+            PHASE_REGISTER_SCAN, module_address=normalized_address
+        )
         await self.query_module_inventory(normalized_address, from_queue=True)
 
     async def _complete_discovery_run(self, resolved_address: str | None) -> None:
         self._cancel_inventory_timeout()
         _LOGGER.info("Discovery finished")
+        await self._emit_progress(PHASE_FINALIZING)
         self.reset_state()
         await _notify_discovery_finished(self)
 
@@ -818,10 +888,15 @@ class NikobusDiscovery:
         self._coordinator.discovery_module_address = None
         self._coordinator.discovery_running = True
         self._coordinator.inventory_query_type = InventoryQueryType.PC_LINK
+        self._progress_module_index = 0
+        self._progress_module_total = 0
+        self._progress_register_total = 0
+        self._progress_decoded_records = 0
         _LOGGER.info("PC Link inventory enumeration started")
         _LOGGER.debug("Queueing PC Link inventory command #A")
         await self._coordinator.nikobus_command.queue_command("#A")
         self._schedule_inventory_timeout()
+        await self._emit_progress(PHASE_INVENTORY)
 
     def handle_device_address_inventory(self, message: str) -> None:
         # Signal the sequential scan loop first. A $18 frame that hits
@@ -935,6 +1010,8 @@ class NikobusDiscovery:
             _LOGGER.info("Starting sequential discovery queue for ALL output modules: %s", all_addresses)
             self.discovery_stage = "register_scan"
             self._register_scan_queue = all_addresses
+            self._progress_module_total = len(all_addresses)
+            self._progress_module_index = 0
             await self._start_next_register_scan()
             return
 
@@ -953,6 +1030,12 @@ class NikobusDiscovery:
             _LOGGER.info("Discovery started | module=%s", normalized_address)
             if not from_queue:
                 self._coordinator.discovery_running = True
+                # Single-module entry — seed progress for a queue of one.
+                self._progress_module_total = 1
+                self._progress_module_index = 1
+                await self._emit_progress(
+                    PHASE_REGISTER_SCAN, module_address=normalized_address
+                )
             self._coordinator.discovery_module = True
             self._coordinator.discovery_module_address = normalized_address
 
@@ -1248,6 +1331,14 @@ class NikobusDiscovery:
     async def _handle_decoded_commands(
         self, module_address: str | None, decoded_commands: list[DecodedCommand]
     ):
+        # Count successfully-decoded records for the progress tracker.
+        # Each DecodedCommand that makes it this far represents one real
+        # link; the button-store merge further down may deduplicate, but
+        # the on-wire reality is "we saw this many records."
+        if isinstance(decoded_commands, list):
+            self._progress_decoded_records += sum(
+                1 for c in decoded_commands if isinstance(c, DecodedCommand)
+            )
         # Build IR receiver lookup from the current in-memory button store
         # so that split_ir_button_address and decode_ir_channel work for
         # any IR receiver, not just hardcoded prefixes.
