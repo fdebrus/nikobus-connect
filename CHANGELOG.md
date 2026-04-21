@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.3.4
+
+### Added
+
+- **Paired-button inference extended to roller M01** ("Open - stop -
+  close"). That mode is functionally a 2-button pair: up key opens,
+  down key closes, either key stops during movement. The module stores
+  the link record on one key only — same implicit-pairing pattern as
+  dimmer M01 but the mode name doesn't say "2 buttons" explicitly.
+
+  The paired-mode matcher switched from substring testing
+  (`"2 buttons" in mode_text`) to exact match against a small set of
+  mode strings pulled from the `mapping` module. Roller M01 joins
+  dimmer M01 in the 2-button pair set; dimmer M02 stays in the
+  4-button group. Rename drift between `mapping.py` and the matcher
+  stays in sync automatically since `mapping` is now the source of
+  truth.
+
+  Switch modes remain single-key throughout. Roller M02 ("Open"),
+  M03 ("Close"), M04 ("Stop") are single-direction → single-key —
+  explicitly covered by negative tests.
+
+- 2 new regression tests:
+  - `test_roller_m01_mirrors_between_up_and_down_keys`
+  - `test_roller_m02_open_only_is_single_key`
+
 ## 0.3.3
 
 ### Added
