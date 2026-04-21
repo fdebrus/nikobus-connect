@@ -4,19 +4,24 @@
 
 ### Added
 
-- **Paired-button inference for dimmer M01 / M02.** Nikobus dimmer mode
-  M01 ("Dim on/off (2 buttons)") uses two physical keys per output —
-  one ON, one OFF — but only stores a link record on one key. M02
-  ("Dim on/off (4 buttons)") uses four keys with the record on the
-  master (1A for row 1, 2A for row 2 on 8-op units). Both leave the
-  peer keys with no `linked_modules` after the raw scan, even though
-  pressing them physically controls the same output.
+- **Paired-button inference for dimmer M01 / M02 and roller M01.**
+  These modes use more than one physical key per output but the module
+  only stores a link record on one key; the peer keys act on the same
+  output silently. Without inference, peer keys show no
+  `linked_modules` in the scan output.
+
+  - Dimmer M01 ("Dim on/off (2 buttons)") — 2 keys (on / off)
+  - Dimmer M02 ("Dim on/off (4 buttons)") — 4 keys (on / off / + / -),
+    master on 1A (or 2A on 8-op units)
+  - Roller M01 ("Open - stop - close") — 2 keys (up opens, down closes;
+    either stops during movement)
 
   `merge_linked_modules` now finishes with a post-pass that walks every
-  `operation_points` entry, identifies outputs whose mode contains
-  `"2 buttons"` or `"4 buttons"`, and copies them verbatim to the
-  paired peer key(s) on the same physical button. Dedupes against
-  whatever's already there; idempotent across re-runs.
+  `operation_points` entry, identifies outputs whose mode text matches
+  one of the paired-mode strings (pulled from the `mapping` module so
+  rename drift stays in sync), and copies them verbatim to the paired
+  peer key(s) on the same physical button. Dedupes against whatever's
+  already there; idempotent across re-runs.
 
   Pair table:
   - 2-button: 1A↔1B, 1C↔1D, 2A↔2B, 2C↔2D
@@ -26,13 +31,15 @@
 
   All other modes stay single-key. The mirrored record keeps the
   source's mode label verbatim — the module doesn't distinguish
-  ON-side from OFF-side, so synthetic role labels would be
-  unverifiable.
+  on-side from off-side in its memory, so synthetic role labels
+  would be unverifiable.
 
-- 7 regression tests in `tests/test_paired_button_inference.py`
-  covering both directions of M01 mirroring, per-output filtering,
+- 9 regression tests in `tests/test_paired_button_inference.py`
+  covering dimmer M01 both directions, per-output filtering,
   idempotency, M02 master-only sourcing, M02 row independence on 8-op
-  units, and negative coverage for non-paired modes.
+  units, roller M01 up↔down mirroring, negative coverage for roller
+  M02/M03/M04 (single-direction = single-key), and negative coverage
+  for other non-paired modes.
 
 ## 0.3.2
 
