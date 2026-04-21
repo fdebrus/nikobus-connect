@@ -28,8 +28,13 @@ MAX_ATTEMPTS: Final[int] = 3
 # DATA_TIMEOUT for the matching data frame. An empty register legitimately
 # produces no data frame — DATA_TIMEOUT expiring there is not an error.
 # A "$18FFFF…" trailer frame short-circuits the remaining reads.
-MODULE_SCAN_ACK_TIMEOUT: Final[float] = 0.3
-MODULE_SCAN_DATA_TIMEOUT: Final[float] = 0.2
+#
+# Timeouts are generous: real-hardware ACKs land 300–700 ms after the send,
+# with the first register hitting the top of that range because the module
+# wakes up on the initial command. Erring on the slow side trades a few
+# hundred ms per empty register for alignment correctness.
+MODULE_SCAN_ACK_TIMEOUT: Final[float] = 1.5
+MODULE_SCAN_DATA_TIMEOUT: Final[float] = 0.5
 MODULE_SCAN_RETRY_LIMIT: Final[int] = 1
 MODULE_SCAN_TRAILER_PREFIX: Final[str] = "$18"
 

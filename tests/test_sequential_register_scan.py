@@ -315,6 +315,60 @@ async def test_concurrent_scans_do_not_interleave(tmp_path, monkeypatch):
 # --- test 6: trailer predicate pure-function -----------------------------
 
 
+@pytest.mark.asyncio
+async def test_giveup_on_ack_timeout_flushes_buffer_and_queue(
+    tmp_path, monkeypatch
+):
+    """After a register is given up on, stale remainder bytes and any late
+    ACK/data must not leak into the next register's decode.
+
+    Reproduces the drift observed in the wild: first register's ACK arrived
+    70 ms after both retries timed out. The late ACK then matched the next
+    register's wait, and the late data frame concatenated with that
+    register's buffer — every subsequent chunk was misaligned by 4 bytes,
+    producing phantom records.
+    """
+
+    monkeypatch.setattr(const, "COMMAND_EXECUTION_DELAY", 0.0)
+    from nikobus_connect.discovery import discovery as dmod
+
+    monkeypatch.setattr(dmod, "MODULE_SCAN_ACK_TIMEOUT", 0.05)
+    monkeypatch.setattr(dmod, "MODULE_SCAN_DATA_TIMEOUT", 0.02)
+    monkeypatch.setattr(dmod, "COMMAND_EXECUTION_DELAY", 0.0)
+
+    discovery = _make_discovery(tmp_path)
+    discovery._coordinator.discovery_module = True
+    # Seed the payload buffer with 4 bytes of "previous" remainder the test
+    # can check for after the give-up flush.
+    discovery._payload_buffer = "DEADBEEF"
+
+    async def on_send(command: str) -> None:
+        reg = _register_from_command(command)
+        if reg == 0x10:
+            # Never ACK — force the give-up path.
+            return
+        ack = _ack_for(command)
+        discovery._coordinator.nikobus_command._listener.response_queue.put_nowait(ack)
+
+    discovery._coordinator.nikobus_command._connection.on_send = on_send
+
+    # Inject a stale ACK into the queue to simulate a late arrival racing
+    # the next register.
+    discovery._coordinator.nikobus_command._listener.response_queue.put_nowait(
+        "$0510STALE"
+    )
+
+    await discovery._scan_module_registers("4707", "100747", range(0x10, 0x14))
+
+    # After scan completion the buffer must be empty — the give-up path
+    # flushed it, and no subsequent register left remainder because every
+    # other ACK was synthetic (no data frames followed).
+    assert discovery._payload_buffer == ""
+    # The stale queue entry was drained.
+    queue = discovery._coordinator.nikobus_command._listener.response_queue
+    assert queue.empty()
+
+
 def test_inventory_trailer_predicate():
     from nikobus_connect.discovery.discovery import _is_inventory_trailer
 
