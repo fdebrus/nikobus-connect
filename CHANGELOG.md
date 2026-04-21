@@ -1,5 +1,98 @@
 # Changelog
 
+## 0.4.0
+
+### Breaking
+
+- **Module storage moves to a caller-owned adapter, same pattern as
+  the button store (0.2.0).** The library no longer writes
+  ``nikobus_module_config.json``. New kwargs on
+  ``NikobusDiscovery.__init__``:
+
+  ```python
+  NikobusDiscovery(
+      coordinator,
+      config_dir=...,
+      create_task=...,
+      button_data=..., on_button_save=...,
+      module_data=..., on_module_save=...,   # NEW
+      on_progress=...,
+  )
+  ```
+
+  ``module_data`` is a caller-owned dict mutated in place.
+  ``on_module_save`` (sync or async, no-arg) is awaited after every
+  merge. Integration is expected to persist via HA's
+  ``.storage/nikobus.modules``.
+
+  If either kwarg is omitted, the library skips module persistence
+  entirely — no more legacy file writes.
+
+- Removed the public ``update_module_data(file_path, ...)`` helper.
+
+### Added
+
+- **Option-A module store schema** (parallel to the button store):
+
+  ```json
+  {"nikobus_module": {
+      "<address>": {
+          "module_type": "switch_module",
+          "description": "<user-editable name>",
+          "model": "05-000-02",
+          "channels": [ ... ],
+          "discovered_info": {"name", "device_type", "channels_count"}
+      }
+  }}
+  ```
+
+  Flat dict keyed by module address. ``module_type`` moves into the
+  entry so the top-level grouping dict is gone — integrations group
+  via ``entry["module_type"]`` when rendering.
+
+- ``merge_discovered_modules(module_data, discovered_devices)``
+  in-memory merge. User-owned fields are preserved verbatim; discovery
+  only owns ``model``, ``address``, ``discovered_info``,
+  ``module_type``, and defaults for channels appended beyond the
+  previous ``channels_count``.
+
+  Fields discovery never touches:
+    - module-level ``description``
+    - ``channels[i].description``
+    - ``channels[i].entity_type``
+    - ``channels[i].led_on`` / ``channels[i].led_off``
+    - ``channels[i].operation_time_up`` / ``operation_time_down``
+
+- ``find_module(module_data, address) -> (address, entry) | None``
+  helper (parallel to ``find_operation_point``).
+
+- 11 regression tests covering the merge semantics, user-field
+  preservation across re-discovery, auto-generated unique
+  descriptions per module type, roller timing preservation, model
+  refresh, non-Module devices skipped, ``find_module`` lookup, and
+  end-to-end integration through ``_finalize_inventory_phase``.
+
+### Integration migration
+
+Integrations must now provide ``module_data`` + ``on_module_save``,
+the same pattern they already use for buttons:
+
+```python
+module_data = await module_storage.async_load() or {"nikobus_module": {}}
+
+NikobusDiscovery(
+    coordinator,
+    ...,
+    module_data=module_data,
+    on_module_save=module_storage.async_save,
+)
+```
+
+A migration step that reads the existing
+``<config_dir>/nikobus_module_config.json`` into the new ``.storage``
+location on first startup is recommended — see the integration PR
+that ships alongside this release.
+
 ## 0.3.5
 
 ### Added
