@@ -1091,7 +1091,13 @@ class NikobusDiscovery:
             base_command = f"10{normalized_address[2:4] + normalized_address[:2]}"
             if self._module_type == "dimmer_module":
                 base_command = f"22{normalized_address[2:4] + normalized_address[:2]}"
-            command_range = range(0x10, 0x100)
+            # Full link-record table. Legacy code started at 0x10, which
+            # missed records stored in 0x00..0x0F — confirmed with real
+            # hardware where a 4-key button had 1A/1B link records that
+            # never surfaced. Scan the whole register space; the decoder
+            # rejects anything that doesn't validate as a link record, so
+            # low-register config data (if any) doesn't produce phantoms.
+            command_range = range(0x00, 0x100)
         else:
             command_range = range(0xA4, 0x100)
 

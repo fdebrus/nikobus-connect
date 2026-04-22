@@ -1,6 +1,6 @@
 """Nikobus Discovery - PyPI library for Nikobus device discovery."""
 
-__version__ = "0.4.3"
+__version__ = "0.4.4"
 
 from .discovery import NikobusDiscovery
 from .base import (
