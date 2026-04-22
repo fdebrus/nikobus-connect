@@ -207,7 +207,19 @@ def add_to_command_mapping(command_mapping, decoded_command, module_address, ir_
 
     # Mapping key: prefer logical IR channel label; fall back to raw slot byte.
     ir_key = ir_channel or ir_btn_slot or ir_push_slot
-    mapping_key = (physical_push, key_raw, ir_key)
+
+    # For IR records the nibble-shifted wire address (e.g. "D44E2C" for
+    # receiver 0D1C80 + code 10B) doesn't start with an IR receiver prefix,
+    # so split_ir_button_address leaves physical_push as the shifted form.
+    # Use the IR receiver's physical base instead so the merge-time
+    # resolver can locate the receiver and attach the link to an
+    # IR:{code} op-point. physical_btn is that base when button_address
+    # is the pre-shift slot address (always the case for IR records).
+    if ir_key and physical_btn:
+        mapping_address = physical_btn
+    else:
+        mapping_address = physical_push
+    mapping_key = (mapping_address, key_raw, ir_key)
     outputs = command_mapping.setdefault(mapping_key, [])
 
     channel_number = decoded_command.get("channel")

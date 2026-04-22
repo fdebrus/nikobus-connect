@@ -399,6 +399,12 @@ def find_operation_point(
     ``None`` if no operation point in the store declares this
     ``bus_address``. Integrations can use this to route a button-press
     event (which arrives as a bus address) to the correct op-point entry.
+
+    Since 0.4.3 this also surfaces IR virtual op-points: each
+    ``operation_points["IR:{code}"]`` entry carries a ``bus_address``
+    computed at discovery time, so a runtime IR press routes the same
+    way as a wall press. For those, ``key_label`` is the storage key
+    (e.g. ``"IR:10B"``) rather than a wall-key name.
     """
 
     buttons = button_data.get("nikobus_button")
@@ -699,7 +705,44 @@ def _resolve_operation_point(
     return None
 
 
+def _resolve_ir_receiver_address(
+    push_button_address: str, buttons: dict, ir_base_lookup: dict[str, int]
+):
+    """Find the IR receiver physical address for an IR-flagged mapping entry.
+
+    ``push_button_address`` is whatever ``add_to_command_mapping`` placed as
+    the mapping-key's first element. For IR records post-0.4.3 it's the
+    receiver's physical base (e.g. ``"0D1C80"``); accept slot addresses
+    (e.g. ``"0D1C8A"``) and shifted-wire forms too for forward-compat.
+    """
+
+    normalized = _normalize_address(push_button_address)
+    if not normalized:
+        return None
+
+    # Direct match: the mapping address is the receiver itself.
+    if normalized in buttons and isinstance(buttons[normalized], dict):
+        return normalized
+
+    # Slot-address fallback: first 4 chars identify the receiver prefix.
+    if len(normalized) == 6:
+        prefix = normalized[:4]
+        base_byte = ir_base_lookup.get(prefix)
+        if base_byte is not None:
+            base_addr = f"{prefix}{base_byte:02X}"
+            if base_addr in buttons and isinstance(buttons[base_addr], dict):
+                return base_addr
+
+    return None
+
+
 IR_OP_POINT_PREFIX = "IR:"
+
+# Bank-ordering used by the IR receiver protocol. ``decode_ir_channel``
+# picks the bank via ``_IR_BANK_CYCLE[key_raw % 4]``; we invert it here
+# to go from an IR code label ("10B") back to the key_raw that
+# ``KEY_MAPPING_MODULE`` expects.
+_IR_BANK_TO_KEY_INDEX = {"C": 0, "A": 1, "D": 2, "B": 3}
 
 
 def _ir_op_point_key(ir_code: str) -> str:
@@ -713,20 +756,88 @@ def _generated_ir_description(ir_code: str) -> str:
     return f"IR code {ir_code} #I{ir_code}"
 
 
+def _compute_ir_bus_address(receiver_address: str, ir_code: str):
+    """Compute the runtime wire address emitted when ``ir_code`` is
+    pressed on the IR receiver at ``receiver_address``.
+
+    The encoding mirrors wall-button bus addresses: slot address =
+    receiver_prefix + (receiver_base_byte + channel); the 6-hex is then
+    produced by ``convert_nikobus_address`` and the first nibble is
+    shifted by ``KEY_MAPPING_MODULE[4][key_index]`` where ``key_index``
+    is the bank cycle inverse of the code's trailing letter.
+
+    Returns ``None`` when inputs don't parse (never raises). Verified on
+    captured trace: code ``10B`` on receiver ``0D1C80`` -> ``D44E2C``.
+    """
+
+    from .protocol import convert_nikobus_address  # local import: avoid cycle
+    from .mapping import KEY_MAPPING_MODULE
+
+    if not receiver_address or not ir_code or len(ir_code) < 2:
+        return None
+
+    receiver = receiver_address.strip().upper()
+    if len(receiver) != 6:
+        return None
+
+    bank = ir_code[-1].upper()
+    key_index = _IR_BANK_TO_KEY_INDEX.get(bank)
+    if key_index is None:
+        return None
+
+    try:
+        channel = int(ir_code[:-1])
+    except ValueError:
+        return None
+    if channel < 1 or channel > 39:
+        return None
+
+    try:
+        base_byte = int(receiver[-2:], 16)
+    except ValueError:
+        return None
+    slot_byte = base_byte + channel
+    if slot_byte > 0xFF:
+        return None
+
+    slot_addr = f"{receiver[:4]}{slot_byte:02X}"
+    converted = convert_nikobus_address(slot_addr)
+    if not converted or len(converted) != 6:
+        return None
+
+    mapping = KEY_MAPPING_MODULE.get(4, {})
+    add_hex = mapping.get(key_index)
+    if add_hex is None:
+        return None
+
+    try:
+        add = int(add_hex, 16)
+        orig_nib = int(converted[0], 16)
+    except ValueError:
+        return None
+
+    new_nib = (orig_nib + add) & 0xF
+    return f"{new_nib:X}{converted[1:]}".upper()
+
+
 def _ensure_ir_op_point(
-    physical_entry: dict, ir_code: str
+    physical_entry: dict, receiver_address: str, ir_code: str
 ) -> dict:
     """Return the IR virtual op-point, creating it if missing.
 
     Sits in ``operation_points`` next to the wall keys, keyed ``IR:{code}``.
-    Unlike wall op-points it carries no ``bus_address`` (IR presses don't
-    have one) — just ``ir_code`` + ``description``.
+    Carries ``ir_code`` plus a computed ``bus_address`` (the wire address
+    the receiver emits when the IR code fires) so the usual
+    ``find_operation_point(bus_address)`` lookup routes IR presses to the
+    op-point at runtime.
     """
 
     op_points = physical_entry.setdefault("operation_points", {})
     if not isinstance(op_points, dict):
         op_points = {}
         physical_entry["operation_points"] = op_points
+
+    bus_address = _compute_ir_bus_address(receiver_address, ir_code)
 
     storage_key = _ir_op_point_key(ir_code)
     op_point = op_points.get(storage_key)
@@ -735,11 +846,17 @@ def _ensure_ir_op_point(
             "ir_code": ir_code,
             "description": _generated_ir_description(ir_code),
         }
+        if bus_address:
+            op_point["bus_address"] = bus_address
         op_points[storage_key] = op_point
         return op_point
 
-    # Refresh ir_code field in case the entry was hand-written without one.
+    # Refresh ir_code + bus_address fields (both are discovery-owned,
+    # deterministic and always safe to rewrite). description stays put
+    # if the user renamed it.
     op_point["ir_code"] = ir_code
+    if bus_address:
+        op_point["bus_address"] = bus_address
     current_desc = op_point.get("description")
     auto_desc = _generated_ir_description(ir_code)
     if not current_desc or current_desc == auto_desc:
@@ -793,30 +910,44 @@ def merge_linked_modules(button_data, command_mapping):
         if not isinstance(outputs, list) or not outputs:
             continue
 
-        resolved = _resolve_operation_point(
-            push_button_address,
-            key_raw,
-            buttons,
-            bus_to_op,
-            ir_base_lookup,
-        )
-        if resolved is None:
-            normalized = _normalize_address(push_button_address)
-            if normalized:
-                unmatched_addresses.add(normalized)
-            continue
-
-        physical_addr, _key_label, op_point = resolved
-        matched_addresses.add(_normalize_address(push_button_address))
-
-        # IR presses: redirect to a virtual IR op-point alongside the
-        # receiver's wall keys. The resolver already landed us on the
-        # right physical IR receiver; we just swap which op_point the
-        # link attaches to.
+        # IR records: route to the receiver's virtual IR op-point (create
+        # it if missing). The resolver's wall-key lookup would fail when
+        # the receiver has no wall op-point at key_raw, but we don't
+        # need one — _ensure_ir_op_point materialises the IR entry from
+        # (receiver, ir_code).
         if ir_code_from_key:
-            physical_entry = buttons.get(physical_addr)
-            if isinstance(physical_entry, dict):
-                op_point = _ensure_ir_op_point(physical_entry, ir_code_from_key)
+            receiver_addr = _resolve_ir_receiver_address(
+                push_button_address, buttons, ir_base_lookup
+            )
+            if receiver_addr is None:
+                normalized = _normalize_address(push_button_address)
+                if normalized:
+                    unmatched_addresses.add(normalized)
+                continue
+            physical_entry = buttons.get(receiver_addr)
+            if not isinstance(physical_entry, dict):
+                continue
+            op_point = _ensure_ir_op_point(
+                physical_entry, receiver_addr, ir_code_from_key
+            )
+            physical_addr = receiver_addr
+            matched_addresses.add(_normalize_address(push_button_address))
+        else:
+            resolved = _resolve_operation_point(
+                push_button_address,
+                key_raw,
+                buttons,
+                bus_to_op,
+                ir_base_lookup,
+            )
+            if resolved is None:
+                normalized = _normalize_address(push_button_address)
+                if normalized:
+                    unmatched_addresses.add(normalized)
+                continue
+
+            physical_addr, _key_label, op_point = resolved
+            matched_addresses.add(_normalize_address(push_button_address))
 
         linked_modules = op_point.setdefault("linked_modules", [])
         if not isinstance(linked_modules, list):
