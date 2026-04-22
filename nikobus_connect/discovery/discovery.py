@@ -31,6 +31,7 @@ from ..const import (
     DEVICE_ADDRESS_INVENTORY,
     DEVICE_INVENTORY_ANSWER,
     MODULE_SCAN_ACK_TIMEOUT,
+    MODULE_SCAN_CONSECUTIVE_GIVE_UP_LIMIT,
     MODULE_SCAN_DATA_TIMEOUT,
     MODULE_SCAN_RETRY_LIMIT,
     MODULE_SCAN_TRAILER_PREFIX,
@@ -500,6 +501,15 @@ class NikobusDiscovery:
             self._scan_active = True
             self._scan_trailer_seen = False
             self._scan_event.clear()
+            # Suppress the inactivity timer that scan-response parsing
+            # keeps rescheduling. Without this, the first register of a
+            # pass that a module ignores drops us into a 5 s window of
+            # no responses → the timer fires ``_finalize_discovery``
+            # mid-scan, tearing down the connection while the rest of
+            # this pass and any follow-up passes are still queued.
+            # We finalize explicitly from ``query_module_inventory``
+            # once all passes complete.
+            self._cancel_timeout()
             # Progress: reset the register counter to the full scan range;
             # it drops to ``registers_sent`` when a trailer short-circuits.
             try:
@@ -508,6 +518,7 @@ class NikobusDiscovery:
                 self._progress_register_total = 0
             try:
                 registers_sent = 0
+                consecutive_give_ups = 0
                 for reg in command_range:
                     if self._scan_trailer_seen:
                         _LOGGER.info(
@@ -521,7 +532,7 @@ class NikobusDiscovery:
                         break
                     partial_hex = f"{base_command}{reg:02X}{sub_byte}"
                     pc_link_command = make_pc_link_inventory_command(partial_hex)
-                    await self._read_register_once(
+                    ack_ok = await self._read_register_once(
                         pc_link_command,
                         reg,
                         normalized_address,
@@ -534,6 +545,24 @@ class NikobusDiscovery:
                         module_address=normalized_address,
                         register=reg,
                     )
+                    if ack_ok:
+                        consecutive_give_ups = 0
+                    else:
+                        consecutive_give_ups += 1
+                        if consecutive_give_ups >= MODULE_SCAN_CONSECUTIVE_GIVE_UP_LIMIT:
+                            _LOGGER.warning(
+                                "Register scan pass aborted — module not responding | "
+                                "module=%s base_cmd=%s sub=%s last_register=0x%02X "
+                                "consecutive_give_ups=%d sent=%d",
+                                normalized_address,
+                                base_command,
+                                sub_byte,
+                                reg,
+                                consecutive_give_ups,
+                                registers_sent,
+                            )
+                            self._progress_register_total = registers_sent
+                            break
                     await asyncio.sleep(COMMAND_EXECUTION_DELAY)
                 else:
                     _LOGGER.info(

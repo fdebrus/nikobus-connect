@@ -1,5 +1,47 @@
 # Changelog
 
+## 0.4.6
+
+### Fixed
+
+- **Multi-pass scan no longer kills the connection mid-discovery.**
+  0.4.5 shipped a three-pass register scan per module. On hardware
+  where a module doesn't respond to the new function-10 sub=00 /
+  sub=01 reads, the scan walked into two compounding failures:
+
+  1. The inactivity watchdog (``_timeout_after``, 5 s) that the scan-
+     response parser keeps rescheduling would fire during the
+     first silent stretch of pass 2, triggering
+     ``_finalize_discovery`` *while the scan loop was still running*.
+     Finalize tore down discovery state; the coordinator closed the
+     connection; subsequent register reads failed with
+     ``Cannot send: Not connected``, the integration reloaded, and
+     the user was left unable to rescan without a full restart.
+  2. Each unresponsive register burned ~3 s (ACK timeout × 2
+     retries). With 256 registers per pass × 2 new passes, a
+     non-responding module wasted ~26 minutes.
+
+  Two fixes in ``_scan_module_registers``:
+
+  - **Cancel the pending inactivity timer at the start of every
+    pass.** That timer is a safety net for single-pass mode; in
+    multi-pass mode we finalize explicitly after the last pass, so
+    the stale timer must not fire between passes.
+  - **Fast-fail on consecutive ACK timeouts.** If
+    ``MODULE_SCAN_CONSECUTIVE_GIVE_UP_LIMIT`` (default: 5) registers
+    in a row give up without an ACK, abort the pass with a warning.
+    Per-module worst case drops from ~26 min to ~15 s of extra time
+    for bank-incompatible modules.
+
+  Regression tests:
+  ``test_scan_aborts_after_consecutive_ack_give_ups``,
+  ``test_scan_cancels_pending_inactivity_timeout``.
+
+### Internal
+
+- New constant ``MODULE_SCAN_CONSECUTIVE_GIVE_UP_LIMIT`` (default 5)
+  in ``const.py``. Override for tighter / looser bail-out thresholds.
+
 ## 0.4.5
 
 ### Fixed
