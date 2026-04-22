@@ -38,6 +38,12 @@ MODULE_SCAN_DATA_TIMEOUT: Final[float] = 0.5
 MODULE_SCAN_RETRY_LIMIT: Final[int] = 1
 MODULE_SCAN_TRAILER_PREFIX: Final[str] = "$18"
 
+# Multi-pass scan: if this many registers in a row fail to get any
+# ACK, assume the module doesn't accept this function+sub combination
+# and abort the pass early. Without this, a non-responding module
+# wastes ~256 * (ACK timeout * retries) ≈ 13 minutes per pass.
+MODULE_SCAN_CONSECUTIVE_GIVE_UP_LIMIT: Final[int] = 5
+
 # Message prefixes and markers
 BUTTON_COMMAND_PREFIX: Final[str] = "#N"
 COMMAND_PROCESSED: Final[tuple[str, str]] = ("$0515", "$0516")

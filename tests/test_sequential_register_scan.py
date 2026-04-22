@@ -382,3 +382,93 @@ def test_inventory_trailer_predicate():
     assert _is_inventory_trailer("") is False
     # Too short for header + CRC = no payload.
     assert _is_inventory_trailer("$18ABCDEF") is False
+
+
+# --- multi-pass fast-fail ------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_scan_aborts_after_consecutive_ack_give_ups(tmp_path, monkeypatch):
+    """When a module ignores a function+sub combination (no ACKs arrive
+    for a configurable number of consecutive registers), the scan bails
+    out of the pass instead of walking all 256 registers. Without this,
+    a non-responding module wastes ~13 minutes per pass at the default
+    ACK timeout + retry budget."""
+
+    # Shorten timeouts so the test completes in seconds, not minutes.
+    monkeypatch.setattr(const, "COMMAND_EXECUTION_DELAY", 0.0)
+    monkeypatch.setattr(const, "MODULE_SCAN_ACK_TIMEOUT", 0.01)
+    monkeypatch.setattr(const, "MODULE_SCAN_DATA_TIMEOUT", 0.01)
+    # Also patch the already-imported symbols in discovery.py (they're
+    # imported by name, so monkey-patching const alone doesn't help).
+    from nikobus_connect.discovery import discovery as disc
+    monkeypatch.setattr(disc, "MODULE_SCAN_ACK_TIMEOUT", 0.01)
+    monkeypatch.setattr(disc, "MODULE_SCAN_DATA_TIMEOUT", 0.01)
+    monkeypatch.setattr(disc, "MODULE_SCAN_CONSECUTIVE_GIVE_UP_LIMIT", 5)
+
+    discovery = _make_discovery(tmp_path)
+    discovery._coordinator.discovery_module = True
+
+    async def on_send(command: str) -> None:
+        # Module never ACKs.
+        return
+
+    discovery._coordinator.nikobus_command._connection.on_send = on_send
+
+    await discovery._scan_module_registers(
+        "0E6C", "106C0E", range(0x00, 0x100), sub_byte="00"
+    )
+
+    sent = discovery._coordinator.nikobus_command._connection.sent
+    # After MODULE_SCAN_CONSECUTIVE_GIVE_UP_LIMIT = 5 give-ups the
+    # scan aborts. Each register may retry once on ACK timeout, so
+    # count distinct register bytes rather than raw sends.
+    distinct_registers = {_register_from_command(c) for c in sent}
+    assert distinct_registers == {0x00, 0x01, 0x02, 0x03, 0x04}, (
+        f"expected abort after registers 0x00..0x04, got {distinct_registers}"
+    )
+    # And it must NOT have walked the whole 256-register range.
+    assert 0xFF not in distinct_registers
+
+
+@pytest.mark.asyncio
+async def test_scan_cancels_pending_inactivity_timeout(tmp_path, monkeypatch):
+    """The scan-response parser keeps rescheduling a 5 s inactivity
+    timer that calls ``_finalize_discovery`` if nothing responds.
+    When a new scan pass starts (e.g. pass 2 of a multi-pass scan),
+    any stale timer from the previous pass must be cancelled —
+    otherwise it fires mid-scan and tears down discovery while the
+    current pass is still running."""
+
+    monkeypatch.setattr(const, "COMMAND_EXECUTION_DELAY", 0.0)
+    monkeypatch.setattr(const, "MODULE_SCAN_ACK_TIMEOUT", 0.01)
+    monkeypatch.setattr(const, "MODULE_SCAN_DATA_TIMEOUT", 0.01)
+    from nikobus_connect.discovery import discovery as disc
+    monkeypatch.setattr(disc, "MODULE_SCAN_ACK_TIMEOUT", 0.01)
+    monkeypatch.setattr(disc, "MODULE_SCAN_DATA_TIMEOUT", 0.01)
+
+    discovery = _make_discovery(tmp_path)
+    discovery._coordinator.discovery_module = True
+
+    # Simulate an armed inactivity timer from the previous pass.
+    cancelled: list[bool] = []
+
+    class FakeTask:
+        def cancel(self):
+            cancelled.append(True)
+
+    discovery._timeout_task = FakeTask()
+
+    async def on_send(command: str) -> None:
+        return  # no ACK -> every register gives up
+
+    discovery._coordinator.nikobus_command._connection.on_send = on_send
+
+    await discovery._scan_module_registers(
+        "0E6C", "106C0E", range(0x00, 0x10), sub_byte="01"
+    )
+
+    # The pre-existing timer got cancelled at scan start.
+    assert cancelled == [True]
+    # And cleared from the instance.
+    assert discovery._timeout_task is None
