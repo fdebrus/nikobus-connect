@@ -1,5 +1,42 @@
 # Changelog
 
+## 0.4.5
+
+### Fixed
+
+- **Module register scan now reads three memory banks per output module
+  instead of one.** A real-hardware PC-software serial trace revealed
+  the Nikobus PC tool walks each output module with **three** distinct
+  sub-byte values (``00``, ``01``, ``04``) on function ``10`` reads;
+  each sub-byte addresses a different memory page on the module.
+  Records that never surfaced through discovery (e.g. links written
+  through the legacy "group" column in the Nikobus PC tool) live in
+  the ``00`` and ``01`` banks — both of which the previous one-pass
+  scan never touched.
+
+  Behaviour change: every output module is now scanned three times.
+  Pass 1 retains the historic command (``$1422<addr>{reg}04`` for
+  dimmer, ``$1410<addr>{reg}04`` for switch/roller). Passes 2 + 3
+  add ``$1410<addr>{reg}00`` and ``$1410<addr>{reg}01``. Each pass
+  walks the full ``0x00..0xFF`` register range.
+
+  **Cost: discovery is ~3× slower per output module.** A previously
+  ~2.5 min single-module scan becomes ~7.5 min. The per-bank
+  productive register range is narrower than the full sweep on real
+  hardware (the PC trace shows e.g. ``A3..D3`` for sub=04 on one
+  module); a follow-up will tune per-bank ranges to win this back
+  once we map the productive ranges from real-hardware traces.
+
+  Regression tests:
+  ``test_scan_runs_three_passes_per_dimmer_module``,
+  ``test_scan_runs_three_passes_per_switch_module``.
+
+### Internal
+
+- ``_scan_module_registers`` now accepts a ``sub_byte`` keyword
+  (default ``"04"``). External callers don't need to change unless
+  they want to target a specific bank.
+
 ## 0.4.4
 
 ### Fixed

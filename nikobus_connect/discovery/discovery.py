@@ -468,8 +468,15 @@ class NikobusDiscovery:
         normalized_address: str,
         base_command: str,
         command_range,
+        sub_byte: str = "04",
     ) -> None:
         """Read each register one at a time, waiting for ACK + optional data.
+
+        ``sub_byte`` is the 2-hex byte appended after the register byte
+        in the read command. Different sub-bytes address different memory
+        banks on a module: ``"04"`` is the default (button-link records),
+        ``"00"`` and ``"01"`` access additional banks discovered via PC
+        software trace analysis.
 
         Replaces the former fire-and-forget queue fill. Per register:
 
@@ -512,7 +519,7 @@ class NikobusDiscovery:
                         )
                         self._progress_register_total = registers_sent
                         break
-                    partial_hex = f"{base_command}{reg:02X}04"
+                    partial_hex = f"{base_command}{reg:02X}{sub_byte}"
                     pc_link_command = make_pc_link_inventory_command(partial_hex)
                     await self._read_register_once(
                         pc_link_command,
@@ -1113,9 +1120,36 @@ class NikobusDiscovery:
             await self._finalize_discovery(normalized_address)
             return
 
+        # Pass 1: existing scan path (function-22 sub=04 for dimmer,
+        # function-10 sub=04 for switch/roller). This is the bank we've
+        # always read.
         await self._scan_module_registers(
             normalized_address, base_command, command_range
         )
+
+        # Passes 2 + 3: function-10 with sub=00 and sub=01. The PC-tool
+        # serial trace shows three distinct sub-bytes (00/01/04), each
+        # addressing a different memory bank on the module. Records that
+        # never surface via the sub=04 scan (e.g. links written through
+        # the "group" column in legacy Nikobus PC software) live in one
+        # of these other banks. Triples scan time per output module —
+        # tuning the per-bank register range can win it back later once
+        # the productive ranges are mapped from real hardware.
+        addr_swap = normalized_address[2:4] + normalized_address[:2]
+        fn10_base = f"10{addr_swap}"
+        for extra_sub in ("00", "01"):
+            _LOGGER.info(
+                "Register scan pass starting | module=%s function=10 sub=%s",
+                normalized_address,
+                extra_sub,
+            )
+            await self._scan_module_registers(
+                normalized_address,
+                fn10_base,
+                command_range,
+                sub_byte=extra_sub,
+            )
+
         await self._finalize_discovery(normalized_address)
 
     async def parse_inventory_response(self, payload) -> InventoryResult | None:
