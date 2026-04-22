@@ -1,10 +1,17 @@
-"""Regression test: the default module register-scan range covers 0x00..0xFF.
+"""Regression tests for module register scan coverage.
 
-Legacy code started at 0x10, which silently skipped 16 registers that
-real hardware can store link records in. Confirmed by a user report
-where a 4-key button had 1A/1B link records sitting in 0x00..0x0F that
-never surfaced through discovery. This test pins the range so the
-regression can't come back.
+Two invariants pinned here:
+
+1. The scan covers the full 0x00..0xFF register range. Legacy code
+   started at 0x10, missing 16 low registers that real hardware can
+   store link records in.
+
+2. The scan walks **three** memory banks per output module — function
+   ``22`` (dimmer) or function ``10`` (switch/roller) at sub-byte ``04``
+   for the historic bank, then function ``10`` at sub-byte ``00`` and
+   sub-byte ``01`` for the two additional banks revealed by the
+   PC-software serial trace. Each bank holds different record types;
+   a one-bank scan returns only a fraction of the programmed links.
 """
 
 from __future__ import annotations
@@ -37,11 +44,27 @@ def _make_coordinator() -> MagicMock:
     return coord
 
 
+def _capture_scan_calls():
+    """Return ``(calls, fake_scan)`` — calls is a list each pass appends to."""
+
+    calls: list[dict] = []
+
+    async def fake_scan(address, base_cmd, command_range, sub_byte="04"):
+        calls.append(
+            {
+                "address": address,
+                "base_cmd": base_cmd,
+                "command_range": command_range,
+                "sub_byte": sub_byte,
+            }
+        )
+
+    return calls, fake_scan
+
+
 @pytest.mark.asyncio
 async def test_default_scan_range_starts_at_zero_for_output_module(tmp_path):
-    """When ``query_module_inventory`` triggers the register scan for a
-    switch module, the command_range handed to ``_scan_module_registers``
-    starts at 0x00 and covers the full 0x00..0xFF space (256 registers)."""
+    """First pass for a switch module covers 0x00..0xFF."""
 
     coord = _make_coordinator()
     discovery = NikobusDiscovery(
@@ -52,7 +75,6 @@ async def test_default_scan_range_starts_at_zero_for_output_module(tmp_path):
         on_button_save=None,
     )
 
-    # A known switch module in the discovered inventory.
     discovery.discovered_devices = {
         "4707": {
             "address": "4707",
@@ -62,39 +84,26 @@ async def test_default_scan_range_starts_at_zero_for_output_module(tmp_path):
             "device_type": "01",
         }
     }
-    # Coordinator recognises this address.
     discovery._is_known_module_address = MagicMock(return_value=True)
     discovery._resolve_module_type = MagicMock(return_value="switch_module")
 
-    captured: dict = {}
-
-    async def fake_scan(address, base_cmd, command_range):
-        captured["address"] = address
-        captured["base_cmd"] = base_cmd
-        captured["command_range"] = command_range
-
+    calls, fake_scan = _capture_scan_calls()
     discovery._scan_module_registers = fake_scan
     discovery._finalize_discovery = AsyncMock()
 
     await discovery.query_module_inventory("4707")
 
-    assert "command_range" in captured, "register scan was never invoked"
-    scan_range = captured["command_range"]
-
-    # Full register space, starting at 0x00.
+    assert calls, "register scan was never invoked"
+    first = calls[0]
+    scan_range = first["command_range"]
     assert scan_range.start == 0x00
     assert scan_range.stop == 0x100
-    assert len(scan_range) == 256
-
-    # Sanity: low registers are included.
-    assert 0x00 in scan_range
-    assert 0x0F in scan_range
+    assert 0x00 in scan_range and 0x0F in scan_range
 
 
 @pytest.mark.asyncio
 async def test_default_scan_range_starts_at_zero_for_dimmer_module(tmp_path):
-    """Same coverage guarantee on the dimmer-module path (different
-    base_command prefix, same register range)."""
+    """Same coverage guarantee on the dimmer-module first pass."""
 
     coord = _make_coordinator()
     discovery = NikobusDiscovery(
@@ -117,19 +126,149 @@ async def test_default_scan_range_starts_at_zero_for_dimmer_module(tmp_path):
     discovery._is_known_module_address = MagicMock(return_value=True)
     discovery._resolve_module_type = MagicMock(return_value="dimmer_module")
 
-    captured: dict = {}
-
-    async def fake_scan(address, base_cmd, command_range):
-        captured["base_cmd"] = base_cmd
-        captured["command_range"] = command_range
-
+    calls, fake_scan = _capture_scan_calls()
     discovery._scan_module_registers = fake_scan
     discovery._finalize_discovery = AsyncMock()
 
     await discovery.query_module_inventory("0E6C")
 
-    scan_range = captured["command_range"]
+    first = calls[0]
+    scan_range = first["command_range"]
     assert scan_range.start == 0x00
     assert scan_range.stop == 0x100
-    # Dimmer uses the "22…" function prefix, not "10…".
-    assert captured["base_cmd"].startswith("22")
+    # Dimmer pass-1 uses the "22…" function prefix.
+    assert first["base_cmd"].startswith("22")
+
+
+# ---------------------------------------------------------------------------
+# Multi-pass scan: pin the three-bank orchestration
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_scan_runs_three_passes_per_dimmer_module(tmp_path):
+    """A dimmer module is scanned three times: the historic function-22
+    sub=04 pass, then function-10 sub=00 and sub=01 for the additional
+    memory banks revealed by the PC-software trace."""
+
+    coord = _make_coordinator()
+    discovery = NikobusDiscovery(
+        coord,
+        config_dir=str(tmp_path),
+        create_task=_drop_coro,
+        button_data={"nikobus_button": {}},
+        on_button_save=None,
+    )
+
+    discovery.discovered_devices = {
+        "0E6C": {
+            "address": "0E6C",
+            "category": "Module",
+            "model": "05-007-02",
+            "channels": 12,
+            "device_type": "03",
+        }
+    }
+    discovery._is_known_module_address = MagicMock(return_value=True)
+    discovery._resolve_module_type = MagicMock(return_value="dimmer_module")
+
+    calls, fake_scan = _capture_scan_calls()
+    discovery._scan_module_registers = fake_scan
+    discovery._finalize_discovery = AsyncMock()
+
+    await discovery.query_module_inventory("0E6C")
+
+    assert len(calls) == 3, f"expected 3 passes, got {len(calls)}: {calls}"
+
+    # Pass 1: existing dimmer scan — function 22, sub 04.
+    assert calls[0]["base_cmd"] == "226C0E"
+    assert calls[0]["sub_byte"] == "04"
+
+    # Passes 2 + 3: function 10 with the new sub-bytes. Both walk full
+    # 0x00..0xFF.
+    assert calls[1]["base_cmd"] == "106C0E"
+    assert calls[1]["sub_byte"] == "00"
+    assert calls[2]["base_cmd"] == "106C0E"
+    assert calls[2]["sub_byte"] == "01"
+
+    for entry in calls:
+        assert entry["address"] == "0E6C"
+        assert entry["command_range"].start == 0x00
+        assert entry["command_range"].stop == 0x100
+
+
+@pytest.mark.asyncio
+async def test_scan_runs_three_passes_per_switch_module(tmp_path):
+    """A switch module is also scanned three times. Pass 1 uses the
+    historic function-10 sub-04 path; passes 2 + 3 add sub-00 and
+    sub-01."""
+
+    coord = _make_coordinator()
+    discovery = NikobusDiscovery(
+        coord,
+        config_dir=str(tmp_path),
+        create_task=_drop_coro,
+        button_data={"nikobus_button": {}},
+        on_button_save=None,
+    )
+
+    discovery.discovered_devices = {
+        "4707": {
+            "address": "4707",
+            "category": "Module",
+            "model": "05-000-02",
+            "channels": 12,
+            "device_type": "01",
+        }
+    }
+    discovery._is_known_module_address = MagicMock(return_value=True)
+    discovery._resolve_module_type = MagicMock(return_value="switch_module")
+
+    calls, fake_scan = _capture_scan_calls()
+    discovery._scan_module_registers = fake_scan
+    discovery._finalize_discovery = AsyncMock()
+
+    await discovery.query_module_inventory("4707")
+
+    assert len(calls) == 3
+    assert calls[0]["base_cmd"] == "100747"
+    assert calls[0]["sub_byte"] == "04"
+    assert calls[1]["base_cmd"] == "100747"
+    assert calls[1]["sub_byte"] == "00"
+    assert calls[2]["base_cmd"] == "100747"
+    assert calls[2]["sub_byte"] == "01"
+
+
+@pytest.mark.asyncio
+async def test_scan_skips_extra_passes_for_non_output_modules(tmp_path):
+    """PC link / PC logic / feedback / other modules don't get scanned
+    at all (output-only gate runs before scan dispatch); they certainly
+    don't get the multi-pass treatment."""
+
+    coord = _make_coordinator()
+    discovery = NikobusDiscovery(
+        coord,
+        config_dir=str(tmp_path),
+        create_task=_drop_coro,
+        button_data={"nikobus_button": {}},
+        on_button_save=None,
+    )
+
+    discovery.discovered_devices = {
+        "FF00": {
+            "address": "FF00",
+            "category": "Module",
+            "model": "05-200",
+            "device_type": "0A",
+        }
+    }
+    discovery._is_known_module_address = MagicMock(return_value=True)
+    discovery._resolve_module_type = MagicMock(return_value="pc_link")
+
+    calls, fake_scan = _capture_scan_calls()
+    discovery._scan_module_registers = fake_scan
+    discovery._finalize_discovery = AsyncMock()
+
+    await discovery.query_module_inventory("FF00")
+
+    assert calls == []
