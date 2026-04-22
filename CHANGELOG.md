@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.4.4
+
+### Fixed
+
+- **Module register scan now covers the full 0x00..0xFF range.**
+  Legacy code started at 0x10 (inherited, no comment explaining why),
+  silently skipping 16 registers that real hardware can store link
+  records in. Confirmed by a user report where a 4-key button had
+  1A/1B link records sitting in 0x00..0x0F that never surfaced
+  through discovery. The decoder still rejects anything that doesn't
+  validate as a link record, so low-register config bytes (if any)
+  don't produce phantoms.
+
+  Scan time increases by ~16 extra register reads per output module
+  (~8-24s additional worst case per module). Worth it: those records
+  are programmed button linkages users expect to see.
+
+  Regression test: ``test_default_scan_range_starts_at_zero_for_output_module``.
+
 ## 0.4.3
 
 ### Fixed
