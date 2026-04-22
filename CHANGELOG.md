@@ -1,5 +1,60 @@
 # Changelog
 
+## 0.4.3
+
+### Fixed
+
+- **Runtime routing for IR remote presses.** 0.4.2 shipped IR virtual
+  op-points at the storage layer, but two issues meant real IR
+  discoveries never reached them:
+
+  1. ``add_to_command_mapping`` keyed IR records by the nibble-shifted
+     wire address (e.g. ``"D44E2C"``). That address has no recognised
+     IR receiver prefix, so the merge-time resolver dropped the
+     record as unmatched. Fixed by keying IR records on the receiver
+     base (e.g. ``"0D1C80"``) derived from the pre-shift
+     ``button_address``. Wall records are unchanged.
+
+  2. ``merge_linked_modules``'s IR path required a matching wall
+     op-point at ``key_raw``, which isn't guaranteed for IR-only
+     receivers. The IR path is now independent of wall-key presence;
+     the IR op-point is materialised directly from (receiver,
+     ir_code).
+
+### Added
+
+- **IR op-points now carry a deterministic ``bus_address``.** Each
+  IR virtual op-point stores the runtime wire address the receiver
+  will emit when the IR code fires, computed as:
+
+      bus_address = convert_nikobus_address(receiver_prefix + (base_byte + channel))
+                    with first nibble shifted by KEY_MAPPING_MODULE[4][key_index]
+
+  where ``key_index`` is the inverse of the IR bank cycle
+  (``{"C":0, "A":1, "D":2, "B":3}``). Verified against a captured
+  real-hardware trace: IR code ``10B`` on receiver ``0D1C80`` emits
+  ``#ND44E2C`` on the bus.
+
+  Consequence: ``find_operation_point(button_data, bus_address)``
+  now resolves IR presses the same way it resolves wall presses.
+  HA integrations route IR entities for free — no second lookup
+  helper needed.
+
+- New public helper: ``_compute_ir_bus_address(receiver, ir_code)``
+  available through ``nikobus_connect.discovery.fileio`` for callers
+  that want to compute the address without mutating the store.
+
+### Behaviour contract changes
+
+- ``find_operation_point`` may now return an IR op-point, with
+  ``key_label`` being the storage key (e.g. ``"IR:10B"``). Existing
+  wall-key behaviour is unchanged.
+- 0.4.2-shaped IR entries without ``bus_address`` are healed on the
+  next discovery run — no explicit migration needed.
+- Older stores (pre-0.4.3) that haven't re-discovered will still
+  deserialise cleanly; IR presses simply won't route until the next
+  discovery fills in ``bus_address``.
+
 ## 0.4.2
 
 ### Added
