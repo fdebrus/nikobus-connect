@@ -95,7 +95,7 @@ async def _write_json_atomic(file_path, data, inline_channels: bool = False):
     try:
         await asyncio.to_thread(_write, tmp_path)
         os.replace(tmp_path, file_path)
-        _LOGGER.info("Data written to file: %s", file_path)
+        _LOGGER.debug("Data written to file: %s", file_path)
     except Exception:
         _LOGGER.exception("Failed to write data to file %s", file_path)
         try:
@@ -1058,8 +1058,11 @@ def merge_linked_modules(button_data, command_mapping):
             updated_buttons += 1
             any_updates = True
 
+    # merge_linked_modules is called per decoded-record batch during
+    # discovery, so no-op runs are the common case. Keep the zero-change
+    # path at DEBUG; surface at INFO only when something actually changed.
     if not any_updates:
-        _LOGGER.info(
+        _LOGGER.debug(
             "Button store merge ran: changes=0 (updated_buttons=%d, "
             "links_added=%d, outputs_added=%d)",
             updated_buttons,
@@ -1067,7 +1070,7 @@ def merge_linked_modules(button_data, command_mapping):
             outputs_added,
         )
     else:
-        _LOGGER.info(
+        _LOGGER.debug(
             "Button store merge summary: updated_buttons=%d, links_added=%d, "
             "outputs_added=%d",
             updated_buttons,
@@ -1086,7 +1089,7 @@ def merge_linked_modules(button_data, command_mapping):
     mirrored = _mirror_paired_button_links(buttons)
     if mirrored:
         outputs_added += mirrored
-        _LOGGER.info(
+        _LOGGER.debug(
             "Paired-button inference added %d mirrored output(s) for "
             "M01/M02 dimmer modes",
             mirrored,
