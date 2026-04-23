@@ -1,5 +1,52 @@
 # Changelog
 
+## 0.4.9
+
+### Changed
+
+- **Discovery log chatter demoted to DEBUG.** Now that the scan
+  pipeline is correct and stable, the running blow-by-blow no longer
+  belongs in end-user logs. The following log lines are now at
+  ``DEBUG`` instead of ``INFO`` / ``WARNING``:
+
+  - Per-decoded-record: ``Discovery decoded | type=X module=Y ...``
+    (switch / dimmer / roller decoders).
+  - Per-record-batch merge: ``Discovery decoded commands | module=X count=N``
+    and the paired ``Discovered links merged into store``. The merge
+    line is still surfaced at INFO *when something actually merged* —
+    no-op merges (the common re-discovery case) stay quiet.
+  - Per-pass / per-register scan chatter: ``Register scan pass
+    starting``, ``Register scan completed full range``, ``Register
+    scan short-circuited by trailer``.
+  - Expected fast-fail events: ``Register scan pass aborted — module
+    not responding``, ``Register scan send failed``, ``Register scan
+    gave up on register``. These are normal outcomes of the
+    bank-compatibility probe and were previously WARNING-level.
+  - Bookkeeping: ``Inventory record | address=X``, ``PC Link address
+    recorded``, ``Skipping register scan for non-output module``,
+    ``Module type conflict ... using config``, ``Data written to file``,
+    ``Button store merge ran: changes=0``, ``Paired-button inference
+    added N mirrored output(s)``.
+
+  **Kept at INFO** (user-facing milestones):
+  - Start / finish of discovery and each phase.
+  - Per-queue-module ``Discovery started | module=X``.
+  - Per-device ``Discovered <category> - <name>, Model: X``.
+  - Non-zero merge summaries (``Module store merge summary``,
+    ``Discovered links merged into store`` with actual changes).
+
+  **Kept at WARNING** (real issues worth surfacing):
+  - ``Discovery on_progress callback raised``.
+  - ``No output modules found in config to scan``.
+  - ``Unknown device detected ... please open an issue`` (asks for
+    user action).
+
+  End-user integration logs should now read as a concise progress
+  narrative — start, each module found, start/finish of each scan,
+  end — instead of a per-register stream. Anyone debugging the
+  discovery pipeline can flip the ``nikobus_connect.discovery``
+  logger to DEBUG to get the old firehose back.
+
 ## 0.4.8
 
 ### Changed

@@ -454,7 +454,7 @@ class NikobusDiscovery:
         inventory_type = (discovered_device or {}).get("module_type")
 
         if config_type and inventory_type and config_type != inventory_type:
-            _LOGGER.info(
+            _LOGGER.debug(
                 "Module type conflict | address=%s config=%s inventory=%s — using config",
                 address,
                 config_type,
@@ -542,7 +542,7 @@ class NikobusDiscovery:
                 consecutive_give_ups = 0
                 for reg in command_range:
                     if self._scan_trailer_seen:
-                        _LOGGER.info(
+                        _LOGGER.debug(
                             "Register scan short-circuited by trailer | module=%s "
                             "last_register=0x%02X sent=%d",
                             normalized_address,
@@ -571,7 +571,10 @@ class NikobusDiscovery:
                     else:
                         consecutive_give_ups += 1
                         if consecutive_give_ups >= MODULE_SCAN_CONSECUTIVE_GIVE_UP_LIMIT:
-                            _LOGGER.warning(
+                            # Expected on bank-incompatible sub-bytes; fast-fail
+                            # is a feature, not a problem. Keep at DEBUG so it
+                            # doesn't surface in the integration UI.
+                            _LOGGER.debug(
                                 "Register scan pass aborted — module not responding | "
                                 "module=%s base_cmd=%s sub=%s last_register=0x%02X "
                                 "consecutive_give_ups=%d sent=%d",
@@ -586,7 +589,7 @@ class NikobusDiscovery:
                             break
                     await asyncio.sleep(COMMAND_EXECUTION_DELAY)
                 else:
-                    _LOGGER.info(
+                    _LOGGER.debug(
                         "Register scan completed full range | module=%s sent=%d",
                         normalized_address,
                         registers_sent,
@@ -627,7 +630,10 @@ class NikobusDiscovery:
                 try:
                     await connection.send(command)
                 except Exception:
-                    _LOGGER.warning(
+                    # Typically a transient "Not connected" during
+                    # mid-scan reconnect cycles; the outer scan loop
+                    # fast-fails cleanly. Keep at DEBUG.
+                    _LOGGER.debug(
                         "Register scan send failed | module=%s reg=0x%02X attempt=%d",
                         module_address,
                         reg,
@@ -663,7 +669,10 @@ class NikobusDiscovery:
             finally:
                 listener._awaiting_response = False
 
-        _LOGGER.warning(
+        # Expected per-register behaviour on bank-incompatible sub-bytes
+        # (handled by the outer fast-fail). Keep at DEBUG to avoid
+        # cluttering the integration log.
+        _LOGGER.debug(
             "Register scan gave up on register | module=%s reg=0x%02X",
             module_address,
             reg,
@@ -1008,7 +1017,7 @@ class NikobusDiscovery:
         _LOGGER.debug(
             "Inventory record | raw=%s normalized=%s", raw_address, normalized
         )
-        _LOGGER.info("Inventory record | address=%s", normalized)
+        _LOGGER.debug("Inventory record | address=%s", normalized)
         self._ensure_pc_link_address(normalized, source="device_address_inventory")
         if is_new and self.discovery_stage == "inventory_addresses":
             self._create_task(
@@ -1067,7 +1076,7 @@ class NikobusDiscovery:
         else:
             self.discovered_devices[address] = base_device
 
-        _LOGGER.info(
+        _LOGGER.debug(
             "PC Link address recorded | address=%s source=%s",
             address,
             source,
@@ -1159,7 +1168,7 @@ class NikobusDiscovery:
             command_range = range(0xA4, 0x100)
 
         if not is_output_module:
-            _LOGGER.info(
+            _LOGGER.debug(
                 "Skipping register scan for non-output module | module=%s type=%s",
                 normalized_address,
                 self._module_type,
@@ -1199,7 +1208,7 @@ class NikobusDiscovery:
         )
         for extra_sub in extra_subs:
             function_code = base_command[:2]
-            _LOGGER.info(
+            _LOGGER.debug(
                 "Register scan pass starting | module=%s function=%s sub=%s",
                 normalized_address,
                 function_code,
@@ -1505,7 +1514,7 @@ class NikobusDiscovery:
             "command_mapping": command_mapping,
         }
 
-        _LOGGER.info(
+        _LOGGER.debug(
             "Discovery decoded commands | module=%s count=%d",
             self._decoded_buffer["module_address"],
             len(self._decoded_buffer["commands"]),
@@ -1517,12 +1526,22 @@ class NikobusDiscovery:
         updated_buttons, links_added, outputs_added = merge_linked_modules(
             self._button_data, command_mapping
         )
-        _LOGGER.info(
-            "Discovered links merged into store: %d buttons updated, %d link blocks added, %d outputs added.",
-            updated_buttons,
-            links_added,
-            outputs_added,
-        )
+        # Only log at INFO when something actually merged; routine
+        # no-op merges (the common case on re-discovery) stay at DEBUG.
+        if updated_buttons or links_added or outputs_added:
+            _LOGGER.info(
+                "Discovered links merged into store: %d buttons updated, %d link blocks added, %d outputs added.",
+                updated_buttons,
+                links_added,
+                outputs_added,
+            )
+        else:
+            _LOGGER.debug(
+                "Discovered links merged into store: %d buttons updated, %d link blocks added, %d outputs added.",
+                updated_buttons,
+                links_added,
+                outputs_added,
+            )
         if self._on_button_save is not None and (
             updated_buttons or links_added or outputs_added
         ):
