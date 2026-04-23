@@ -1,5 +1,54 @@
 # Changelog
 
+## 0.4.8
+
+### Changed
+
+- **Multi-pass scan tuned to only productive banks per module type.**
+  Real-hardware diff between pass 1 / pass 2 / pass 3 on both dimmer
+  (``0E6C``) and switch (``C9A5``) modules revealed which sub-byte
+  banks actually return unique records:
+
+  | Module | ``sub=04`` | ``sub=00`` | ``sub=01`` |
+  |---|---|---|---|
+  | dimmer | primary (ch 1–6) | **duplicate of 04** | secondary (ch 7–12) |
+  | switch | full (ch 1–12) | **duplicate of 04** | reverse-link phantoms |
+  | roller | assume full | **duplicate of 04** | assumed phantoms |
+
+  New per-type table ``_EXTRA_SCAN_SUBS_BY_MODULE_TYPE`` picks the
+  passes worth running:
+
+  ```python
+  _EXTRA_SCAN_SUBS_BY_MODULE_TYPE = {
+      "dimmer_module": ("01",),   # 2 passes: 04 + 01
+      "switch_module": (),         # 1 pass: 04
+      "roller_module": (),         # 1 pass: 04 (provisional)
+  }
+  ```
+
+  **Net scan-time change vs 0.4.7:**
+  - Dimmer: 3 passes → 2 passes (33% faster)
+  - Switch: 3 passes → 1 pass (66% faster — back to pre-0.4.5 baseline)
+  - Roller: 3 passes → 1 pass (66% faster — back to pre-0.4.5 baseline)
+
+  The dimmer-bank-2 fix from 0.4.7 is preserved; we drop only the
+  scans that wasted time with no record gain.
+
+### Notes
+
+- Roller behaviour is provisional — no real-hardware trace has
+  confirmed the roller bank layout yet. If a user encounters
+  missing roller records, we'll revisit the mapping.
+- Phantoms from switch ``sub=01`` never polluted the store (merge
+  layer rejected them as unmatched-button), so this is a
+  performance + log-cleanliness fix rather than a correctness fix.
+
+Regression tests:
+``test_scan_runs_single_pass_per_switch_module``,
+``test_scan_runs_single_pass_per_roller_module``,
+updated ``test_scan_runs_three_passes_per_dimmer_module`` (now 2
+passes, renamed intent).
+
 ## 0.4.7
 
 ### Fixed
