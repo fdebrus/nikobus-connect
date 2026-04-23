@@ -58,6 +58,27 @@ _LOGGER = logging.getLogger(__name__)
 _IR_BANK_CYCLE = ("C", "A", "D", "B")
 _IR_MAX_CHANNEL = 39
 
+# Additional scan-pass sub-bytes per module type, verified against
+# real-hardware traces in 0.4.7. The historic sub=04 pass runs first
+# for all output modules; this table adds secondary passes that proved
+# productive for that specific module type. Anything not listed falls
+# back to the single sub=04 pass.
+_EXTRA_SCAN_SUBS_BY_MODULE_TYPE: dict[str, tuple[str, ...]] = {
+    # Dimmer: sub=01 surfaces channels 7-12 (the "second group"
+    # referenced by the legacy Nikobus PC tool's ``group=2`` column).
+    # sub=00 returns byte-identical data to sub=04, skipped.
+    "dimmer_module": ("01",),
+    # Switch: sub=04 already returns the full channel-1..12 link
+    # table. sub=00 duplicates it; sub=01 returns reverse-link /
+    # config bytes the switch decoder misreads as phantom records
+    # that the merge layer then drops. No net benefit, ~40 s wasted.
+    "switch_module": (),
+    # Roller: no real-hardware trace yet. Provisionally mirror
+    # switch behaviour (single sub=04 pass); revisit if a roller
+    # module is proven to have a productive secondary bank.
+    "roller_module": (),
+}
+
 
 def decode_ir_channel(ir_slot_addr: str | None, key_raw: int | None, ir_base_byte: int = 0x80) -> str | None:
     """Derive the IR channel label from a bus slot address and key index.
@@ -1156,17 +1177,27 @@ class NikobusDiscovery:
             normalized_address, base_command, command_range
         )
 
-        # Passes 2 + 3: walk the same module twice more with sub-bytes
-        # ``00`` and ``01``. The PC-tool serial trace shows the three
-        # sub-bytes address distinct memory banks; records that never
-        # surface via the sub=04 scan (e.g. links written through the
-        # "group" column in legacy Nikobus PC software) live in those
-        # banks. Use the **same function code** as pass 1 — switches
-        # and rollers respond to ``10+xx``, dimmers respond to
-        # ``22+xx``; cross-mixing (e.g. ``10`` against a dimmer) gets
-        # silently dropped by the module and the fast-fail aborts the
-        # pass after a few seconds with no records gained.
-        for extra_sub in ("00", "01"):
+        # Additional passes: only the sub-bytes real-hardware traces
+        # showed are productive per module type. Mapping verified against
+        # both dimmer (0E6C) and switch (C9A5) live scans:
+        #
+        #   dimmer_module:  sub=04 -> primary bank (channels 1-6)
+        #                   sub=00 -> byte-identical to sub=04 (skip)
+        #                   sub=01 -> secondary bank (channels 7-12)
+        #   switch_module:  sub=04 -> full link table (channels 1-12)
+        #                   sub=00 -> byte-identical to sub=04 (skip)
+        #                   sub=01 -> reverse-link / config bytes the
+        #                             switch decoder misreads as phantom
+        #                             records (all rejected at merge,
+        #                             but wastes ~40 s of scan time)
+        #   roller_module:  no real-hardware trace yet; mirror switch.
+        #
+        # Unknown module types fall back to the single historic pass
+        # (sub=04) that 0.4.4 shipped.
+        extra_subs = _EXTRA_SCAN_SUBS_BY_MODULE_TYPE.get(
+            self._module_type, ()
+        )
+        for extra_sub in extra_subs:
             function_code = base_command[:2]
             _LOGGER.info(
                 "Register scan pass starting | module=%s function=%s sub=%s",

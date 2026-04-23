@@ -180,15 +180,14 @@ async def test_scan_runs_three_passes_per_dimmer_module(tmp_path):
 
     await discovery.query_module_inventory("0E6C")
 
-    assert len(calls) == 3, f"expected 3 passes, got {len(calls)}: {calls}"
-
-    # All three passes use function 22 (dimmer-specific). Sub-byte cycles.
+    # Dimmer: sub=04 (primary, channels 1-6) + sub=01 (secondary,
+    # channels 7-12). sub=00 was verified byte-identical to sub=04
+    # on real hardware and removed in 0.4.8 to halve scan time.
+    assert len(calls) == 2, f"expected 2 passes, got {len(calls)}: {calls}"
     assert calls[0]["base_cmd"] == "226C0E"
     assert calls[0]["sub_byte"] == "04"
     assert calls[1]["base_cmd"] == "226C0E"
-    assert calls[1]["sub_byte"] == "00"
-    assert calls[2]["base_cmd"] == "226C0E"
-    assert calls[2]["sub_byte"] == "01"
+    assert calls[1]["sub_byte"] == "01"
 
     for entry in calls:
         assert entry["address"] == "0E6C"
@@ -197,10 +196,12 @@ async def test_scan_runs_three_passes_per_dimmer_module(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_scan_runs_three_passes_per_switch_module(tmp_path):
-    """A switch module is also scanned three times. Pass 1 uses the
-    historic function-10 sub-04 path; passes 2 + 3 add sub-00 and
-    sub-01."""
+async def test_scan_runs_single_pass_per_switch_module(tmp_path):
+    """Switch modules need only the historic sub=04 pass. Real-hardware
+    testing showed sub=00 duplicates sub=04 and sub=01 returns reverse-
+    link bytes the switch decoder misreads as phantoms (all rejected at
+    merge time). 0.4.8 drops both to restore pre-0.4.5 scan time on
+    switches while keeping the dimmer bank fix."""
 
     coord = _make_coordinator()
     discovery = NikobusDiscovery(
@@ -229,13 +230,47 @@ async def test_scan_runs_three_passes_per_switch_module(tmp_path):
 
     await discovery.query_module_inventory("4707")
 
-    assert len(calls) == 3
+    assert len(calls) == 1, f"expected 1 pass for switch, got {len(calls)}: {calls}"
     assert calls[0]["base_cmd"] == "100747"
     assert calls[0]["sub_byte"] == "04"
-    assert calls[1]["base_cmd"] == "100747"
-    assert calls[1]["sub_byte"] == "00"
-    assert calls[2]["base_cmd"] == "100747"
-    assert calls[2]["sub_byte"] == "01"
+
+
+@pytest.mark.asyncio
+async def test_scan_runs_single_pass_per_roller_module(tmp_path):
+    """Roller modules: single sub=04 pass. No real-hardware trace
+    has proven a secondary bank productive, so we mirror switch
+    behaviour until one does."""
+
+    coord = _make_coordinator()
+    discovery = NikobusDiscovery(
+        coord,
+        config_dir=str(tmp_path),
+        create_task=_drop_coro,
+        button_data={"nikobus_button": {}},
+        on_button_save=None,
+    )
+
+    discovery.discovered_devices = {
+        "8394": {
+            "address": "8394",
+            "category": "Module",
+            "model": "05-001-02",
+            "channels": 6,
+            "device_type": "02",
+        }
+    }
+    discovery._is_known_module_address = MagicMock(return_value=True)
+    discovery._resolve_module_type = MagicMock(return_value="roller_module")
+
+    calls, fake_scan = _capture_scan_calls()
+    discovery._scan_module_registers = fake_scan
+    discovery._finalize_discovery = AsyncMock()
+
+    await discovery.query_module_inventory("8394")
+
+    assert len(calls) == 1, f"expected 1 pass for roller, got {len(calls)}: {calls}"
+    assert calls[0]["base_cmd"] == "109483"
+    assert calls[0]["sub_byte"] == "04"
 
 
 @pytest.mark.asyncio
