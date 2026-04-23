@@ -96,8 +96,11 @@ async def test_default_scan_range_starts_at_zero_for_output_module(tmp_path):
     assert calls, "register scan was never invoked"
     first = calls[0]
     scan_range = first["command_range"]
+    # Per 0.4.10 per-sub range tuning: sub=04 sweeps 0x00..0x3F
+    # (primary forward-link bank). Critically still starts at 0x00
+    # to preserve the 0.4.4 regression fix for records in 0x00..0x0F.
     assert scan_range.start == 0x00
-    assert scan_range.stop == 0x100
+    assert scan_range.stop == 0x40
     assert 0x00 in scan_range and 0x0F in scan_range
 
 
@@ -134,9 +137,11 @@ async def test_default_scan_range_starts_at_zero_for_dimmer_module(tmp_path):
 
     first = calls[0]
     scan_range = first["command_range"]
+    # Same tuned range as switches — sub=04 sweeps 0x00..0x3F on every
+    # output module (0.4.10). Dimmer pass-1 still uses the "22…"
+    # function prefix.
     assert scan_range.start == 0x00
-    assert scan_range.stop == 0x100
-    # Dimmer pass-1 uses the "22…" function prefix.
+    assert scan_range.stop == 0x40
     assert first["base_cmd"].startswith("22")
 
 
@@ -183,16 +188,23 @@ async def test_scan_runs_three_passes_per_dimmer_module(tmp_path):
     # Dimmer: sub=04 (primary, channels 1-6) + sub=01 (secondary,
     # channels 7-12). sub=00 was verified byte-identical to sub=04
     # on real hardware and removed in 0.4.8 to halve scan time.
+    #
+    # 0.4.10: each pass scans only its productive register range —
+    # sub=04 → 0x00..0x3F (64 regs), sub=01 → 0x70..0x96 (39 regs).
     assert len(calls) == 2, f"expected 2 passes, got {len(calls)}: {calls}"
+
     assert calls[0]["base_cmd"] == "226C0E"
     assert calls[0]["sub_byte"] == "04"
+    assert calls[0]["command_range"].start == 0x00
+    assert calls[0]["command_range"].stop == 0x40
+
     assert calls[1]["base_cmd"] == "226C0E"
     assert calls[1]["sub_byte"] == "01"
+    assert calls[1]["command_range"].start == 0x70
+    assert calls[1]["command_range"].stop == 0x97
 
     for entry in calls:
         assert entry["address"] == "0E6C"
-        assert entry["command_range"].start == 0x00
-        assert entry["command_range"].stop == 0x100
 
 
 @pytest.mark.asyncio
@@ -306,3 +318,85 @@ async def test_scan_skips_extra_passes_for_non_output_modules(tmp_path):
     await discovery.query_module_inventory("FF00")
 
     assert calls == []
+
+
+# ---------------------------------------------------------------------------
+# Per-sub register range tuning (0.4.10)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_dimmer_scan_total_registers_is_tuned_not_full_sweep(tmp_path):
+    """Combined sub=04 + sub=01 coverage for a dimmer is 64 + 39 = 103
+    registers, vs the pre-0.4.10 naive 2 × 256 = 512 sweep. Locks in
+    the ~80% reduction so nothing silently regresses back to full
+    0x00..0xFF per pass."""
+
+    coord = _make_coordinator()
+    discovery = NikobusDiscovery(
+        coord,
+        config_dir=str(tmp_path),
+        create_task=_drop_coro,
+        button_data={"nikobus_button": {}},
+        on_button_save=None,
+    )
+    discovery.discovered_devices = {
+        "0E6C": {
+            "address": "0E6C",
+            "category": "Module",
+            "model": "05-007-02",
+            "channels": 12,
+            "device_type": "03",
+        }
+    }
+    discovery._is_known_module_address = MagicMock(return_value=True)
+    discovery._resolve_module_type = MagicMock(return_value="dimmer_module")
+
+    calls, fake_scan = _capture_scan_calls()
+    discovery._scan_module_registers = fake_scan
+    discovery._finalize_discovery = AsyncMock()
+
+    await discovery.query_module_inventory("0E6C")
+
+    total_regs = sum(len(c["command_range"]) for c in calls)
+    # sub=04 → 0x00..0x3F (64) + sub=01 → 0x70..0x96 (39) = 103.
+    assert total_regs == 64 + 39, (
+        f"expected 103 total regs across 2 passes, got {total_regs}"
+    )
+    # Sanity guard against a future regression to full-sweep.
+    assert total_regs < 2 * 256
+
+
+@pytest.mark.asyncio
+async def test_switch_scan_single_pass_is_tuned_not_full_sweep(tmp_path):
+    """Switch single-pass total: 64 registers (sub=04 → 0x00..0x3F).
+    Pre-0.4.10 was 256."""
+
+    coord = _make_coordinator()
+    discovery = NikobusDiscovery(
+        coord,
+        config_dir=str(tmp_path),
+        create_task=_drop_coro,
+        button_data={"nikobus_button": {}},
+        on_button_save=None,
+    )
+    discovery.discovered_devices = {
+        "4707": {
+            "address": "4707",
+            "category": "Module",
+            "model": "05-000-02",
+            "channels": 12,
+            "device_type": "01",
+        }
+    }
+    discovery._is_known_module_address = MagicMock(return_value=True)
+    discovery._resolve_module_type = MagicMock(return_value="switch_module")
+
+    calls, fake_scan = _capture_scan_calls()
+    discovery._scan_module_registers = fake_scan
+    discovery._finalize_discovery = AsyncMock()
+
+    await discovery.query_module_inventory("4707")
+
+    assert len(calls) == 1
+    assert len(calls[0]["command_range"]) == 64

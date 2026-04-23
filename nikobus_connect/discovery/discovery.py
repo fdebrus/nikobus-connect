@@ -79,6 +79,34 @@ _EXTRA_SCAN_SUBS_BY_MODULE_TYPE: dict[str, tuple[str, ...]] = {
     "roller_module": (),
 }
 
+# Productive register range per sub-byte. Derived from PC-software
+# serial trace: each sub-byte addresses a distinct memory region on
+# the module, and each region occupies a narrow register band — not
+# the full 0x00..0xFF. Scanning only the productive band cuts scan
+# time ~4× per pass.
+#
+#   sub=04 / sub=00  → forward link records (primary bank).
+#                      PC tool sweeps 0x05..0x3E. We start at 0x00 to
+#                      preserve the 0.4.4 regression fix (records
+#                      stored in 0x00..0x0F on some real hardware).
+#   sub=01           → extended link / channel-config bank.
+#                      PC tool sweeps 0x70..0x96 exactly.
+_SCAN_REGISTER_RANGE_BY_SUB: dict[str, range] = {
+    "04": range(0x00, 0x40),
+    "00": range(0x00, 0x40),
+    "01": range(0x70, 0x97),
+}
+
+# Conservative fallback when a caller hands us a sub-byte the trace
+# didn't cover (keeps future sub-bytes probeable without a silent skip).
+_DEFAULT_SCAN_REGISTER_RANGE = range(0x00, 0x100)
+
+
+def _scan_range_for_sub(sub_byte: str) -> range:
+    """Return the productive register range for a given sub-byte."""
+
+    return _SCAN_REGISTER_RANGE_BY_SUB.get(sub_byte, _DEFAULT_SCAN_REGISTER_RANGE)
+
 
 def decode_ir_channel(ir_slot_addr: str | None, key_raw: int | None, ir_base_byte: int = 0x80) -> str | None:
     """Derive the IR channel label from a bus slot address and key index.
@@ -1157,13 +1185,10 @@ class NikobusDiscovery:
             base_command = f"10{normalized_address[2:4] + normalized_address[:2]}"
             if self._module_type == "dimmer_module":
                 base_command = f"22{normalized_address[2:4] + normalized_address[:2]}"
-            # Full link-record table. Legacy code started at 0x10, which
-            # missed records stored in 0x00..0x0F — confirmed with real
-            # hardware where a 4-key button had 1A/1B link records that
-            # never surfaced. Scan the whole register space; the decoder
-            # rejects anything that doesn't validate as a link record, so
-            # low-register config data (if any) doesn't produce phantoms.
-            command_range = range(0x00, 0x100)
+            # Per-pass register range is picked below from
+            # _SCAN_REGISTER_RANGE_BY_SUB; this placeholder is only
+            # used by the non-output-module early-return path below.
+            command_range = None
         else:
             command_range = range(0xA4, 0x100)
 
@@ -1179,11 +1204,16 @@ class NikobusDiscovery:
             await self._finalize_discovery(normalized_address)
             return
 
-        # Pass 1: existing scan path (function-22 sub=04 for dimmer,
-        # function-10 sub=04 for switch/roller). This is the bank we've
-        # always read.
+        # Pass 1: primary bank (sub=04). Function-22 for dimmer,
+        # function-10 for switch/roller. Register range tuned to
+        # 0x00..0x3F — records live there on all hardware we've
+        # observed; the full-sweep of 0.4.5..0.4.8 wasted ~192 empty
+        # registers per pass.
         await self._scan_module_registers(
-            normalized_address, base_command, command_range
+            normalized_address,
+            base_command,
+            _scan_range_for_sub("04"),
+            sub_byte="04",
         )
 
         # Additional passes: only the sub-bytes real-hardware traces
@@ -1208,16 +1238,20 @@ class NikobusDiscovery:
         )
         for extra_sub in extra_subs:
             function_code = base_command[:2]
+            extra_range = _scan_range_for_sub(extra_sub)
             _LOGGER.debug(
-                "Register scan pass starting | module=%s function=%s sub=%s",
+                "Register scan pass starting | module=%s function=%s sub=%s "
+                "range=0x%02X..0x%02X",
                 normalized_address,
                 function_code,
                 extra_sub,
+                extra_range.start,
+                extra_range.stop - 1,
             )
             await self._scan_module_registers(
                 normalized_address,
                 base_command,
-                command_range,
+                extra_range,
                 sub_byte=extra_sub,
             )
 
