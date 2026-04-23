@@ -1,5 +1,51 @@
 # Changelog
 
+## 0.4.10
+
+### Changed
+
+- **Register scan now uses per-sub-byte productive register ranges.**
+  0.4.8 tuned which sub-bytes run per module type (dimmer: 04+01,
+  switch/roller: 04 only). 0.4.9 quieted the logs. 0.4.10 completes
+  the scan optimisation by narrowing each pass to the specific
+  memory region that sub-byte addresses on the module.
+
+  Per-sub register ranges — derived from the PC-software serial
+  trace and verified against real hardware:
+
+  | Sub-byte | Range | Size | Memory region |
+  |---|---|---|---|
+  | ``04`` | ``0x00..0x3F`` | 64 regs | Primary forward-link records |
+  | ``00`` | ``0x00..0x3F`` | 64 regs | Same bank as sub=04 (table kept for callers that target it explicitly) |
+  | ``01`` | ``0x70..0x96`` | 39 regs | Extended / channel-config bank |
+
+  New module-level constants in ``discovery.py``:
+  ``_SCAN_REGISTER_RANGE_BY_SUB``, ``_DEFAULT_SCAN_REGISTER_RANGE``,
+  and ``_scan_range_for_sub()``.
+
+  **Net per-module scan-time change vs 0.4.9:**
+
+  | Module | 0.4.9 | 0.4.10 | Δ |
+  |---|---|---|---|
+  | Dimmer (2 passes: 04+01) | 2 × 256 = 512 regs | 64 + 39 = 103 regs | **−80%** |
+  | Switch (1 pass: 04) | 256 regs | 64 regs | **−75%** |
+  | Roller (1 pass: 04) | 256 regs | 64 regs | **−75%** |
+
+  **No record regression.** Every productive register the full
+  sweep hit is still covered: dimmer records observed in
+  ``0x20..0x3E`` sit inside ``0x00..0x3F``; the ``1E0D48`` ch9
+  record that the 0.4.7 bank probe unlocked sits inside the sub=01
+  ``0x70..0x96`` window. Start at ``0x00`` (not PC tool's ``0x05``)
+  preserves the 0.4.4 fix for records observed in ``0x00..0x0F``
+  on some real hardware.
+
+  Unknown sub-bytes fall back to the full ``0x00..0xFF`` sweep so
+  future protocol variants stay probeable without silent skips.
+
+  New regression tests:
+  ``test_dimmer_scan_total_registers_is_tuned_not_full_sweep``,
+  ``test_switch_scan_single_pass_is_tuned_not_full_sweep``.
+
 ## 0.4.9
 
 ### Changed
