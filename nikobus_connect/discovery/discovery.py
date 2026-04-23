@@ -1156,25 +1156,27 @@ class NikobusDiscovery:
             normalized_address, base_command, command_range
         )
 
-        # Passes 2 + 3: function-10 with sub=00 and sub=01. The PC-tool
-        # serial trace shows three distinct sub-bytes (00/01/04), each
-        # addressing a different memory bank on the module. Records that
-        # never surface via the sub=04 scan (e.g. links written through
-        # the "group" column in legacy Nikobus PC software) live in one
-        # of these other banks. Triples scan time per output module —
-        # tuning the per-bank register range can win it back later once
-        # the productive ranges are mapped from real hardware.
-        addr_swap = normalized_address[2:4] + normalized_address[:2]
-        fn10_base = f"10{addr_swap}"
+        # Passes 2 + 3: walk the same module twice more with sub-bytes
+        # ``00`` and ``01``. The PC-tool serial trace shows the three
+        # sub-bytes address distinct memory banks; records that never
+        # surface via the sub=04 scan (e.g. links written through the
+        # "group" column in legacy Nikobus PC software) live in those
+        # banks. Use the **same function code** as pass 1 — switches
+        # and rollers respond to ``10+xx``, dimmers respond to
+        # ``22+xx``; cross-mixing (e.g. ``10`` against a dimmer) gets
+        # silently dropped by the module and the fast-fail aborts the
+        # pass after a few seconds with no records gained.
         for extra_sub in ("00", "01"):
+            function_code = base_command[:2]
             _LOGGER.info(
-                "Register scan pass starting | module=%s function=10 sub=%s",
+                "Register scan pass starting | module=%s function=%s sub=%s",
                 normalized_address,
+                function_code,
                 extra_sub,
             )
             await self._scan_module_registers(
                 normalized_address,
-                fn10_base,
+                base_command,
                 command_range,
                 sub_byte=extra_sub,
             )

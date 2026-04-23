@@ -147,9 +147,11 @@ async def test_default_scan_range_starts_at_zero_for_dimmer_module(tmp_path):
 
 @pytest.mark.asyncio
 async def test_scan_runs_three_passes_per_dimmer_module(tmp_path):
-    """A dimmer module is scanned three times: the historic function-22
-    sub=04 pass, then function-10 sub=00 and sub=01 for the additional
-    memory banks revealed by the PC-software trace."""
+    """A dimmer module is scanned three times — all three passes use
+    the dimmer-specific function ``22`` with sub-bytes ``04``, ``00``,
+    ``01``. Real-hardware probing showed dimmers silently drop
+    function-``10`` reads, so the extra passes must reuse the pass-1
+    function code, not switch to ``10``."""
 
     coord = _make_coordinator()
     discovery = NikobusDiscovery(
@@ -180,15 +182,12 @@ async def test_scan_runs_three_passes_per_dimmer_module(tmp_path):
 
     assert len(calls) == 3, f"expected 3 passes, got {len(calls)}: {calls}"
 
-    # Pass 1: existing dimmer scan — function 22, sub 04.
+    # All three passes use function 22 (dimmer-specific). Sub-byte cycles.
     assert calls[0]["base_cmd"] == "226C0E"
     assert calls[0]["sub_byte"] == "04"
-
-    # Passes 2 + 3: function 10 with the new sub-bytes. Both walk full
-    # 0x00..0xFF.
-    assert calls[1]["base_cmd"] == "106C0E"
+    assert calls[1]["base_cmd"] == "226C0E"
     assert calls[1]["sub_byte"] == "00"
-    assert calls[2]["base_cmd"] == "106C0E"
+    assert calls[2]["base_cmd"] == "226C0E"
     assert calls[2]["sub_byte"] == "01"
 
     for entry in calls:

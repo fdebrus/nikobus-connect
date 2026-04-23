@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.4.7
+
+### Fixed
+
+- **Multi-pass scan now uses the right function code per module type.**
+  0.4.5 hard-coded function ``10`` for the two extra passes (sub=00,
+  sub=01) regardless of module type. That was wrong for dimmer
+  modules — they only respond to function ``22`` reads; ``10``-
+  prefixed commands are silently dropped, so passes 2 + 3 always
+  fast-failed against dimmers and recovered zero records.
+
+  Real-hardware probing confirmed:
+  - Switch / roller modules: respond to ``10+04``, ``10+00``, ``10+01``.
+  - Dimmer modules: respond to ``22+04``, presumably ``22+00`` and
+    ``22+01`` (now reachable for the first time).
+
+  Fix: extra passes reuse the same function code as pass 1 instead
+  of hard-coding ``10``. Switch/roller behaviour is unchanged
+  (``10`` was already correct for them); dimmers now actually probe
+  their additional banks.
+
+  Updated test:
+  ``test_scan_runs_three_passes_per_dimmer_module`` — now pins
+  ``226C0E`` for all three passes, not the previously-broken mix of
+  ``226C0E`` + ``106C0E``.
+
 ## 0.4.6
 
 ### Fixed
