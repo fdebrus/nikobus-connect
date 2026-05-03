@@ -1,5 +1,56 @@
 # Changelog
 
+## 0.4.11
+
+### Added
+
+- **PC-Logic (05-201) is now visible to discovery — Stage 1 instrumentation.**
+  Heavily PC-Logic-routed installs were ending up with empty
+  ``linked_modules`` on the majority of buttons. Root cause: the
+  output-module flash records reference PC-Logic-synthesized
+  addresses, but PC-Logic itself was excluded from the register-scan
+  queue, so the merge layer had no namespace to resolve those
+  addresses against and dropped the records.
+
+  This release does not yet decode PC-Logic BP-cell bytes — that's
+  Stage 2, designed against real bytes from a Stage-1 dump. What
+  ships in 0.4.11:
+
+  - ``pc_logic`` removed from the scan-queue exclusion set in
+    ``query_module_inventory`` and from the ``non_output_modules``
+    set in the per-module inventory path. PC-Logic modules now flow
+    through the same register-scan engine as switch/dimmer/roller.
+  - New ``nikobus_connect/discovery/pc_logic_decoder.py`` with a
+    logging-only stub (``PcLogicDecoder``) that the engine invokes
+    for ``module_type=pc_logic``. Every chunk is logged at INFO as
+    ``PC-Logic chunk | module=<addr> payload=<hex>``, so users can
+    capture the dump without enabling component-level debug.
+  - ``decode_command_payload`` in ``discovery/protocol.py`` gains a
+    ``pc_logic`` dispatch branch.
+  - ``_CHUNK_LENGTHS`` in ``chunk_decoder.py`` gains
+    ``"pc_logic": 12`` (best guess from the PC-software BP screenshots;
+    will be refined in Stage 2 once real bytes land).
+
+  **No-op for installs without PC-Logic.** The queue addition is
+  predicated on a ``pc_logic``-typed module existing in
+  ``dict_module_data``; installs without one see zero behaviour
+  change. The stub decoder cannot produce a record, so it cannot
+  feed the merge layer regardless.
+
+- **DEVICE_TYPES additions.** Three confirmed device-type → model
+  mappings that were previously falling through to ``other_module``:
+
+  | Hex | Model  | Channels | Name |
+  |-----|--------|----------|------|
+  | ``22`` | 05-057 | 4 | Switch Interface |
+  | ``26`` | 05-314 | 4 | RF868 Mini Transmitter with 4 Operation Points |
+  | ``2B`` | 05-205 | — | Audio Distribution |
+
+  ``0x22`` and ``0x26`` are Button category (no register scan).
+  ``0x2B`` is a Module but stays out of the scan path via the
+  ``other_module`` fallback in ``get_module_type_from_device_type``
+  — its dedicated decoder is tracked separately.
+
 ## 0.4.10
 
 ### Changed

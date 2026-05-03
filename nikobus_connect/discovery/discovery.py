@@ -16,6 +16,7 @@ from .base import (
     PHASE_REGISTER_SCAN,
 )
 from .dimmer_decoder import DimmerDecoder, EXPECTED_CHUNK_LEN
+from .pc_logic_decoder import PcLogicDecoder
 from .shutter_decoder import ShutterDecoder
 from .switch_decoder import SwitchDecoder
 from .mapping import (
@@ -387,6 +388,7 @@ class NikobusDiscovery:
             DimmerDecoder(coordinator),
             SwitchDecoder(coordinator),
             ShutterDecoder(coordinator),
+            PcLogicDecoder(coordinator),
         ]
         self._timeout_task: asyncio.Task | None = None
         self._inventory_timeout_task: asyncio.Task | None = None
@@ -1115,7 +1117,7 @@ class NikobusDiscovery:
             all_addresses = []
             dict_data = getattr(self._coordinator, "dict_module_data", {})
             for module_type, modules in dict_data.items():
-                if module_type not in ("pc_link", "pc_logic", "feedback_module", "other_module"):
+                if module_type not in ("pc_link", "feedback_module", "other_module"):
                     module_iter = modules.values() if isinstance(modules, dict) else modules
                     for module in module_iter:
                         addr = module.get("address") if isinstance(module, dict) else None
@@ -1167,7 +1169,15 @@ class NikobusDiscovery:
                 normalized_address, discovered_device
             )
 
-        non_output_modules = {"pc_link", "pc_logic", "feedback_module", "other_module"}
+        # ``pc_logic`` is intentionally NOT in this set as of 0.4.11:
+        # PC-Logic (05-201) holds the BP-cell connection table that
+        # forwards button presses to output modules in heavily-routed
+        # installs. Without scanning it, output-module flash records
+        # that reference PC-Logic-synthesized addresses can't be
+        # resolved and ``linked_modules`` ends up empty for those
+        # buttons. The PcLogicDecoder is currently a logging stub
+        # (Stage 1 instrumentation); see CHANGELOG 0.4.11.
+        non_output_modules = {"pc_link", "feedback_module", "other_module"}
         is_output_module = self._module_type not in non_output_modules
 
         coordinator_channels = (

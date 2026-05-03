@@ -1,0 +1,225 @@
+"""Stage-1 PC-Logic instrumentation contract.
+
+These tests pin the 0.4.11 behaviour: PC-Logic flows through the
+register-scan engine and produces logged chunk dumps without
+attempting to decode them. The actual byte decoder lands in Stage 2;
+these tests exist to make sure we don't accidentally regress the
+queue inclusion or the stub-decoder wiring before then.
+"""
+
+from __future__ import annotations
+
+import logging
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+
+from nikobus_connect.discovery.chunk_decoder import _CHUNK_LENGTHS
+from nikobus_connect.discovery.discovery import NikobusDiscovery
+from nikobus_connect.discovery.mapping import (
+    DEVICE_TYPES,
+    get_module_type_from_device_type,
+)
+from nikobus_connect.discovery.pc_logic_decoder import PcLogicDecoder, decode
+from nikobus_connect.discovery.protocol import decode_command_payload
+
+
+def _drop_coro(coro):
+    try:
+        coro.close()
+    except AttributeError:
+        pass
+    task = MagicMock()
+    task.cancel = MagicMock()
+    return task
+
+
+def _make_coordinator() -> MagicMock:
+    coord = MagicMock()
+    coord.dict_module_data = {}
+    coord.discovery_running = False
+    coord.discovery_module = True
+    coord.discovery_module_address = None
+    coord.inventory_query_type = None
+    coord.get_module_channel_count = MagicMock(return_value=0)
+    return coord
+
+
+# ---------------------------------------------------------------------------
+# DEVICE_TYPES additions (0x22, 0x26, 0x2B)
+# ---------------------------------------------------------------------------
+
+
+def test_device_type_0x22_is_switch_interface():
+    entry = DEVICE_TYPES["22"]
+    assert entry["Model"] == "05-057"
+    assert entry["Category"] == "Button"
+
+
+def test_device_type_0x26_is_rf868_mini_transmitter():
+    entry = DEVICE_TYPES["26"]
+    assert entry["Model"] == "05-314"
+    assert entry["Category"] == "Button"
+    assert entry["Channels"] == 4
+
+
+def test_device_type_0x2b_is_audio_distribution_module():
+    entry = DEVICE_TYPES["2B"]
+    assert entry["Model"] == "05-205"
+    assert entry["Category"] == "Module"
+    # No dedicated decoder yet — falls through to other_module.
+    assert get_module_type_from_device_type("2B") == "other_module"
+
+
+# ---------------------------------------------------------------------------
+# PC-Logic register scan inclusion
+# ---------------------------------------------------------------------------
+
+
+def test_get_module_type_pc_logic_resolves_correctly():
+    # PC-Logic is at device type 0x08; verify the resolver still
+    # buckets it as ``pc_logic`` after the changes around the
+    # exclusion sets.
+    assert get_module_type_from_device_type("08") == "pc_logic"
+
+
+@pytest.mark.asyncio
+async def test_pc_logic_module_is_included_in_scan_all_queue(tmp_path):
+    """``query_module_inventory("ALL")`` must enqueue PC-Logic addresses
+    so the scan engine walks 05-201 register memory."""
+
+    coord = _make_coordinator()
+    coord.dict_module_data = {
+        "switch_module": {"4707": {"address": "4707"}},
+        "pc_logic": {"80D9": {"address": "80D9"}},
+    }
+    discovery = NikobusDiscovery(
+        coord,
+        config_dir=str(tmp_path),
+        create_task=_drop_coro,
+        button_data={"nikobus_button": {}},
+        on_button_save=None,
+    )
+
+    discovery._start_next_register_scan = AsyncMock()
+
+    await discovery.query_module_inventory("ALL")
+
+    queued = discovery._register_scan_queue
+    assert "80D9" in queued, "PC-Logic address was filtered out of the queue"
+    assert "4707" in queued, "regression: switch module dropped from queue"
+
+
+@pytest.mark.asyncio
+async def test_pc_logic_module_runs_register_scan(tmp_path):
+    """A PC-Logic module reaching ``query_module_inventory(addr)`` must
+    invoke ``_scan_module_registers`` rather than short-circuiting via
+    the non-output-module skip path."""
+
+    coord = _make_coordinator()
+    discovery = NikobusDiscovery(
+        coord,
+        config_dir=str(tmp_path),
+        create_task=_drop_coro,
+        button_data={"nikobus_button": {}},
+        on_button_save=None,
+    )
+
+    discovery.discovered_devices = {
+        "80D9": {
+            "address": "80D9",
+            "category": "Module",
+            "model": "05-201",
+            "device_type": "08",
+        }
+    }
+    discovery._is_known_module_address = MagicMock(return_value=True)
+    discovery._resolve_module_type = MagicMock(return_value="pc_logic")
+
+    scan_calls: list[dict] = []
+
+    async def fake_scan(address, base_cmd, command_range, sub_byte="04"):
+        scan_calls.append(
+            {
+                "address": address,
+                "base_cmd": base_cmd,
+                "sub_byte": sub_byte,
+            }
+        )
+
+    discovery._scan_module_registers = fake_scan
+    discovery._finalize_discovery = AsyncMock()
+
+    await discovery.query_module_inventory("80D9")
+
+    assert scan_calls, "PC-Logic module was skipped instead of scanned"
+    # Pass 1 uses the standard sub=04 with the function-10 prefix
+    # (PC-Logic is not a dimmer).
+    assert scan_calls[0]["sub_byte"] == "04"
+    assert scan_calls[0]["base_cmd"].startswith("10")
+
+
+# ---------------------------------------------------------------------------
+# Stub decoder contract
+# ---------------------------------------------------------------------------
+
+
+def test_pc_logic_decoder_is_registered_on_discovery(tmp_path):
+    coord = _make_coordinator()
+    discovery = NikobusDiscovery(
+        coord,
+        config_dir=str(tmp_path),
+        create_task=_drop_coro,
+        button_data={"nikobus_button": {}},
+        on_button_save=None,
+    )
+
+    pc_logic_decoders = [
+        d for d in discovery._decoders if isinstance(d, PcLogicDecoder)
+    ]
+    assert len(pc_logic_decoders) == 1, "PcLogicDecoder is not registered"
+    assert pc_logic_decoders[0].can_handle("pc_logic")
+
+
+def test_pc_logic_decoder_returns_none_and_logs_at_info(caplog):
+    """Stage 1 contract: decoder must NOT produce a record, must log
+    raw payload at INFO with the module address."""
+
+    context = MagicMock()
+    context.module_address = "80D9"
+
+    with caplog.at_level(logging.INFO, logger="nikobus_connect.discovery.pc_logic_decoder"):
+        result = decode("CAFEBABE1234", ["CA", "FE", "BA", "BE", "12", "34"], context)
+
+    assert result is None, "Stage 1 decoder must not produce records"
+    log_text = caplog.text
+    assert "PC-Logic chunk" in log_text
+    assert "80D9" in log_text
+    assert "CAFEBABE1234" in log_text
+
+
+def test_decode_command_payload_routes_pc_logic_to_stub(caplog):
+    """The dispatch table in ``discovery/protocol.py`` must route
+    ``module_type=pc_logic`` to ``pc_logic_decoder`` so the stub
+    actually fires when the engine asks the chunking layer to decode."""
+
+    coord = MagicMock()
+    coord.get_module_channel_count = MagicMock(return_value=0)
+
+    with caplog.at_level(logging.INFO, logger="nikobus_connect.discovery.pc_logic_decoder"):
+        result = decode_command_payload(
+            "112233445566",
+            "pc_logic",
+            coord,
+            module_address="80D9",
+        )
+
+    assert result is None
+    assert "PC-Logic chunk" in caplog.text
+
+
+def test_pc_logic_chunk_length_matches_switch_stride():
+    """Stage 1 best guess: 12 hex chars per BP cell. Pin it so a
+    Stage-2 refinement is an explicit, visible change."""
+
+    assert _CHUNK_LENGTHS["pc_logic"] == 12

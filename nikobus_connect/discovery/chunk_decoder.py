@@ -12,7 +12,16 @@ _LOGGER = logging.getLogger(__name__)
 
 
 _CRC_LEN = 6
-_CHUNK_LENGTHS = {"switch_module": 12, "roller_module": 12, "dimmer_module": 16}
+_CHUNK_LENGTHS = {
+    "switch_module": 12,
+    "roller_module": 12,
+    "dimmer_module": 16,
+    # PC-Logic BP-cell stride is a Stage-1 best guess based on the
+    # PC-software BP screenshots (input ref + output ref + mode + T1/T2
+    # ~= 6 bytes / 12 hex chars, same as switch/roller). Will be
+    # refined in Stage 2 once real bytes from the logging stub land.
+    "pc_logic": 12,
+}
 
 
 class BaseChunkingDecoder:

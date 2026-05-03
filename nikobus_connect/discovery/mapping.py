@@ -60,6 +60,12 @@ DEVICE_TYPES = {
         "Channels": 2,
         "Name": "RF Transmitter with 2 Operation Points",
     },
+    "22": {
+        "Category": "Button",
+        "Model": "05-057",
+        "Channels": 4,
+        "Name": "Switch Interface",
+    },
     "23": {
         "Category": "Button",
         "Model": "05-312",
@@ -71,6 +77,17 @@ DEVICE_TYPES = {
         "Model": "05-311",
         "Channels": 1,
         "Name": "Portable RF Transmitter with 1 Operation Point",
+    },
+    "26": {
+        "Category": "Button",
+        "Model": "05-314",
+        "Channels": 4,
+        "Name": "RF868 Mini Transmitter with 4 Operation Points",
+    },
+    "2B": {
+        "Category": "Module",
+        "Model": "05-205",
+        "Name": "Audio Distribution",
     },
     "28": {
         "Category": "Button",
