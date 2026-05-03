@@ -1,5 +1,46 @@
 # Changelog
 
+## 0.4.13
+
+### Changed
+
+- **PC-Logic register scan widened to the full 0x00..0xFF range
+  (Stage 1.5 instrumentation).** The Stage-1 dump in 0.4.11/0.4.12
+  reused the output-module's tuned `0x00..0x3F` band for PC-Logic,
+  which on roswennen's 80D9 LOM (Nikobus-HA#303) returned a 4×16
+  cell-index directory followed by all-FF — exactly the geometry of
+  one BP grid's directory, but no per-cell programming. Five BP grids
+  are programmed on that LOM, so the cell content has to live
+  somewhere; this release extends PC-Logic's primary `sub=04` pass
+  out to the full register range so a re-run can confirm whether the
+  rest of the grid lives past the directory.
+
+  - New `_SCAN_REGISTER_RANGE_BY_MODULE_TYPE` table in
+    `discovery.py`, keyed by `module_type`. Currently only
+    `pc_logic` has an entry; it overrides the per-sub mapping with
+    `range(0x00, 0x100)`.
+  - `_scan_range_for_sub(sub_byte, module_type=None)` consults the
+    per-type table first, then falls back to the per-sub mapping.
+    Default behaviour for output modules is unchanged.
+
+  **No-op for installs without PC-Logic.** Switch / dimmer / roller
+  scans keep their tuned `0x00..0x3F` and `0x70..0x96` bands —
+  regression test
+  `test_switch_register_scan_range_unaffected_by_pc_logic_override`
+  pins this. PC-Logic scans add ~25 s per LOM at the current
+  `COMMAND_EXECUTION_DELAY`; that's the cost of the experiment.
+
+  This is a Stage-1.5 step on the path to the real Stage-2 BP-cell
+  decoder. Once the wider sweep produces real bytes (or proves the
+  cell content lives at separate BP-unit bus addresses), a follow-up
+  release ships the decoder itself.
+
+### Fixed
+
+- **`__version__` in `nikobus_connect/discovery/__init__.py` now
+  matches the package version.** The 0.4.12 bump only updated
+  `pyproject.toml`, leaving `__version__` reporting `0.4.11`.
+
 ## 0.4.11
 
 ### Added
