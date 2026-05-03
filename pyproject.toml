@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "nikobus-connect"
-version = "0.4.10"
+version = "0.4.11"
 description = "Asynchronous library for Nikobus home automation with device discovery"
 requires-python = ">=3.11"
 license = {text = "MIT"}
