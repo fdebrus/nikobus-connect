@@ -157,6 +157,15 @@ def _parse_link_record(chunk_hex: str, marker: int) -> LinkRecord | None:
 
     Layout (validated against trace):
         ``<chan> 00 00 00 <mode> 00 00 <flag> <p0> <p1> <p2> 00 <slot> 00 00 00``
+
+    A real link record carries non-FF data in at least one of the
+    extracted fields. If the marker (``byte 0``) is non-FF but every
+    other extracted field is 0xFF, the chunk is treated as a
+    near-empty bus artefact — e.g. a stray bit-flip in an otherwise
+    all-FF response, observed in practice on real hardware — and
+    rejected. Without this guard, all-FF chunks with a single noise
+    byte at an unparsed position synthesize phantom link records
+    with ``channel_idx=0xFF mode=0xFF flag=0xFF payload=FFFFFF slot=0xFF``.
     """
 
     try:
@@ -165,6 +174,16 @@ def _parse_link_record(chunk_hex: str, marker: int) -> LinkRecord | None:
         payload_bytes = chunk_hex[16:22]
         slot = int(chunk_hex[24:26], 16)
     except ValueError:
+        return None
+
+    payload_all_ff = bool(payload_bytes) and all(c == "F" for c in payload_bytes.upper())
+    if (
+        marker == 0xFF
+        and mode_byte == 0xFF
+        and flag_byte == 0xFF
+        and payload_all_ff
+        and slot == 0xFF
+    ):
         return None
 
     return LinkRecord(

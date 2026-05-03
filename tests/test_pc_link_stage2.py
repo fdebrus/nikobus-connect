@@ -127,9 +127,12 @@ async def test_pc_link_module_runs_register_scan(tmp_path):
     assert scan_calls[0]["base_cmd"].startswith("10"), (
         "PC-Link uses function 10 (it's not a dimmer)"
     )
-    assert scan_calls[0]["command_range"] == range(0x00, 0x100), (
-        "PC-Link must sweep the full register range — productive band "
-        "differs from the output-module 0x00..0x3F tuning."
+    assert scan_calls[0]["command_range"] == range(0xA3, 0x100), (
+        "PC-Link scan range must be tuned to the productive band "
+        "0xA3..0xFF observed in the Nikobus PC-software trace. The "
+        "0.5.0 full-sweep was observed to abort at register 0x04 in "
+        "real installs because PC Link doesn't respond to reads in "
+        "0x00..0x07, tripping the consecutive-give-up early-stop."
     )
 
 

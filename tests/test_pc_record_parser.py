@@ -235,3 +235,70 @@ def test_byte_zero_zero_routes_to_registry_record_only_when_marker_matches():
     record = parse_pc_record("00" + "00" * 15)
     assert isinstance(record, LinkRecord)
     assert record.channel_index == 0
+
+
+# ---------------------------------------------------------------------------
+# Near-empty chunk rejection (0.5.1)
+# ---------------------------------------------------------------------------
+#
+# 0.5.0 shipped with an empty-detection that required every hex char
+# to be 'F'. On fdebrus's own install the PC Logic register scan
+# returned a chunk like ``FFFFFFFFFFFFFFFFFFFFFFFFFFFF05FF`` — all
+# bytes 0xFF except for one stray 0x05 at byte offset 14, which the
+# parser doesn't even extract. The 0.5.0 parser routed it to
+# ``_parse_link_record`` and emitted a phantom record with
+# ``channel_idx=0xFF mode=0xFF flag=0xFF payload=FFFFFF slot=0xFF``.
+# 0.5.1 tightens the link-record check: if every extracted field
+# (channel_idx, mode_byte, flag_byte, payload_bytes, slot) is 0xFF,
+# the chunk is rejected as a near-empty bus artefact.
+
+
+def test_near_empty_chunk_with_stray_byte_is_rejected():
+    """The exact chunk observed on fdebrus's PC Logic at 940C
+    (response_index=198 and 230, log timestamp 22:17:15 on
+    2026-05-03). 0.5.0 emitted a phantom link record; 0.5.1 must
+    return None."""
+
+    chunk = "FFFFFFFFFFFFFFFFFFFFFFFFFFFF05FF"
+    assert parse_pc_record(chunk) is None
+
+
+def test_all_ff_extracted_fields_with_non_ff_marker_is_rejected():
+    """A chunk where byte 0 is 0xFF (so it's not a registry marker)
+    AND every other extracted field is 0xFF must be rejected. Byte 0
+    being 0xFF is the literal "no record" marker the controller
+    emits; a record with that marker carrying only 0xFF data isn't a
+    link, it's an empty register that picked up a bit of bus noise."""
+
+    # All fields the parser extracts are 0xFF; bytes the parser
+    # ignores (1-3, 5-6, 11, 13, 15) carry junk that shouldn't matter.
+    chunk = "FF" * 16  # full all-FF — pure empty marker
+    assert parse_pc_record(chunk) is None
+
+    # Same all-FF in extracted fields but with junk in unused byte 14.
+    chunk_with_junk_at_14 = "FF" * 14 + "AA" + "FF"
+    assert parse_pc_record(chunk_with_junk_at_14) is None
+
+    # Junk in unused byte 13.
+    chunk_with_junk_at_13 = "FF" * 13 + "55" + "FF" * 2
+    assert parse_pc_record(chunk_with_junk_at_13) is None
+
+
+def test_link_record_with_real_data_in_one_field_is_accepted():
+    """Even a single non-FF in any of the extracted fields qualifies
+    the chunk as a real link record. Only the all-FF combination is
+    rejected — anything else is kept and surfaced for downstream
+    decoding."""
+
+    # Non-FF only in mode_byte (byte 4, chars 8-9).
+    chunk_mode_only = "FF" * 4 + "06" + "FF" * 11
+    record = parse_pc_record(chunk_mode_only)
+    assert isinstance(record, LinkRecord)
+    assert record.channel_index == 0xFF
+    assert record.mode_byte == 0x06
+
+    # Non-FF only in slot (byte 12, chars 24-25).
+    chunk_slot_only = "FF" * 12 + "01" + "FF" * 3
+    record = parse_pc_record(chunk_slot_only)
+    assert isinstance(record, LinkRecord)
+    assert record.slot == 0x01
