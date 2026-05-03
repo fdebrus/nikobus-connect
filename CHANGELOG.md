@@ -1,5 +1,53 @@
 # Changelog
 
+## 0.5.1
+
+### Fixed
+
+- **PC Link register scan now starts at the productive band 0xA3
+  instead of 0x00.** 0.5.0 swept the full 0x00..0xFF range; on a real
+  install (fdebrus, log 2026-05-03 22:10) the scan aborted at
+  register 0x04 after 5 consecutive ACK timeouts because PC Link
+  doesn't respond to register reads in 0x00..0x07, tripping the
+  `MODULE_SCAN_CONSECUTIVE_GIVE_UP_LIMIT` early-stop. The Nikobus
+  PC-software trace shows the productive band is exactly
+  0xA3..0xFF; tuning the range there sidesteps the early-stop and
+  matches the official tool's scan strategy. New constant
+  `_PC_LINK_SCAN_RANGE_OVERRIDE` in `discovery.py`; the
+  `_SCAN_REGISTER_RANGE_BY_MODULE_TYPE["pc_link"]` value moves from
+  `range(0x00, 0x100)` to `range(0xA3, 0x100)`.
+
+- **Phantom link-record on near-empty chunks no longer surfaces.**
+  Same install's PC Logic scan returned chunks like
+  `FFFFFFFFFFFFFFFFFFFFFFFFFFFF05FF` — all bytes 0xFF except for one
+  stray 0x05 at byte offset 14, which the parser doesn't even
+  extract. 0.5.0's `is_empty_record` required every hex char to be
+  'F', so that chunk was routed to `_parse_link_record` and emitted
+  a phantom record with `channel_idx=0xFF mode=0xFF flag=0xFF
+  payload=FFFFFF slot=0xFF`. 0.5.1 tightens `_parse_link_record`:
+  if `marker`, `mode_byte`, `flag_byte`, `payload_bytes`, and `slot`
+  are all 0xFF, the chunk is treated as a near-empty bus artefact
+  and rejected. Pinned by `test_near_empty_chunk_with_stray_byte_is_rejected`
+  using the exact chunk observed on the live install.
+
+### Tests
+
+- 4 new tests in `tests/test_pc_record_parser.py` for the empty-
+  record tightening (full all-FF; all-FF extracted fields with
+  stray byte at unused offset 13 / 14; positive case where one
+  non-FF in any extracted field is accepted).
+- `test_pc_link_module_runs_register_scan` updated to pin the new
+  `range(0xA3, 0x100)` instead of the 0.5.0 full sweep.
+- 142/142 passing.
+
+### Migration
+
+- HA integrations bumping `nikobus-connect>=0.5.1` get the fixes
+  automatically. Expect `Discovery started | module=86F5` on the
+  next "Scan all module links" run to actually produce records
+  (decoded via the structured INFO logs added in 0.5.0) instead of
+  aborting at register 0x04.
+
 ## 0.5.0
 
 ### Added

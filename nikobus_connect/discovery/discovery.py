@@ -118,14 +118,21 @@ _DEFAULT_SCAN_REGISTER_RANGE = range(0x00, 0x100)
 # at the current ``COMMAND_EXECUTION_DELAY`` and produces a definitive
 # yes/no on the "more memory beyond the directory" hypothesis.
 _PC_LOGIC_SCAN_RANGE_OVERRIDE = _DEFAULT_SCAN_REGISTER_RANGE
+
+# PC Link's productive band is 0xA3..0xD3 (module registry) and a
+# few neighbouring registers, validated against a Nikobus PC-software
+# serial trace on real hardware (May 2024). 0.5.0 shipped with a full
+# 0x00..0xFF sweep, but on the live install fdebrus@2026-05-03 the
+# scan aborted at register 0x04 after 5 consecutive ACK timeouts —
+# PC Link doesn't respond to register reads in the 0x00..0x07 range,
+# and our consecutive-give-up early-stop fires before we ever reach
+# 0xA3. Tuning the range to start at 0xA3 sidesteps that early-stop
+# entirely and matches the PC-software trace exactly.
+_PC_LINK_SCAN_RANGE_OVERRIDE = range(0xA3, 0x100)
+
 _SCAN_REGISTER_RANGE_BY_MODULE_TYPE: dict[str, range] = {
     "pc_logic": _PC_LOGIC_SCAN_RANGE_OVERRIDE,
-    # PC Link is included in the register-scan queue from Stage 2
-    # onward. The Nikobus PC-software trace shows the productive band
-    # is 0xA3..0xD3 for sub=04, but the LOM may have data at other
-    # locations on different installs; the full sweep is the correct
-    # default until we have multi-install data to tune against.
-    "pc_link": _DEFAULT_SCAN_REGISTER_RANGE,
+    "pc_link": _PC_LINK_SCAN_RANGE_OVERRIDE,
 }
 
 
