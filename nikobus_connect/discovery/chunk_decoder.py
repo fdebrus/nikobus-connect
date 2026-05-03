@@ -16,11 +16,16 @@ _CHUNK_LENGTHS = {
     "switch_module": 12,
     "roller_module": 12,
     "dimmer_module": 16,
-    # PC-Logic BP-cell stride is a Stage-1 best guess based on the
-    # PC-software BP screenshots (input ref + output ref + mode + T1/T2
-    # ~= 6 bytes / 12 hex chars, same as switch/roller). Will be
-    # refined in Stage 2 once real bytes from the logging stub land.
-    "pc_logic": 12,
+    # PC-Link / PC-Logic share a 16-byte (32 hex chars) per-record
+    # storage format reverse-engineered from a Nikobus PC-software
+    # serial trace on real hardware. Each register read returns one
+    # complete record — either a module-registry entry (byte 0 == 0x03)
+    # or a button → channel link record (byte 0 != 0x03 / 0xFF). The
+    # Stage-1 best-guess of 12 (one BP cell ≈ switch chunk) was wrong;
+    # the trace shows a 16-byte stride with no per-cell sub-structure
+    # at the chunk layer.
+    "pc_link": 32,
+    "pc_logic": 32,
 }
 
 

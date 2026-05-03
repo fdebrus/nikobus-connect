@@ -1,5 +1,111 @@
 # Changelog
 
+## 0.5.0
+
+### Added
+
+- **PC Link (05-200) included in the register-scan queue.** A
+  Nikobus PC-software serial trace captured against real hardware
+  (Nikobus-HA#303, roswennen's install) showed the controller-resident
+  link table — the data needed to resolve the unmatched-button-link
+  problem — lives on the **PC Link**, not the PC Logic. Stage 1
+  scanned PC Logic in 0.4.11; Stage 2a now scans PC Link too.
+
+  - ``pc_link`` removed from the scan-queue exclusion in
+    ``query_module_inventory("ALL")`` and from the
+    ``non_output_modules`` set in the per-module path.
+  - ``_SCAN_REGISTER_RANGE_BY_MODULE_TYPE`` gains a ``pc_link`` entry
+    pinned to the full ``range(0x00, 0x100)`` sweep until the
+    productive band is characterised across multiple installs.
+  - New ``nikobus_connect/discovery/pc_link_decoder.py`` with
+    ``PcLinkDecoder(BaseChunkingDecoder)``. Registered alongside the
+    existing decoders on ``NikobusDiscovery._decoders``.
+  - ``decode_command_payload`` in ``discovery/protocol.py`` gains a
+    ``pc_link`` dispatch branch.
+
+- **Shared 16-byte record parser for PC Link / PC Logic.** New
+  ``nikobus_connect/discovery/pc_record_parser.py`` exposes
+  ``parse_pc_record(chunk_hex)`` returning a ``ModuleRegistryRecord``
+  (when ``byte_0 == 0x03``) or a ``LinkRecord`` (otherwise, non-empty).
+  The trace confirms the on-wire format — every byte aligns with
+  ``DEVICE_TYPES`` and the user's HA install address list. Parser is
+  pinned by ``tests/test_pc_record_parser.py`` against 47 records
+  from the trace (9 registry + 38 link).
+
+### Changed
+
+- **PC-Logic / PC-Link chunk stride corrected from 6 bytes (12 hex
+  chars) to 16 bytes (32 hex chars).** Stage 1 guessed 12 from
+  PC-software BP screenshots; the trace from real hardware showed the
+  on-wire stride is 32 hex chars per record, with no per-cell
+  sub-structure at the chunk layer. Updated ``_CHUNK_LENGTHS`` for
+  both ``pc_link`` and ``pc_logic`` accordingly.
+- **PC-Logic decoder now parses 16-byte records via the shared
+  parser.** The Stage-1 ``PC-Logic chunk | module=X payload=Y`` log
+  line is replaced by structured INFO logs:
+  ``PC-Logic module-registry record | module=... device_type=0x... address=... type_slot=... raw=...``
+  and
+  ``PC-Logic link record | module=... channel_idx=0x... mode=0x... flag=0x... payload=... slot=0x... raw=...``.
+  Stage 2a is **visibility-only** — the decoder still returns ``None``
+  for every chunk so no records are merged into ``linked_modules``
+  until the byte-0 → ``(target_module, channel)`` resolution is
+  validated across multiple installs (Stage 2b).
+- **Empty-chunk skip in the discovery loop generalised.** Was
+  hard-coded to compare against the 12-char string ``"FFFFFFFFFFFF"``;
+  now matches any-length all-F chunk so the 32-char PC controller
+  empty marker is also skipped without emitting a phantom-record
+  decode attempt.
+
+### Migration
+
+- HA integrations bumping the ``nikobus-connect>=0.5.0`` pin in
+  ``manifest.json`` will see PC Link enrolled in the
+  ``"Scan all module links"`` queue automatically (no HA-side change
+  needed). Expect new INFO log lines per record on the next scan;
+  these are intentional Stage-2a instrumentation and will be quieted
+  in Stage 2b once the merge path lands.
+
+## 0.4.13
+
+### Changed
+
+- **PC-Logic register scan widened to the full 0x00..0xFF range
+  (Stage 1.5 instrumentation).** The Stage-1 dump in 0.4.11/0.4.12
+  reused the output-module's tuned `0x00..0x3F` band for PC-Logic,
+  which on roswennen's 80D9 LOM (Nikobus-HA#303) returned a 4×16
+  cell-index directory followed by all-FF — exactly the geometry of
+  one BP grid's directory, but no per-cell programming. Five BP grids
+  are programmed on that LOM, so the cell content has to live
+  somewhere; this release extends PC-Logic's primary `sub=04` pass
+  out to the full register range so a re-run can confirm whether the
+  rest of the grid lives past the directory.
+
+  - New `_SCAN_REGISTER_RANGE_BY_MODULE_TYPE` table in
+    `discovery.py`, keyed by `module_type`. Currently only
+    `pc_logic` has an entry; it overrides the per-sub mapping with
+    `range(0x00, 0x100)`.
+  - `_scan_range_for_sub(sub_byte, module_type=None)` consults the
+    per-type table first, then falls back to the per-sub mapping.
+    Default behaviour for output modules is unchanged.
+
+  **No-op for installs without PC-Logic.** Switch / dimmer / roller
+  scans keep their tuned `0x00..0x3F` and `0x70..0x96` bands —
+  regression test
+  `test_switch_register_scan_range_unaffected_by_pc_logic_override`
+  pins this. PC-Logic scans add ~25 s per LOM at the current
+  `COMMAND_EXECUTION_DELAY`; that's the cost of the experiment.
+
+  This is a Stage-1.5 step on the path to the real Stage-2 BP-cell
+  decoder. Once the wider sweep produces real bytes (or proves the
+  cell content lives at separate BP-unit bus addresses), a follow-up
+  release ships the decoder itself.
+
+### Fixed
+
+- **`__version__` in `nikobus_connect/discovery/__init__.py` now
+  matches the package version.** The 0.4.12 bump only updated
+  `pyproject.toml`, leaving `__version__` reporting `0.4.11`.
+
 ## 0.4.11
 
 ### Added

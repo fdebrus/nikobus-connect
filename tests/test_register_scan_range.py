@@ -287,9 +287,15 @@ async def test_scan_runs_single_pass_per_roller_module(tmp_path):
 
 @pytest.mark.asyncio
 async def test_scan_skips_extra_passes_for_non_output_modules(tmp_path):
-    """PC link / PC logic / feedback / other modules don't get scanned
-    at all (output-only gate runs before scan dispatch); they certainly
-    don't get the multi-pass treatment."""
+    """Feedback / other modules don't get scanned at all (output-only
+    gate runs before scan dispatch); they certainly don't get the
+    multi-pass treatment.
+
+    PC Link and PC Logic are NOT in this list — Stage 2 added both to
+    the scan path so we can read their controller-resident link tables
+    (PC Link, validated against a real Nikobus PC-software trace) and
+    BP-cell directories (PC Logic, still being characterised). See
+    ``test_pc_link_runs_register_scan`` for the inclusion check."""
 
     coord = _make_coordinator()
     discovery = NikobusDiscovery(
@@ -304,12 +310,12 @@ async def test_scan_skips_extra_passes_for_non_output_modules(tmp_path):
         "FF00": {
             "address": "FF00",
             "category": "Module",
-            "model": "05-200",
-            "device_type": "0A",
+            "model": "05-207",
+            "device_type": "42",
         }
     }
     discovery._is_known_module_address = MagicMock(return_value=True)
-    discovery._resolve_module_type = MagicMock(return_value="pc_link")
+    discovery._resolve_module_type = MagicMock(return_value="feedback_module")
 
     calls, fake_scan = _capture_scan_calls()
     discovery._scan_module_registers = fake_scan

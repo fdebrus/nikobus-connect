@@ -16,6 +16,7 @@ from .base import (
     PHASE_REGISTER_SCAN,
 )
 from .dimmer_decoder import DimmerDecoder, EXPECTED_CHUNK_LEN
+from .pc_link_decoder import PcLinkDecoder
 from .pc_logic_decoder import PcLogicDecoder
 from .shutter_decoder import ShutterDecoder
 from .switch_decoder import SwitchDecoder
@@ -102,10 +103,47 @@ _SCAN_REGISTER_RANGE_BY_SUB: dict[str, range] = {
 # didn't cover (keeps future sub-bytes probeable without a silent skip).
 _DEFAULT_SCAN_REGISTER_RANGE = range(0x00, 0x100)
 
+# Per-module-type override for the primary (sub=04) scan range.
+# Stage 1 of the PC-Logic dump (0.4.11) only covered ``0x00..0x3F`` —
+# the same productive band as the output-module link table — and
+# returned a 4×16 cell-index directory plus a stretch of all-FF
+# registers. Roswennen's reporter install on Nikobus-HA#303 has five
+# BP grids programmed across the LOM, so the cell content has to live
+# *somewhere*. Either it sits past the 0x3F boundary on the LOM
+# itself (this override surfaces it), or it lives at separate BP-unit
+# bus addresses that the scan engine doesn't currently visit
+# (orthogonal experiment: invoke ``query_module_inventory`` on a
+# 3CF0x0 BP address directly). The full 0x00..0xFF sweep is the
+# cheaper of the two probes — costs ~25 s extra per PC-Logic module
+# at the current ``COMMAND_EXECUTION_DELAY`` and produces a definitive
+# yes/no on the "more memory beyond the directory" hypothesis.
+_PC_LOGIC_SCAN_RANGE_OVERRIDE = _DEFAULT_SCAN_REGISTER_RANGE
+_SCAN_REGISTER_RANGE_BY_MODULE_TYPE: dict[str, range] = {
+    "pc_logic": _PC_LOGIC_SCAN_RANGE_OVERRIDE,
+    # PC Link is included in the register-scan queue from Stage 2
+    # onward. The Nikobus PC-software trace shows the productive band
+    # is 0xA3..0xD3 for sub=04, but the LOM may have data at other
+    # locations on different installs; the full sweep is the correct
+    # default until we have multi-install data to tune against.
+    "pc_link": _DEFAULT_SCAN_REGISTER_RANGE,
+}
 
-def _scan_range_for_sub(sub_byte: str) -> range:
-    """Return the productive register range for a given sub-byte."""
 
+def _scan_range_for_sub(sub_byte: str, module_type: str | None = None) -> range:
+    """Return the productive register range for a given sub-byte.
+
+    When ``module_type`` is supplied and has a per-type override
+    registered (currently only ``pc_logic``), the override takes
+    precedence over the per-sub mapping. This is how Stage 1.5 widens
+    PC-Logic's primary pass from the output-module's tuned 0x00..0x3F
+    to the full 0x00..0xFF sweep without changing any other module's
+    behaviour.
+    """
+
+    if module_type is not None:
+        override = _SCAN_REGISTER_RANGE_BY_MODULE_TYPE.get(module_type)
+        if override is not None:
+            return override
     return _SCAN_REGISTER_RANGE_BY_SUB.get(sub_byte, _DEFAULT_SCAN_REGISTER_RANGE)
 
 
@@ -389,6 +427,7 @@ class NikobusDiscovery:
             SwitchDecoder(coordinator),
             ShutterDecoder(coordinator),
             PcLogicDecoder(coordinator),
+            PcLinkDecoder(coordinator),
         ]
         self._timeout_task: asyncio.Task | None = None
         self._inventory_timeout_task: asyncio.Task | None = None
@@ -1117,7 +1156,7 @@ class NikobusDiscovery:
             all_addresses = []
             dict_data = getattr(self._coordinator, "dict_module_data", {})
             for module_type, modules in dict_data.items():
-                if module_type not in ("pc_link", "feedback_module", "other_module"):
+                if module_type not in ("feedback_module", "other_module"):
                     module_iter = modules.values() if isinstance(modules, dict) else modules
                     for module in module_iter:
                         addr = module.get("address") if isinstance(module, dict) else None
@@ -1177,7 +1216,7 @@ class NikobusDiscovery:
         # resolved and ``linked_modules`` ends up empty for those
         # buttons. The PcLogicDecoder is currently a logging stub
         # (Stage 1 instrumentation); see CHANGELOG 0.4.11.
-        non_output_modules = {"pc_link", "feedback_module", "other_module"}
+        non_output_modules = {"feedback_module", "other_module"}
         is_output_module = self._module_type not in non_output_modules
 
         coordinator_channels = (
@@ -1216,13 +1255,15 @@ class NikobusDiscovery:
 
         # Pass 1: primary bank (sub=04). Function-22 for dimmer,
         # function-10 for switch/roller. Register range tuned to
-        # 0x00..0x3F — records live there on all hardware we've
-        # observed; the full-sweep of 0.4.5..0.4.8 wasted ~192 empty
-        # registers per pass.
+        # 0x00..0x3F for output modules — records live there on all
+        # hardware we've observed; the full-sweep of 0.4.5..0.4.8 wasted
+        # ~192 empty registers per pass. PC-Logic overrides this back
+        # to the full 0x00..0xFF sweep (Stage 1.5) so we can see whether
+        # cell content lives past the 4×16 directory at 0x00..0x3F.
         await self._scan_module_registers(
             normalized_address,
             base_command,
-            _scan_range_for_sub("04"),
+            _scan_range_for_sub("04", module_type=self._module_type),
             sub_byte="04",
         )
 
@@ -1248,7 +1289,9 @@ class NikobusDiscovery:
         )
         for extra_sub in extra_subs:
             function_code = base_command[:2]
-            extra_range = _scan_range_for_sub(extra_sub)
+            extra_range = _scan_range_for_sub(
+                extra_sub, module_type=self._module_type
+            )
             _LOGGER.debug(
                 "Register scan pass starting | module=%s function=%s sub=%s "
                 "range=0x%02X..0x%02X",
@@ -1483,7 +1526,12 @@ class NikobusDiscovery:
                     response_index,
                     normalized_chunk,
                 )
-                if normalized_chunk == "FFFFFFFFFFFF":
+                if all(c == "F" for c in normalized_chunk):
+                    # All-F chunks are the controller's "no record at this
+                    # register" sentinel. Length depends on module type
+                    # (12 hex for switch/roller, 16 for dimmer, 32 for PC
+                    # Link / PC Logic), so we check by content rather than
+                    # against a single fixed string.
                     _LOGGER.debug(
                         "Discovery relationship empty chunk detected | module=%s response_index=%d chunk=%s",
                         address,
