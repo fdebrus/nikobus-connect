@@ -1,5 +1,70 @@
 # Changelog
 
+## 0.5.0
+
+### Added
+
+- **PC Link (05-200) included in the register-scan queue.** A
+  Nikobus PC-software serial trace captured against real hardware
+  (Nikobus-HA#303, roswennen's install) showed the controller-resident
+  link table — the data needed to resolve the unmatched-button-link
+  problem — lives on the **PC Link**, not the PC Logic. Stage 1
+  scanned PC Logic in 0.4.11; Stage 2a now scans PC Link too.
+
+  - ``pc_link`` removed from the scan-queue exclusion in
+    ``query_module_inventory("ALL")`` and from the
+    ``non_output_modules`` set in the per-module path.
+  - ``_SCAN_REGISTER_RANGE_BY_MODULE_TYPE`` gains a ``pc_link`` entry
+    pinned to the full ``range(0x00, 0x100)`` sweep until the
+    productive band is characterised across multiple installs.
+  - New ``nikobus_connect/discovery/pc_link_decoder.py`` with
+    ``PcLinkDecoder(BaseChunkingDecoder)``. Registered alongside the
+    existing decoders on ``NikobusDiscovery._decoders``.
+  - ``decode_command_payload`` in ``discovery/protocol.py`` gains a
+    ``pc_link`` dispatch branch.
+
+- **Shared 16-byte record parser for PC Link / PC Logic.** New
+  ``nikobus_connect/discovery/pc_record_parser.py`` exposes
+  ``parse_pc_record(chunk_hex)`` returning a ``ModuleRegistryRecord``
+  (when ``byte_0 == 0x03``) or a ``LinkRecord`` (otherwise, non-empty).
+  The trace confirms the on-wire format — every byte aligns with
+  ``DEVICE_TYPES`` and the user's HA install address list. Parser is
+  pinned by ``tests/test_pc_record_parser.py`` against 47 records
+  from the trace (9 registry + 38 link).
+
+### Changed
+
+- **PC-Logic / PC-Link chunk stride corrected from 6 bytes (12 hex
+  chars) to 16 bytes (32 hex chars).** Stage 1 guessed 12 from
+  PC-software BP screenshots; the trace from real hardware showed the
+  on-wire stride is 32 hex chars per record, with no per-cell
+  sub-structure at the chunk layer. Updated ``_CHUNK_LENGTHS`` for
+  both ``pc_link`` and ``pc_logic`` accordingly.
+- **PC-Logic decoder now parses 16-byte records via the shared
+  parser.** The Stage-1 ``PC-Logic chunk | module=X payload=Y`` log
+  line is replaced by structured INFO logs:
+  ``PC-Logic module-registry record | module=... device_type=0x... address=... type_slot=... raw=...``
+  and
+  ``PC-Logic link record | module=... channel_idx=0x... mode=0x... flag=0x... payload=... slot=0x... raw=...``.
+  Stage 2a is **visibility-only** — the decoder still returns ``None``
+  for every chunk so no records are merged into ``linked_modules``
+  until the byte-0 → ``(target_module, channel)`` resolution is
+  validated across multiple installs (Stage 2b).
+- **Empty-chunk skip in the discovery loop generalised.** Was
+  hard-coded to compare against the 12-char string ``"FFFFFFFFFFFF"``;
+  now matches any-length all-F chunk so the 32-char PC controller
+  empty marker is also skipped without emitting a phantom-record
+  decode attempt.
+
+### Migration
+
+- HA integrations bumping the ``nikobus-connect>=0.5.0`` pin in
+  ``manifest.json`` will see PC Link enrolled in the
+  ``"Scan all module links"`` queue automatically (no HA-side change
+  needed). Expect new INFO log lines per record on the next scan;
+  these are intentional Stage-2a instrumentation and will be quieted
+  in Stage 2b once the merge path lands.
+
 ## 0.4.13
 
 ### Changed

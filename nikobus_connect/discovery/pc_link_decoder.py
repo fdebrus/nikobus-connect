@@ -1,32 +1,21 @@
-"""PC Logic (05-201) decoder — Stage 2a, structured logging.
+"""PC Link (05-200) decoder — Stage 2a, structured logging.
 
-PC Logic is the Nikobus bus's logic controller (separate from the PC
-Link, which is the USB serial bridge). It can host BP grids — virtual
-button panels for routing — and stores its programming in register
-memory addressable via the same ``$1410<addr>NN04`` read protocol
-used for switch / dimmer / roller modules.
+The PC Link is the bus controller — the device that bridges the
+USB-serial port to the Nikobus bus. Its register memory stores both
+a module registry (what the install looks like) and the link table
+(button → output-channel routing). The Nikobus PC software walks
+that memory at every "Read configuration" operation.
 
-Stage 1 (0.4.11): added ``pc_logic`` to the scan queue with a
-12-hex-char (6-byte) chunk stride and a logging-only stub decoder
-that emitted ``PC-Logic chunk | module=X payload=Y`` per slice.
+Stage 1 left ``pc_link`` excluded from the scan-queue + chunking
+layer entirely. Stage 2a includes it in both, parses the 16-byte
+records into structured form, and surfaces them at INFO so users can
+attach the dump to GitHub issues without enabling component-level
+debug.
 
-Stage 1.5 (0.4.13): widened the PC-Logic scan range from the
-output-module-tuned 0x00..0x3F to the full 0x00..0xFF.
-
-Stage 2a (0.5.0): a Nikobus PC-software serial trace from a real
-install (roswennen, Nikobus-HA#303) showed the on-wire format is a
-**16-byte (32 hex chars) per-record** structure shared with PC Link
-— not the 6-byte BP-cell stride we guessed in Stage 1. This module
-now parses those records via the shared ``pc_record_parser`` and
-surfaces them at INFO. PC Logic and PC Link are isomorphic at the
-record-storage layer, so they share the parser; only the log-prefix
-distinguishes them.
-
-Like PC Link, this stays in visibility-only mode for Stage 2a — no
-``DecodedCommand`` is emitted into the merge layer. Stage 2b will
-add the resolution of byte-0 channel-indices to concrete
-``(module_address, channel)`` pairs once the mapping is validated
-across multiple installs.
+Stage 2a does NOT yet emit ``DecodedCommand`` outputs into the merge
+layer. The byte-0 → ``(target_module, channel)`` mapping is
+hypothesised from one user's trace and needs cross-install validation
+before we let it populate ``linked_modules``. That's Stage 2b.
 """
 
 from __future__ import annotations
@@ -43,28 +32,31 @@ from .pc_record_parser import (
 )
 
 _LOGGER = logging.getLogger(__name__)
-_LOG_PREFIX = "PC-Logic"
+_LOG_PREFIX = "PC-Link"
 
 
 def decode(payload_hex: str, raw_bytes: list[str], context) -> dict[str, Any] | None:
     """Module-level decoder hook used by ``decode_command_payload``.
 
-    Returns ``None`` — Stage 2a never produces a record for the merge
-    layer. Logs the parsed record at INFO for visibility.
+    The chunking layer routes through this for any chunk it produces
+    when ``module_type=pc_link``. We log a structured INFO line per
+    record (or a DEBUG line for empty / unparseable chunks) and return
+    ``None`` — the merge layer must not see these records yet.
     """
 
     return _log_record(payload_hex, getattr(context, "module_address", None))
 
 
-class PcLogicDecoder(BaseChunkingDecoder):
-    """PC-Logic variant of the chunk-based decoder pipeline.
+class PcLinkDecoder(BaseChunkingDecoder):
+    """PC-Link variant of the chunk-based decoder pipeline.
 
-    Same on-wire format as ``PcLinkDecoder``; differs only in the
-    log prefix it emits.
+    Overrides ``decode_chunk`` to bypass the switch/dimmer/roller
+    ``reverse_before_decode`` flag — PC-Link records are stored in a
+    fixed on-wire byte order that the parser consumes directly.
     """
 
     def __init__(self, coordinator):
-        super().__init__(coordinator, "pc_logic")
+        super().__init__(coordinator, "pc_link")
 
     def decode_chunk(self, chunk, module_address=None):
         chunk = chunk.strip().upper()
@@ -78,7 +70,8 @@ def _log_record(
 ) -> dict[str, Any] | None:
     """Shared logging helper used by both ``decode()`` and ``decode_chunk``.
 
-    Always returns ``None`` — Stage 2a is visibility-only.
+    Always returns ``None`` — Stage 2a is visibility-only; no decoded
+    records are surfaced to the merge layer.
     """
 
     chunk_hex = (chunk_hex or "").strip().upper()
@@ -130,4 +123,4 @@ def _log_record(
     return None
 
 
-__all__ = ["PcLogicDecoder", "decode"]
+__all__ = ["PcLinkDecoder", "decode"]

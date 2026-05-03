@@ -248,6 +248,8 @@ def decode_command_payload(
         from . import dimmer_decoder as decoder_module
     elif module_type == "pc_logic":
         from . import pc_logic_decoder as decoder_module
+    elif module_type == "pc_link":
+        from . import pc_link_decoder as decoder_module
     else:
         decoder_module = None
 

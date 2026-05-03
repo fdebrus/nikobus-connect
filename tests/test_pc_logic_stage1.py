@@ -184,48 +184,81 @@ def test_pc_logic_decoder_is_registered_on_discovery(tmp_path):
     assert pc_logic_decoders[0].can_handle("pc_logic")
 
 
-def test_pc_logic_decoder_returns_none_and_logs_at_info(caplog):
-    """Stage 1 contract: decoder must NOT produce a record, must log
-    raw payload at INFO with the module address."""
+def test_pc_logic_decoder_returns_none_for_any_chunk():
+    """Stage 2a contract preserved from Stage 1: the decoder is a
+    visibility-only path. Even when fed a parseable record it returns
+    ``None`` so the merge layer never sees PC-Logic-derived records
+    until Stage 2b lands."""
 
     context = MagicMock()
     context.module_address = "80D9"
 
+    # A 32-hex-char registry record, parseable by the Stage 2a parser.
+    parseable = "03000000080000000C94000001000000"
+    assert decode(parseable, [], context) is None
+
+    # An empty chunk.
+    assert decode("FF" * 16, [], context) is None
+
+    # A wrong-length chunk that the parser rejects.
+    assert decode("CAFEBABE1234", [], context) is None
+
+
+def test_pc_logic_decoder_logs_registry_record_at_info(caplog):
+    """Stage 2a logs structured records at INFO so users can attach
+    the dump without enabling component-level debug. A registry record
+    must surface its decoded device_type / address / type_slot."""
+
+    context = MagicMock()
+    context.module_address = "80D9"
+    # 940C registry record from roswennen's trace.
+    chunk = "03000000080000000C94000001000000"
+
     with caplog.at_level(logging.INFO, logger="nikobus_connect.discovery.pc_logic_decoder"):
-        result = decode("CAFEBABE1234", ["CA", "FE", "BA", "BE", "12", "34"], context)
+        result = decode(chunk, [], context)
 
-    assert result is None, "Stage 1 decoder must not produce records"
+    assert result is None
     log_text = caplog.text
-    assert "PC-Logic chunk" in log_text
+    assert "PC-Logic module-registry record" in log_text
     assert "80D9" in log_text
-    assert "CAFEBABE1234" in log_text
+    assert "address=940C" in log_text
+    assert "device_type=0x08" in log_text
 
 
-def test_decode_command_payload_routes_pc_logic_to_stub(caplog):
+def test_decode_command_payload_routes_pc_logic_to_decoder(caplog):
     """The dispatch table in ``discovery/protocol.py`` must route
-    ``module_type=pc_logic`` to ``pc_logic_decoder`` so the stub
-    actually fires when the engine asks the chunking layer to decode."""
+    ``module_type=pc_logic`` to ``pc_logic_decoder`` so the structured
+    log fires when the chunking layer hands it a 16-byte record."""
 
     coord = MagicMock()
     coord.get_module_channel_count = MagicMock(return_value=0)
 
+    # Link record from roswennen's trace, sent without the chunking
+    # layer's reverse-before-decode flag (the PC decoders parse on-wire
+    # bytes directly).
+    chunk = "0400000006000080B443180001000000"
+
     with caplog.at_level(logging.INFO, logger="nikobus_connect.discovery.pc_logic_decoder"):
         result = decode_command_payload(
-            "112233445566",
+            chunk,
             "pc_logic",
             coord,
             module_address="80D9",
         )
 
     assert result is None
-    assert "PC-Logic chunk" in caplog.text
+    assert "PC-Logic link record" in caplog.text
 
 
-def test_pc_logic_chunk_length_matches_switch_stride():
-    """Stage 1 best guess: 12 hex chars per BP cell. Pin it so a
-    Stage-2 refinement is an explicit, visible change."""
+def test_pc_logic_chunk_length_is_sixteen_byte_record_stride():
+    """Stage 2a (0.5.0) corrects the Stage-1 guess: a Nikobus
+    PC-software serial trace shows the on-wire stride is 32 hex chars
+    (16 bytes per record), not 12. The 12-char value was guessed from
+    BP-cell screenshots; the trace from real hardware contradicted it,
+    so the constant moved. PC Link uses the same stride."""
 
-    assert _CHUNK_LENGTHS["pc_logic"] == 12
+    assert _CHUNK_LENGTHS["pc_logic"] == 32
+    assert _CHUNK_LENGTHS["pc_link"] == 32
 
 
 # ---------------------------------------------------------------------------
