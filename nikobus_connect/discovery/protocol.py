@@ -246,6 +246,8 @@ def decode_command_payload(
         from . import shutter_decoder as decoder_module
     elif module_type == "dimmer_module":
         from . import dimmer_decoder as decoder_module
+    elif module_type == "pc_logic":
+        from . import pc_logic_decoder as decoder_module
     else:
         decoder_module = None
 
