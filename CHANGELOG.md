@@ -1,5 +1,52 @@
 # Changelog
 
+## 0.5.7
+
+### Fixed
+
+- **Dimmer module register scan reverts to the pre-0.4.10 full-sweep
+  range.** 0.4.10 narrowed the dimmer scan to ``sub=04 → 0x00..0x3F``
+  + ``sub=01 → 0x70..0x96`` (103 registers total) on the strength of
+  a single Nikobus-PC-software serial trace. The 2026-05-04 capture
+  from a different dimmer firmware revision (modules 116D + 0E0A,
+  10-channel and 12-channel 05-007-02) shows that narrowing drops
+  link records on dimmer channels 3 and 5 — PC software clearly
+  displays connections to those outputs (BP1 / BP8 / BP19 / BP27 /
+  BP30 / BP35 etc. driving 116D's O09 / O11 / O12), but our scan
+  recovered records only on channels 1, 2, 6 because the link table
+  on this firmware extends past the 0.4.10 sub=04 cap into
+  ``0x40..0x80``. Restoring the pre-0.4.10 ``range(0x00, 0x100)``
+  for both dimmer passes recovers the missing records. Switch and
+  roller stay at the tuned ranges — their narrowing has been
+  validated against multiple firmware captures and we don't have
+  evidence of a similar gap there. Cost: ~3 minutes extra per
+  dimmer scan; benefit: every link record on every captured dimmer
+  firmware revision becomes visible to the merge layer.
+
+### Changed
+
+- **New ``_SCAN_REGISTER_RANGE_BY_MODULE_TYPE_AND_SUB`` per-pass
+  override**, keyed on ``(module_type, sub_byte)``. Takes precedence
+  over the per-module-type override and the per-sub-byte default.
+  Lets us widen one specific (module-type, sub-byte) combination
+  without disturbing any other. Currently used to register dimmer's
+  ``sub=04`` and ``sub=01`` for the full-sweep restoration above.
+
+### Tests
+
+- ``test_register_scan_range.py`` — dimmer two-pass test and
+  ``test_dimmer_scan_total_registers_full_sweep_per_pass`` updated
+  to assert ``range(0x00, 0x100)`` for both dimmer passes (was
+  ``0x00..0x3F`` + ``0x70..0x96``). The dimmer-pass-1 starts-at-zero
+  test still pins the lower bound so the 0.4.4 records-in-low-band
+  fix doesn't regress.
+- ``test_pc_logic_stage1.py`` — split the per-output-module default
+  test into a switch/roller variant and a dedicated dimmer
+  full-sweep variant. New
+  ``test_scan_range_priority_per_pass_overrides_per_module`` pins
+  the priority order for the new ``_SCAN_REGISTER_RANGE_BY_MODULE_TYPE_AND_SUB``
+  table.
+
 ## 0.5.6
 
 ### Fixed

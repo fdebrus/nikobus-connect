@@ -106,7 +106,10 @@ async def test_default_scan_range_starts_at_zero_for_output_module(tmp_path):
 
 @pytest.mark.asyncio
 async def test_default_scan_range_starts_at_zero_for_dimmer_module(tmp_path):
-    """Same coverage guarantee on the dimmer-module first pass."""
+    """Dimmer first pass still starts at 0x00 to keep the 0.4.4
+    regression fix for records in 0x00..0x0F. 0.5.7 widens the stop
+    to 0x100 (full sweep) — see the dimmer two-pass test below for
+    the upper-bound assertion."""
 
     coord = _make_coordinator()
     discovery = NikobusDiscovery(
@@ -137,11 +140,8 @@ async def test_default_scan_range_starts_at_zero_for_dimmer_module(tmp_path):
 
     first = calls[0]
     scan_range = first["command_range"]
-    # Same tuned range as switches — sub=04 sweeps 0x00..0x3F on every
-    # output module (0.4.10). Dimmer pass-1 still uses the "22…"
-    # function prefix.
     assert scan_range.start == 0x00
-    assert scan_range.stop == 0x40
+    assert 0x00 in scan_range and 0x0F in scan_range
     assert first["base_cmd"].startswith("22")
 
 
@@ -185,23 +185,31 @@ async def test_scan_runs_three_passes_per_dimmer_module(tmp_path):
 
     await discovery.query_module_inventory("0E6C")
 
-    # Dimmer: sub=04 (primary, channels 1-6) + sub=01 (secondary,
-    # channels 7-12). sub=00 was verified byte-identical to sub=04
-    # on real hardware and removed in 0.4.8 to halve scan time.
+    # Dimmer: sub=04 (primary) + sub=01 (secondary). sub=00 was
+    # verified byte-identical to sub=04 on the original-trace firmware
+    # and removed in 0.4.8 to halve scan time.
     #
-    # 0.4.10: each pass scans only its productive register range —
-    # sub=04 → 0x00..0x3F (64 regs), sub=01 → 0x70..0x96 (39 regs).
+    # 0.4.10 narrowed each pass to the band a single PC-software trace
+    # showed productive: sub=04 → 0x00..0x3F (64 regs),
+    # sub=01 → 0x70..0x96 (39 regs).
+    #
+    # 0.5.7 reverts dimmer to the pre-0.4.10 full sweep
+    # (range(0x00, 0x100) per pass) because the 2026-05-04 capture
+    # showed records on channels 3 and 5 of a 12-channel dimmer falling
+    # outside both 0.4.10 bands. Switch and roller stay at the tuned
+    # ranges; they have multi-firmware confirmation that the narrowing
+    # doesn't drop records there.
     assert len(calls) == 2, f"expected 2 passes, got {len(calls)}: {calls}"
 
     assert calls[0]["base_cmd"] == "226C0E"
     assert calls[0]["sub_byte"] == "04"
     assert calls[0]["command_range"].start == 0x00
-    assert calls[0]["command_range"].stop == 0x40
+    assert calls[0]["command_range"].stop == 0x100
 
     assert calls[1]["base_cmd"] == "226C0E"
     assert calls[1]["sub_byte"] == "01"
-    assert calls[1]["command_range"].start == 0x70
-    assert calls[1]["command_range"].stop == 0x97
+    assert calls[1]["command_range"].start == 0x00
+    assert calls[1]["command_range"].stop == 0x100
 
     for entry in calls:
         assert entry["address"] == "0E6C"
@@ -344,11 +352,15 @@ async def test_scan_skips_extra_passes_for_non_output_modules(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_dimmer_scan_total_registers_is_tuned_not_full_sweep(tmp_path):
-    """Combined sub=04 + sub=01 coverage for a dimmer is 64 + 39 = 103
-    registers, vs the pre-0.4.10 naive 2 × 256 = 512 sweep. Locks in
-    the ~80% reduction so nothing silently regresses back to full
-    0x00..0xFF per pass."""
+async def test_dimmer_scan_total_registers_full_sweep_per_pass(tmp_path):
+    """0.4.10 narrowed dimmer to sub=04 → 0x00..0x3F (64) + sub=01 →
+    0x70..0x96 (39) = 103 registers, on the strength of a single
+    PC-software trace. 0.5.7 reverts dimmer to the pre-0.4.10 full
+    sweep (range(0x00, 0x100) per pass = 512 total) because the
+    2026-05-04 capture from a different firmware revision showed
+    productive records on channels 3 and 5 falling outside both
+    0.4.10 bands. Switch and roller stay at the tuned ranges (their
+    multi-firmware traces don't show the same gap)."""
 
     coord = _make_coordinator()
     discovery = NikobusDiscovery(
@@ -377,12 +389,10 @@ async def test_dimmer_scan_total_registers_is_tuned_not_full_sweep(tmp_path):
     await discovery.query_module_inventory("0E6C")
 
     total_regs = sum(len(c["command_range"]) for c in calls)
-    # sub=04 → 0x00..0x3F (64) + sub=01 → 0x70..0x96 (39) = 103.
-    assert total_regs == 64 + 39, (
-        f"expected 103 total regs across 2 passes, got {total_regs}"
+    assert total_regs == 2 * 256, (
+        f"expected 512 total regs across 2 passes (full sweep per pass), "
+        f"got {total_regs}"
     )
-    # Sanity guard against a future regression to full-sweep.
-    assert total_regs < 2 * 256
 
 
 @pytest.mark.asyncio
