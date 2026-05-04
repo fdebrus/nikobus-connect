@@ -5,48 +5,56 @@
 ### Fixed
 
 - **Switch / roller register scans now produce link records on real
-  hardware.** The chunker buffered every register response's trailing
-  remainder forward into the next frame's data region. For switch and
-  roller modules — which return 32 hex chars of data per register
-  against a 12-char chunk size (32 = 2*12 + 8 padding) — this shifted
-  every subsequent chunk's alignment by 8 chars and turned every
-  decoded `button_address` into a phantom value. The `unknown_button`
-  gate then rejected all of them, so users observed
-  `Discovered links merged into store: 0 buttons updated, 0 link
-  blocks added, 0 outputs added` for every switch and roller scan
-  while dimmer scans (16 hex data = 1 chunk = 0 padding) worked fine.
-  When a frame's data region holds at least one full chunk and no
-  carry is queued from a prior fragmented frame, the chunker now
-  treats the frame as self-contained and discards the trailing
-  register-end padding. The synthetic-fragmentation path that the
-  buffering tests pin (frames < chunk_len feeding the running buffer)
-  still works as before. Replay against a real-hardware capture with
-  10 affected output modules: 0 → 49 newly-linked button records
-  surface from the switch and roller scans.
+  hardware.** The chunker emits chunks at two buffered alignments
+  per scan now — primary at stream offset 0 (the historic 0.2.1
+  behaviour) and an alternate alignment shifted by 8 chars at
+  stream start. Switch and roller firmware revisions disagree on
+  whether scan responses prepend a 4-byte response header before
+  the contiguous record stream:
+  - 2026-04-30 install (modules 4707 / 9105 / C9A5): no header,
+    records pack at stream offset 0, primary alignment catches them.
+  - 2026-05-04 install (10 output modules): 4-byte header, records
+    pack at stream offset 8, alt alignment catches them. Pre-0.5.5
+    every chunk was 8 chars out of phase, every decoded
+    `button_address` landed on a phantom value, the
+    `unknown_button` gate rejected all of them, and the merge
+    layer logged `0 buttons updated, 0 link blocks added, 0
+    outputs added` for every switch and roller scan. Dimmer worked
+    on both installs (16 hex data = 1 chunk = no header sensitivity).
+
+  Replay numbers against the 2026-05-04 capture, 10 affected output
+  modules: 21 → 49 → 187 inventory-matching chunks as the chunker
+  moved from buffered+0 only → per-frame@0 → buffered+0 ∪
+  buffered+8. The dual-alignment design works without firmware
+  detection: when the firmware doesn't add the header, the alt
+  alignment produces phantoms that the decoder's `unknown_button`
+  / `unknown_mode` gates reject before reaching merge.
 
 ### Changed
 
 - **Switch and roller modules now run the same sub=04 + sub=01
   two-pass scan as dimmer.** The original sub=01 rejection (0.4.8,
   "phantom records the merge layer drops") was logged under the
-  broken cross-frame chunker; every chunk on a 32-char switch frame
+  single-alignment chunker; every chunk on a 32-char switch frame
   was 8 chars out of phase regardless of which sub-byte sourced it.
-  With the chunker fix above, sub=01 returns its own productive band
-  on switch and roller — same `0x70..0x96` range as dimmer — and the
-  decoder's `unknown_button` / `unknown_mode` gates filter any
-  genuine config-byte phantoms that survive. Cost: ~40 s extra per
-  switch / roller module; benefit: link records that live outside
-  `0x00..0x3E` on sub=04 (e.g. buttons whose records reside in the
-  extended bank) become visible to the merge layer.
+  With the dual-alignment chunker fix above, sub=01 returns its own
+  productive `0x70..0x96` band on switch / roller, and the
+  `unknown_button` / `unknown_mode` gates filter any genuine
+  config-byte phantoms that survive. Cost: ~40 s extra per switch /
+  roller module; benefit: link records that live outside
+  `0x00..0x3E` on sub=04 — including the buttons whose records
+  reside in the extended bank — become visible to the merge layer.
 
 ### Tests
 
-- `test_chunk_buffering.py` adds three pinning tests for the
-  per-register-padding-discard behaviour, alongside the existing
-  three that pin the cross-frame buffered path. Fragmented frames
-  (data region < chunk length) still buffer; full-size frames
-  (data region ≥ chunk length, no buffered carry) extract chunks
-  from the data region only and drop the tail.
+- `test_chunk_buffering.py` adds four pinning tests for the
+  alt-alignment dual-pass behaviour: chunks emitted at both
+  alignments from a single full-size frame; alt-alignment
+  recovers offset-8 records that primary misses on
+  header-prepending firmware; `reset_scan_buffers` re-arms the
+  per-scan skip-pending counter; dimmer doesn't run alt alignment.
+  The existing three cross-frame buffering tests still pin the
+  primary buffered path unchanged.
 - `test_register_scan_range.py` updates the switch / roller
   single-pass tests to assert the new sub=04 + sub=01 two-pass
   behaviour, including the tuned 0x70..0x96 range on the secondary

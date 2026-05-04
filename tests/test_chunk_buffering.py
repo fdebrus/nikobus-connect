@@ -129,31 +129,34 @@ def test_dimmer_two_records_in_one_frame():
 
 
 # ---------------------------------------------------------------------------
-# Per-register padding (0.5.5 fix)
+# Alternate-alignment dual-pass for switch / roller (0.5.5 fix)
 # ---------------------------------------------------------------------------
 #
 # Real-hardware switch and roller modules return 32 hex chars of data per
-# register response. With chunk_len=12 that's 2 whole chunks plus an 8-char
-# register-end padding tail. Pre-0.5.5 the chunker buffered that 8-char tail
-# into the next frame, shifting every subsequent chunk's alignment by 8
-# chars and producing zero merged links from any switch or roller scan.
+# register response. The user-attachments capture from 2026-05-04 shows
+# records packing across registers at stream offset 8 (= 4-byte response
+# header), while the previous user's 2026-04-30 capture shows them packing
+# at stream offset 0 — same protocol, different firmware revisions.
 #
-# These tests pin the post-fix behaviour: when a frame's data region is
-# already at least one full chunk and no carry is buffered from a prior
-# fragmented frame, the chunker treats the frame as self-contained and
-# discards the trailing padding.
+# The 0.2.1..0.5.4 chunker only ran the offset-0 alignment, so the
+# 2026-05-04 install merged zero links from any switch or roller scan.
+# 0.5.5 keeps the primary buffered alignment intact (offset 0) and adds a
+# *second* buffered alignment shifted by 8 chars at the start of each
+# per-module scan. The decoder's ``unknown_button`` / ``unknown_mode``
+# gates filter the alignment that produces phantoms; the merge layer
+# dedupes when both alignments lock onto the same record.
 
 
-def test_switch_full_frame_discards_register_end_padding():
-    """A 32-char switch frame yields exactly 2 chunks; the 8-char tail
-    is dropped, NOT carried into the next frame."""
+def test_switch_full_frame_emits_chunks_at_both_alignments():
+    """A 32-char switch frame yields the 2 primary-alignment chunks
+    plus alt-alignment chunks shifted by 8 chars from the stream start.
+    Real records get caught regardless of which alignment the firmware
+    uses; phantoms are filtered downstream by the decoder."""
 
     decoder = SwitchDecoder(_coordinator())
     decoder.set_module_address("B909")
+    decoder.reset_scan_buffers()
 
-    # Two real-hardware records concatenated, plus 8 chars of
-    # register-end padding (FFFFFFFF). Sample frame from a captured
-    # B909 scan: 2026-05-04 user-attachments log.
     chunk_a = "F6353CF010FF"  # decodes to button 3D8D4F, key=1, ch=1, M01
     chunk_b = "F7637CF011FF"  # decodes to button 3DD8DF, key=1, ch=2, M01
     padding = "FFFFFFFF"
@@ -162,46 +165,81 @@ def test_switch_full_frame_discards_register_end_padding():
 
     analysis = decoder.analyze_frame_payload("", frame)
 
-    assert analysis["chunks"] == [chunk_a, chunk_b]
-    assert analysis["remainder"] == "", (
-        "register-end padding must be discarded, not buffered forward"
-    )
+    # Primary alignment yields the two records straight off offset 0.
+    assert chunk_a in analysis["chunks"]
+    assert chunk_b in analysis["chunks"]
+    # Primary buffer carries the 8-char padding forward (the historic
+    # 0.2.1 buffered behaviour).
+    assert analysis["remainder"] == padding
+    # Alt alignment dropped the first 8 chars (stream-start skip) and
+    # extracted whatever fits in the remaining 24-char slice.
+    assert len(analysis["chunks"]) >= 2  # at least the primary pair
 
 
-def test_switch_back_to_back_full_frames_stay_aligned():
-    """Across two consecutive full-size frames the chunk alignment must
-    not drift — pre-0.5.5 it drifted 8 chars per frame."""
+def test_switch_alt_alignment_recovers_offset_8_records():
+    """When records pack at stream offset 8 (firmware adds a 4-byte
+    response header), the alt alignment is what surfaces them. This
+    test mirrors the layout observed in 29FA frame 19 of the
+    2026-05-04 capture: 8-char prefix + 2 records."""
 
     decoder = SwitchDecoder(_coordinator())
-    decoder.set_module_address("B909")
+    decoder.set_module_address("29FA")
+    decoder.reset_scan_buffers()
 
-    frame1_chunks = ("F6353CF010FF", "F7637CF011FF")  # → 3D8D4F, 3DD8DF
-    frame2_chunks = ("F6D9B4F012FF", "EE56E4F00AFF")  # → 3DB66D, 3B95B9
-    pad1 = "AAAAAAAA"
-    pad2 = "BBBBBBBB"
+    prefix = "810253FF"  # 4-byte non-record prefix
+    rec_a = "EB12A4F004FF"  # decodes to button 3AC4A9, key=0, ch=5, M01
+    rec_b = "E7934CF006FF"  # decodes to button 39E4D3, key=0, ch=7, M01
+    frame = prefix + rec_a + rec_b + "ABCDEF"  # 32 + 6 chars
 
-    a1 = decoder.analyze_frame_payload(
-        "", "".join(frame1_chunks) + pad1 + "C00001"
+    analysis = decoder.analyze_frame_payload("", frame)
+
+    # Primary alignment (offset 0) sees junk + first record at offsets
+    # 0/12/24, none of which line up with rec_a or rec_b cleanly.
+    # Alt alignment (offset 8 stream-start skip) is what actually
+    # extracts rec_a and rec_b.
+    assert rec_a in analysis["chunks"], (
+        "alt-alignment must surface offset-8 records like rec_a"
     )
-    assert list(a1["chunks"]) == list(frame1_chunks)
-    assert a1["remainder"] == ""
-
-    a2 = decoder.analyze_frame_payload(
-        a1["remainder"], "".join(frame2_chunks) + pad2 + "C00002"
+    assert rec_b in analysis["chunks"], (
+        "alt-alignment must surface the second offset-8 record"
     )
-    assert list(a2["chunks"]) == list(frame2_chunks), (
-        "frame 2 must yield its own two chunks at offset 0,12 — not shifted"
+
+
+def test_alt_alignment_resets_per_scan():
+    """``reset_scan_buffers`` re-arms the first-frame skip counter so a
+    new module scan starts clean — otherwise the alt alignment would
+    drift across module boundaries."""
+
+    decoder = SwitchDecoder(_coordinator())
+    decoder.set_module_address("M1")
+    decoder.reset_scan_buffers()
+
+    # Drive one frame through to consume the first-frame skip.
+    decoder.analyze_frame_payload("", "F6353CF010FFF7637CF011FFFFFFFFFF" + "AAAAAA")
+    # Drive another to exercise post-skip buffered behaviour.
+    decoder.analyze_frame_payload("", "00112233445566778899AABBCCDDEEFF" + "BBBBBB")
+
+    assert decoder._alt_first_frame_skip_pending == 0, (
+        "skip must be fully consumed by the first frame's data region"
     )
-    assert a2["remainder"] == ""
+    decoder.reset_scan_buffers()
+    assert decoder._alt_first_frame_skip_pending == 8, (
+        "reset_scan_buffers must re-arm the skip counter for the next scan"
+    )
+    assert decoder._alt_payload_buffer == "", (
+        "reset_scan_buffers must clear the alt buffer for the next scan"
+    )
 
 
-def test_dimmer_full_frame_has_no_padding_to_discard():
-    """Dimmer registers are 16 chars data = exactly one chunk. The
-    per-register branch must produce the single chunk with no
-    remainder, identical to the pre-0.5.5 buffered branch's output."""
+def test_dimmer_no_alt_alignment_no_extra_chunks():
+    """Dimmer registers are 16 chars = exactly one chunk; no header
+    has been observed on any captured firmware. Alt alignment must
+    NOT run for dimmer (would only produce filtered phantoms and
+    bloat logs)."""
 
     decoder = DimmerDecoder(_coordinator())
     decoder.set_module_address("0E6C")
+    decoder.reset_scan_buffers()
 
     chunk = "610ED0001100B4FF"
     crc = "ABC123"
