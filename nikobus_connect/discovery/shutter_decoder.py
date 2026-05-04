@@ -14,6 +14,7 @@ from .protocol import (
     _safe_int,
     get_button_address,
     get_push_button_address,
+    is_known_button_canonical,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -86,10 +87,20 @@ def decode(payload_hex: str, raw_bytes: list[str], context) -> dict[str, Any] | 
         return None
 
     button_address = get_button_address(payload_hex[-6:])
+    coord_get_channels = getattr(context.coordinator, "get_button_channels", None)
+    if not is_known_button_canonical(button_address, coord_get_channels):
+        _LOGGER.debug(
+            "Discovery skipped | type=roller module=%s reason=unknown_button "
+            "payload=%s button_address=%s",
+            context.module_address,
+            payload_hex,
+            button_address,
+        )
+        return None
     push_button_address, normalized_button = get_push_button_address(
         key_raw,
         button_address,
-        getattr(context.coordinator, "get_button_channels", None),
+        coord_get_channels,
     )
 
     t1_val, t2_val = _timer_value(t1_raw)

@@ -21,7 +21,11 @@ from nikobus_connect.discovery.switch_decoder import SwitchDecoder
 
 def _coordinator() -> MagicMock:
     coord = MagicMock()
-    coord.get_button_channels = MagicMock(return_value=None)
+    # Return a positive channel count so the per-decoder inventory
+    # guard (added in 0.5.4) treats every decoded canonical as "known"
+    # — these tests cover chunk *buffering* mechanics and shouldn't
+    # exercise the inventory-existence path.
+    coord.get_button_channels = MagicMock(return_value=4)
     coord.get_module_channel_count = MagicMock(return_value=None)
     return coord
 

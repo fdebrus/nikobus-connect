@@ -387,6 +387,20 @@ def test_inventory_trailer_predicate():
 # --- multi-pass fast-fail ------------------------------------------------
 
 
+def test_consecutive_give_up_limit_default():
+    """Pin the default give-up budget at 16 (raised from 5 in 0.5.4).
+
+    On a real install with switch firmwares that don't ACK reads at
+    register 0x00..0x04, the prior limit of 5 fired on the very first
+    register and aborted the entire pass. 16 buys enough headroom to
+    power past leading dead zones (PC-software trace starts at 0x05)
+    while still aborting unproductive passes within ~30 s instead of
+    walking the full 256-register range.
+    """
+
+    assert const.MODULE_SCAN_CONSECUTIVE_GIVE_UP_LIMIT == 16
+
+
 @pytest.mark.asyncio
 async def test_scan_aborts_after_consecutive_ack_give_ups(tmp_path, monkeypatch):
     """When a module ignores a function+sub combination (no ACKs arrive
