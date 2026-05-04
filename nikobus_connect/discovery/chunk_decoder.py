@@ -59,19 +59,50 @@ class BaseChunkingDecoder:
 
         data_region = payload_and_crc[: len(payload_and_crc) - _CRC_LEN]
         trailing_crc = payload_and_crc[len(payload_and_crc) - _CRC_LEN :]
-        combined_payload = (payload_buffer + data_region).upper()
 
         expected_len = _CHUNK_LENGTHS.get(self.module_type)
         chunks: list[str] = []
         remainder = ""
 
         if expected_len:
-            idx = 0
-            while idx + expected_len <= len(combined_payload):
-                chunk = combined_payload[idx : idx + expected_len]
-                chunks.append(chunk)
-                idx += expected_len
-            remainder = combined_payload[idx:]
+            # Real-hardware Nikobus output modules return one register
+            # response per frame. The data region is a multiple of the
+            # chunk length plus a fixed register-end padding tail:
+            #
+            #   switch_module / roller_module:  32 hex = 2*12 + 8 padding
+            #   dimmer_module:                  16 hex = 1*16 + 0 padding
+            #   pc_link / pc_logic:             32 hex = 1*32 + 0 padding
+            #
+            # The 8-char tail on switch/roller is per-register padding,
+            # NOT a partial-record continuation. Buffering it forward
+            # into the next frame's data region (as 0.2.1..0.5.4 did)
+            # shifts every subsequent chunk's alignment by 8 chars and
+            # corrupts ``get_button_address`` reads — every decoded
+            # ``button_address`` lands on a phantom value, the
+            # ``unknown_button`` gate rejects it, and the user observes
+            # zero merged links from any switch or roller scan.
+            #
+            # When the current frame's data region alone holds at least
+            # one full chunk AND no carry from a prior fragmented frame
+            # is buffered, treat the frame as self-contained: extract
+            # whole chunks from the data region and discard the trailing
+            # padding. Otherwise fall back to the cross-frame buffered
+            # path that the synthetic-fragmentation tests in
+            # ``tests/test_chunk_buffering.py`` pin (4-char and 8-char
+            # frames feeding into chunks of 12 / 16).
+            if not payload_buffer and len(data_region) >= expected_len:
+                idx = 0
+                while idx + expected_len <= len(data_region):
+                    chunks.append(data_region[idx : idx + expected_len])
+                    idx += expected_len
+                # remainder stays "" — register-end padding is dropped.
+            else:
+                combined_payload = (payload_buffer + data_region).upper()
+                idx = 0
+                while idx + expected_len <= len(combined_payload):
+                    chunks.append(combined_payload[idx : idx + expected_len])
+                    idx += expected_len
+                remainder = combined_payload[idx:]
 
         return {
             "crc": trailing_crc,

@@ -70,15 +70,22 @@ _EXTRA_SCAN_SUBS_BY_MODULE_TYPE: dict[str, tuple[str, ...]] = {
     # referenced by the legacy Nikobus PC tool's ``group=2`` column).
     # sub=00 returns byte-identical data to sub=04, skipped.
     "dimmer_module": ("01",),
-    # Switch: sub=04 already returns the full channel-1..12 link
-    # table. sub=00 duplicates it; sub=01 returns reverse-link /
-    # config bytes the switch decoder misreads as phantom records
-    # that the merge layer then drops. No net benefit, ~40 s wasted.
-    "switch_module": (),
-    # Roller: no real-hardware trace yet. Provisionally mirror
-    # switch behaviour (single sub=04 pass); revisit if a roller
-    # module is proven to have a productive secondary bank.
-    "roller_module": (),
+    # Switch: sub=04 covers the primary bank but the original
+    # rejection of sub=01 ("misread as phantom records") was logged
+    # under the broken cross-frame chunk buffering of 0.2.1..0.5.4 —
+    # every chunk on a 32-char switch frame was 8 chars out of phase,
+    # so sub=01 *and* sub=04 produced phantom-only output. With the
+    # 0.5.5 chunker fix that discards register-end padding, sub=01
+    # returns its own productive band; the ``unknown_button`` /
+    # ``unknown_mode`` gates filter any genuine config-byte phantoms
+    # that survive. Cost: ~40 s extra per switch module; benefit:
+    # link records that live outside 0x00..0x3E surface for the
+    # merge layer.
+    "switch_module": ("01",),
+    # Roller: same family layout as switch (12-char records, 32-char
+    # register frames). Mirror the sub=01 secondary pass for the
+    # same reason.
+    "roller_module": ("01",),
 }
 
 # Productive register range per sub-byte. Derived from PC-software
