@@ -1,5 +1,68 @@
 # Changelog
 
+## 0.5.6
+
+### Fixed
+
+- **Switch / roller register scans recover the records that the
+  0.5.5 per-frame-discard chunker missed.** 0.5.5 dropped the
+  trailing register-end padding when a frame was self-contained,
+  which fixed alignment on hardware whose records pack at stream
+  offset 0 within each register but missed the records that pack
+  *across* register boundaries. The 2026-05-04 install (10 output
+  modules including 29FA, the user-attachments capture from
+  Issue #X) is one such case: its firmware prepends a 4-byte
+  response header to every switch / roller scan, so records pack
+  contiguously across register frames starting at stream offset 8.
+  Per-frame-discard saw 49 of those records out of 166 actually
+  present in the capture; button **3AC4A9** specifically — the
+  driver of the original report — wasn't among the 49.
+  
+  The chunker now runs **two buffered alignments** per switch /
+  roller scan: the historic 0.2.1 buffered path at stream offset 0
+  *plus* a second buffered path shifted 8 chars at stream start.
+  Both alignments emit chunks into the same return list; the
+  decoder's `unknown_button` / `unknown_mode` gates filter the
+  alignment that produces phantoms; the merge layer dedupes when
+  both alignments lock onto the same record.
+  
+  Replay numbers against the 2026-05-04 capture, 10 output modules:
+  
+  | Strategy | Matched chunks | Distinct buttons | 3AC4A9 found |
+  |---|---|---|---|
+  | 0.5.4 (buffered+0) | 21 | ~10 | no |
+  | 0.5.5 (per-frame@0) | 49 | ~12 | no |
+  | 0.5.6 (buffered+0 ∪ buffered+8) | **187** | **39** | yes |
+  
+  The dual-alignment design works without firmware detection:
+  when the firmware doesn't prepend a header (e.g. the 2026-04-30
+  install with modules 4707 / 9105 / C9A5), the alt path produces
+  phantoms that the decoder gates reject before reaching merge.
+  Dimmer doesn't run alt alignment — 16-char chunks against
+  16-char frames are header-insensitive on every captured firmware.
+
+### Changed
+
+- **`BaseChunkingDecoder.reset_scan_buffers()`** new public method.
+  Discovery's `_reset_module_context()` calls it on every decoder
+  at scan boundary so the alt-alignment skip-pending counter
+  re-arms cleanly between modules.
+
+### Tests
+
+- `test_chunk_buffering.py` rewrites the two 0.5.5 tests that
+  pinned per-frame-discard semantics. New pins:
+  - chunks are emitted at *both* alignments from a single
+    full-size switch frame
+  - alt-alignment recovers offset-8 records that primary misses
+    on header-prepending firmware (29FA frame 19 layout: 4-byte
+    prefix + 2 records)
+  - `reset_scan_buffers` re-arms the per-scan skip-pending counter
+  - dimmer doesn't emit alt-alignment chunks
+  
+  The original three cross-frame buffering tests still pin the
+  primary buffered path unchanged.
+
 ## 0.5.5
 
 ### Fixed

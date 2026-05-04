@@ -28,6 +28,28 @@ _CHUNK_LENGTHS = {
     "pc_logic": 32,
 }
 
+# Stream-start skip applied to the alternate alignment for module
+# types whose firmware revisions sometimes prepend a fixed-size
+# response header before the contiguous record stream.
+#
+# Switch/roller (12-char chunks against 32-char register frames):
+# the user-attachments capture from 2026-05-04 shows records packing
+# at stream offset 8 (= 4 bytes), while the previous user's capture
+# (2026-04-30) shows them packing at stream offset 0. Rather than
+# guess which firmware is in front of us, we always run a *second*
+# buffered alignment shifted by 8 chars and let the decoder's
+# ``unknown_button`` / ``unknown_mode`` gates filter the alignment
+# that produces phantoms. The merge layer dedupes when both
+# alignments happen to lock onto the same record.
+#
+# Dimmer (16-char chunks against 16-char frames): no alternate
+# alignment needed — the captured streams from both hardware
+# revisions decode cleanly at offset 0.
+_ALT_ALIGNMENT_SKIP_CHARS = {
+    "switch_module": 8,
+    "roller_module": 8,
+}
+
 
 class BaseChunkingDecoder:
     module_type: str
@@ -37,6 +59,10 @@ class BaseChunkingDecoder:
         self.module_type = module_type
         self._module_address: str | None = None
         self._module_channel_count: int | None = None
+        self._alt_payload_buffer: str = ""
+        self._alt_first_frame_skip_pending: int = _ALT_ALIGNMENT_SKIP_CHARS.get(
+            module_type, 0
+        )
 
     def can_handle(self, module_type: str) -> bool:
         return module_type == self.module_type
@@ -46,6 +72,19 @@ class BaseChunkingDecoder:
 
     def set_module_channel_count(self, module_channel_count: int | None) -> None:
         self._module_channel_count = module_channel_count
+
+    def reset_scan_buffers(self) -> None:
+        """Clear per-scan alternate-alignment state.
+
+        Discovery owns the *primary* ``_payload_buffer`` and resets
+        it itself between scans. The alternate buffer lives on the
+        decoder and the discovery loop calls this at every scan
+        boundary so the alt-alignment skip-pending counter rearms.
+        """
+        self._alt_payload_buffer = ""
+        self._alt_first_frame_skip_pending = _ALT_ALIGNMENT_SKIP_CHARS.get(
+            self.module_type, 0
+        )
 
     def analyze_frame_payload(self, payload_buffer: str, payload_and_crc: str) -> dict[str, Any] | None:
         payload_and_crc = payload_and_crc.upper()
@@ -65,44 +104,44 @@ class BaseChunkingDecoder:
         remainder = ""
 
         if expected_len:
-            # Real-hardware Nikobus output modules return one register
-            # response per frame. The data region is a multiple of the
-            # chunk length plus a fixed register-end padding tail:
-            #
-            #   switch_module / roller_module:  32 hex = 2*12 + 8 padding
-            #   dimmer_module:                  16 hex = 1*16 + 0 padding
-            #   pc_link / pc_logic:             32 hex = 1*32 + 0 padding
-            #
-            # The 8-char tail on switch/roller is per-register padding,
-            # NOT a partial-record continuation. Buffering it forward
-            # into the next frame's data region (as 0.2.1..0.5.4 did)
-            # shifts every subsequent chunk's alignment by 8 chars and
-            # corrupts ``get_button_address`` reads — every decoded
-            # ``button_address`` lands on a phantom value, the
-            # ``unknown_button`` gate rejects it, and the user observes
-            # zero merged links from any switch or roller scan.
-            #
-            # When the current frame's data region alone holds at least
-            # one full chunk AND no carry from a prior fragmented frame
-            # is buffered, treat the frame as self-contained: extract
-            # whole chunks from the data region and discard the trailing
-            # padding. Otherwise fall back to the cross-frame buffered
-            # path that the synthetic-fragmentation tests in
-            # ``tests/test_chunk_buffering.py`` pin (4-char and 8-char
-            # frames feeding into chunks of 12 / 16).
-            if not payload_buffer and len(data_region) >= expected_len:
+            # Primary buffered alignment (the historic 0.2.1 path).
+            # Records are assumed to pack contiguously across register
+            # frames starting at stream offset 0. Tested against the
+            # synthetic-fragmentation cases in
+            # ``tests/test_chunk_buffering.py`` (frames < chunk_len
+            # feeding the running buffer until a full chunk emerges)
+            # and against real-hardware captures whose firmware doesn't
+            # prepend a response header.
+            combined_payload = (payload_buffer + data_region).upper()
+            idx = 0
+            while idx + expected_len <= len(combined_payload):
+                chunks.append(combined_payload[idx : idx + expected_len])
+                idx += expected_len
+            remainder = combined_payload[idx:]
+
+            # Alternate buffered alignment, shifted by
+            # ``_ALT_ALIGNMENT_SKIP_CHARS`` at the start of the per-scan
+            # stream. On firmware revisions that prepend a 4-byte
+            # response header to switch/roller scans (observed:
+            # 2026-05-04 install, ten output modules, 0 → 49 → 166
+            # records as the alignment moved from buffered+0 →
+            # per-frame@0 → buffered+8), this is what surfaces the real
+            # link records. On firmware that doesn't add the header,
+            # the alt path produces phantoms that are rejected at
+            # decode time by ``is_known_button_canonical`` /
+            # ``unknown_mode`` and never reach the merge layer.
+            if self.module_type in _ALT_ALIGNMENT_SKIP_CHARS:
+                alt_data = data_region
+                if self._alt_first_frame_skip_pending > 0:
+                    drop = min(self._alt_first_frame_skip_pending, len(alt_data))
+                    alt_data = alt_data[drop:]
+                    self._alt_first_frame_skip_pending -= drop
+                combined_alt = (self._alt_payload_buffer + alt_data).upper()
                 idx = 0
-                while idx + expected_len <= len(data_region):
-                    chunks.append(data_region[idx : idx + expected_len])
+                while idx + expected_len <= len(combined_alt):
+                    chunks.append(combined_alt[idx : idx + expected_len])
                     idx += expected_len
-                # remainder stays "" — register-end padding is dropped.
-            else:
-                combined_payload = (payload_buffer + data_region).upper()
-                idx = 0
-                while idx + expected_len <= len(combined_payload):
-                    chunks.append(combined_payload[idx : idx + expected_len])
-                    idx += expected_len
-                remainder = combined_payload[idx:]
+                self._alt_payload_buffer = combined_alt[idx:]
 
         return {
             "crc": trailing_crc,

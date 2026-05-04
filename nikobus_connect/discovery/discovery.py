@@ -919,6 +919,13 @@ class NikobusDiscovery:
         self._module_found_data = False
         self._module_consecutive_empties = 0
         self._scan_response_index = 0
+        # Re-arm the alt-alignment skip-pending counter on every
+        # decoder so the next per-module scan that picks one up
+        # starts from a clean slate (no carry from a prior module).
+        for decoder in getattr(self, "_decoders", []):
+            reset = getattr(decoder, "reset_scan_buffers", None)
+            if reset is not None:
+                reset()
 
     async def _finalize_discovery(self, module_address: str | None = None) -> None:
         self._cancel_timeout()
