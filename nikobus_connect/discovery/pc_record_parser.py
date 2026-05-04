@@ -61,6 +61,35 @@ so a byte-4 value outside this set is a strong signal that the chunk
 isn't a registry record."""
 
 
+OUTPUT_BEARING_DEVICE_TYPES: frozenset[int] = frozenset({
+    0x01,  # Switch Module (12 ch)
+    0x02,  # Roller Shutter Module (6 ch)
+    0x03,  # Dimmer Module (12 ch)
+    0x09,  # Compact Switch Module (4 ch)
+    0x31,  # Compact Switch Module variant (4 ch)
+    0x32,  # Compact Dim Controller (4 ch)
+})
+"""Device-type bytes whose modules drive load outputs and therefore
+participate in the PC-Link flat channel map indexed by link records'
+byte 0.
+
+Excluded Module device types and why:
+
+- ``0x08`` (PC Logic), ``0x0A`` (PC Link self) — controllers, no load.
+- ``0x2B`` (Audio Distribution) — 0 channels in DEVICE_TYPES, treated as no
+  output.
+- ``0x37`` (Modular Interface 6 inputs) — its channels are inputs (sensor
+  feeds), not outputs.
+- ``0x42`` (Feedback Module) — feedback-only.
+
+Verified by inspecting both traces: link records observed on
+fdebrus's 86F5 install have ``channel_idx`` in 0x04..0x21 (max 33),
+which matches a flat output map of 12+6+6+12+4+12 = 52 channels for
+the six output-bearing modules in registry order. The second user's
+846F install has channel indices in 0x04..0x12, also within the
+expected band given their output-bearing module count."""
+
+
 @dataclass(frozen=True, slots=True)
 class ModuleRegistryRecord:
     """One known-module entry from the controller's registry table.
@@ -299,13 +328,133 @@ def _parse_link_record(chunk_hex: str, marker: int) -> LinkRecord | None:
     )
 
 
+class RegistryBuffer:
+    """Accumulator for ``ModuleRegistryRecord`` entries seen during a scan.
+
+    The PC Link's link table is preceded by a registry section whose
+    encounter order determines the flat output-channel index that
+    link records' byte 0 references (Stage 2b hypothesis). This class
+    holds those records in arrival order, ignoring duplicates that
+    arise when the controller re-emits the same register.
+
+    A single ``RegistryBuffer`` lives on a ``PcLinkDecoder`` instance
+    and is reset between scans by the decoder.
+    """
+
+    __slots__ = ("_records", "_seen_addresses")
+
+    def __init__(self) -> None:
+        self._records: list[ModuleRegistryRecord] = []
+        self._seen_addresses: set[str] = set()
+
+    def add(self, record: ModuleRegistryRecord) -> bool:
+        """Append a registry record. Returns ``True`` if appended,
+        ``False`` if it was a duplicate (same bus address)."""
+
+        addr = record.address.upper()
+        if addr in self._seen_addresses:
+            return False
+        self._seen_addresses.add(addr)
+        self._records.append(record)
+        return True
+
+    def reset(self) -> None:
+        """Clear all recorded entries. Called between scan runs."""
+
+        self._records.clear()
+        self._seen_addresses.clear()
+
+    @property
+    def records(self) -> tuple[ModuleRegistryRecord, ...]:
+        """Records in encounter order. Read-only snapshot."""
+
+        return tuple(self._records)
+
+    def __len__(self) -> int:
+        return len(self._records)
+
+    def __bool__(self) -> bool:
+        return bool(self._records)
+
+
+def build_flat_channel_map(
+    registry: RegistryBuffer,
+    coordinator,
+) -> list[tuple[str, int]]:
+    """Build the flat output-channel map a PC-Link link record's byte 0
+    indexes into.
+
+    Walks ``registry`` in encounter order and, for each output-bearing
+    module (``OUTPUT_BEARING_DEVICE_TYPES``), appends one
+    ``(address, channel_1based)`` entry per channel. Modules without
+    output channels (PC Link self, PC Logic, feedback, audio
+    distribution, modular interface inputs) are skipped.
+
+    Channel counts come from ``coordinator.get_module_channel_count``
+    so the map reflects the live install's actual configuration. A
+    module the coordinator can't size (channel count returned as 0,
+    None, or non-int) is also skipped.
+    """
+
+    flat: list[tuple[str, int]] = []
+    if coordinator is None:
+        return flat
+
+    get_count = getattr(coordinator, "get_module_channel_count", None)
+    for record in registry.records:
+        if record.device_type not in OUTPUT_BEARING_DEVICE_TYPES:
+            continue
+        try:
+            count = get_count(record.address) if get_count else None
+        except Exception:  # pragma: no cover - defensive
+            count = None
+        if not isinstance(count, int) or count <= 0:
+            continue
+        for ch in range(1, count + 1):
+            flat.append((record.address, ch))
+    return flat
+
+
+def resolve_link_target(
+    channel_index: int,
+    registry: RegistryBuffer,
+    coordinator,
+) -> tuple[str, int] | None:
+    """Resolve a link record's byte 0 to ``(target_address, channel)``.
+
+    Returns ``None`` when:
+
+    - ``channel_index`` is negative or ``>=`` the flat-map length.
+    - ``registry`` is empty or only holds non-output modules.
+    - ``coordinator`` is ``None`` or its channel-count lookup yields 0
+      for every module.
+
+    The resolution is hypothesised against trace data from two
+    installs and not yet validated against a button-press → output
+    ground-truth. Stage 2b ships the resolver with logging-only
+    semantics; the merge layer doesn't act on its output until
+    cross-install confirmation lands.
+    """
+
+    if channel_index < 0:
+        return None
+    flat = build_flat_channel_map(registry, coordinator)
+    if channel_index >= len(flat):
+        return None
+    return flat[channel_index]
+
+
 __all__ = [
     "RECORD_HEX_LEN",
     "REGISTRY_MARKER",
+    "OUTPUT_BEARING_DEVICE_TYPES",
     "ModuleRegistryRecord",
     "LinkRecord",
     "PcRecord",
+    "RegistryBuffer",
+    "build_flat_channel_map",
     "is_empty_record",
     "is_noise_chunk",
     "parse_pc_record",
+    "resolve_link_target",
 ]
