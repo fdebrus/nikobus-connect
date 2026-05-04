@@ -42,7 +42,16 @@ MODULE_SCAN_TRAILER_PREFIX: Final[str] = "$18"
 # ACK, assume the module doesn't accept this function+sub combination
 # and abort the pass early. Without this, a non-responding module
 # wastes ~256 * (ACK timeout * retries) ≈ 13 minutes per pass.
-MODULE_SCAN_CONSECUTIVE_GIVE_UP_LIMIT: Final[int] = 5
+#
+# Raised from 5 → 16 in 0.5.4 after a real-hardware report on
+# fdebrus/nikobus-connect#? where 4 switch modules + 1 dimmer aborted
+# at register 0x04..0x05 every time. Those firmwares silently ignore
+# function-10 / function-22 reads in the 0x00..0x04 dead zone but
+# respond fine from 0x05+. The PC-software trace also starts at 0x05
+# (sweeps 0x05..0x3E). 16 buys enough headroom to power past that
+# leading dead zone while still aborting unproductive passes within
+# ~30 s instead of the full ~3 min.
+MODULE_SCAN_CONSECUTIVE_GIVE_UP_LIMIT: Final[int] = 16
 
 # Message prefixes and markers
 BUTTON_COMMAND_PREFIX: Final[str] = "#N"

@@ -150,6 +150,39 @@ DEVICE_TYPES = {
         "Channels": 8,
         "Name": "Switch Interface",
     },
+    # ------------------------------------------------------------------
+    # Reserved / not-yet-identified types observed on real hardware.
+    #
+    # Each of these came from a Nikobus PC-Link inventory dump on a
+    # production install and triggers the "Unknown device detected"
+    # warning until catalogued. Adding them with ``Category="Reserved"``
+    # silences the warning (the category check fires only on the
+    # default ``"Unknown"``) and keeps both ``merge_discovered_modules``
+    # and ``merge_discovered_buttons`` from acting on them — both gate
+    # on ``Category in {"Module", "Button"}``.
+    #
+    # If you have authoritative info on what any of these are
+    # (Nikobus product code, channel count), please open an issue
+    # against fdebrus/nikobus-connect with the device-type byte,
+    # observed bus addresses, and any model number printed on the
+    # physical device.
+    "05": {"Category": "Reserved", "Model": "Unknown", "Name": "Reserved 0x05"},
+    "14": {"Category": "Reserved", "Model": "Unknown", "Name": "Reserved 0x14"},
+    "21": {"Category": "Reserved", "Model": "Unknown", "Name": "Reserved 0x21"},
+    "24": {"Category": "Reserved", "Model": "Unknown", "Name": "Reserved 0x24"},
+    "34": {"Category": "Reserved", "Model": "Unknown", "Name": "Reserved 0x34"},
+    "46": {"Category": "Reserved", "Model": "Unknown", "Name": "Reserved 0x46"},
+    # 0x3B records appear at addresses 3CF000, 3CF010, 3CF020, ... on
+    # the same install — a 16-byte stride starting at 3CF000 that's
+    # consistent with PC-Logic (05-201) BP-cell directory entries. The
+    # records carry routing data, not device identity, so we tag them
+    # ``Reserved`` rather than promoting them to ``Module`` and risking
+    # downstream code treating them as scannable hardware.
+    "3B": {
+        "Category": "Reserved",
+        "Model": "PC-Logic Cell",
+        "Name": "PC-Logic BP Cell (3CF0xx stride)",
+    },
 }
 
 

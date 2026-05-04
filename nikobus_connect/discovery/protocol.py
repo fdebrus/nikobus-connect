@@ -140,6 +140,53 @@ def convert_nikobus_address(address_string: str) -> str:
         return f"[{address_string}]"
 
 
+def is_known_button_canonical(
+    button_address: str | None,
+    coordinator_get_button_channels,
+) -> bool:
+    """Return ``True`` when ``button_address`` belongs to a known button.
+
+    A canonical button address decoded from a register chunk is
+    "known" when it appears in the live button inventory directly,
+    or when it's the +1 sibling of an 8-channel button — half the
+    keys of an 8-ch button (raw indices 4-7) decode to ``inventory_addr + 1``
+    rather than the inventory address itself, and ``_build_bus_to_op_index``
+    aliases that case at merge time.
+
+    Used by the per-module decoders as a phantom-rejection gate:
+    chunks whose address bytes happen to land on routing/cell-prefix
+    bytes (rather than a real button-link record's address bytes)
+    decode to canonical addresses that match no inventory entry. Without
+    this gate they reach the merge layer, get logged as ``unmatched``,
+    and bloat the per-scan log without ever contributing a real entry.
+
+    Returns ``True`` when the lookup is unavailable (no coordinator,
+    no button channel API) — discovery should still produce records
+    in test harnesses and bare-metal scenarios that don't supply a
+    coordinator.
+    """
+
+    if not button_address or coordinator_get_button_channels is None:
+        return True
+
+    try:
+        if coordinator_get_button_channels(button_address) is not None:
+            return True
+        # 8-ch +1 alias: inventory keys 4-7 decode to canonical+1.
+        try:
+            sibling = f"{(int(button_address, 16) - 1) & 0xFFFFFF:06X}"
+        except (TypeError, ValueError):
+            return True
+        return coordinator_get_button_channels(sibling) == 8
+    except Exception:  # pragma: no cover - defensive
+        _LOGGER.debug(
+            "is_known_button_canonical: coordinator lookup raised for %s",
+            button_address,
+            exc_info=True,
+        )
+        return True
+
+
 def get_button_address(payload_hex: str) -> str | None:
     """Convert the 3-byte payload suffix into a button address."""
 
@@ -280,6 +327,7 @@ __all__ = [
     "classify_device_type",
     "get_button_address",
     "get_push_button_address",
+    "is_known_button_canonical",
     "_format_channel",
     "_is_all_ff",
     "_is_garbage_chunk",

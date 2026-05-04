@@ -423,6 +423,12 @@ class NikobusDiscovery:
         self._progress_module_total = 0
         self._progress_register_total = 0
         self._progress_decoded_records = 0
+        # Set of unknown device-type bytes already warned about this
+        # session. Pre-0.5.4 each scan logged the same WARNING N times
+        # per type (one per record); the dedupe collapses that to a
+        # single line per type so a noisy install with several uncatalogued
+        # types doesn't flood the log on every inventory pass.
+        self._unknown_device_types_warned: set[str] = set()
         if button_data is not None:
             existing = button_data.get("nikobus_button")
             if not isinstance(existing, dict):
@@ -1384,12 +1390,20 @@ class NikobusDiscovery:
             # -------------------------------------------------------
 
             if device_info.get("Category", "Unknown") == "Unknown":
-                _LOGGER.warning(
-                    "Unknown device detected: Type %s at Address %s. "
-                    "Please open an issue on https://github.com/fdebrus/Nikobus-HA/issues with this information.",
-                    device_type_hex,
-                    converted_address,
-                )
+                if device_type_hex not in self._unknown_device_types_warned:
+                    self._unknown_device_types_warned.add(device_type_hex)
+                    _LOGGER.warning(
+                        "Unknown device detected: Type %s at Address %s. "
+                        "Please open an issue on https://github.com/fdebrus/Nikobus-HA/issues with this information.",
+                        device_type_hex,
+                        converted_address,
+                    )
+                else:
+                    _LOGGER.debug(
+                        "Unknown device detected (deduped): Type %s at Address %s",
+                        device_type_hex,
+                        converted_address,
+                    )
 
             module_type = get_module_type_from_device_type(device_type_hex)
             if module_type == "pc_link":

@@ -1,5 +1,59 @@
 # Changelog
 
+## 0.5.4
+
+### Fixed
+
+- **Switch / dimmer modules no longer abort scanning at register
+  0x00..0x04.** `MODULE_SCAN_CONSECUTIVE_GIVE_UP_LIMIT` raised from 5
+  to 16. On installs whose switch / dimmer firmwares silently ignore
+  function-10 / function-22 reads in the 0x00..0x04 dead zone (real
+  hardware: 4 switch modules + 1 dimmer all aborted at register 0x04
+  with `consecutive_give_ups=5`), the prior limit fired immediately
+  and aborted the entire pass before reaching the productive 0x05+
+  band that the PC-software trace sweeps. 16 buys enough headroom to
+  power past the leading dead zone while still aborting unproductive
+  passes within ~30 s instead of walking the full 256-register range.
+
+### Added (phantom-rejection guard at decode time)
+
+- **`is_known_button_canonical()` helper** in `discovery.protocol`.
+  Returns `True` when a decoded canonical button address belongs to a
+  known button — direct match in the live inventory, or the +1 sibling
+  of an 8-channel button (raw indices 4-7 of an 8-ch button decode to
+  `inventory_addr + 1`, aliased at merge time by
+  `_build_bus_to_op_index`). Lenient when no coordinator / button API
+  is available, so test harnesses and bare-metal tooling still produce
+  records.
+
+- **Switch / dimmer / shutter decoders apply the guard** after
+  computing `button_address`. Chunks whose last 3 bytes land on
+  routing or cell-prefix bytes (rather than a real button-link
+  record's address bytes) decode to canonicals matching no inventory
+  entry. Pre-0.5.4 those reached the merge layer, got logged as
+  `unmatched`, and bloated the per-scan log without ever contributing
+  a real `linked_modules` entry. Now they're dropped at decode time
+  with a `reason=unknown_button` debug line.
+
+### Changed
+
+- **"Unknown device detected" warning is deduped per session.**
+  Pre-0.5.4 every record carrying an uncatalogued device-type byte
+  logged a fresh WARNING (with the "please open an issue" CTA). On
+  installs with several uncatalogued types, that meant ~26 duplicate
+  WARNINGs per scan. Now each distinct type byte warns once per
+  `NikobusDiscovery` instance; subsequent occurrences DEBUG.
+
+- **Catalogued seven previously-unknown device types** observed on
+  real hardware (fdebrus/nikobus-connect issue logs): `0x05`, `0x14`,
+  `0x21`, `0x24`, `0x34`, `0x46`, and `0x3B` (the last appearing at
+  addresses `3CF000`, `3CF010`, … on a 16-byte stride consistent with
+  PC-Logic 05-201 BP-cell directory entries). All marked
+  `Category="Reserved"` so the inventory parser silences the warning
+  but neither `merge_discovered_modules` nor `merge_discovered_buttons`
+  acts on them. Authoritative identification (Nikobus product code,
+  channel count) welcome via GitHub issue.
+
 ## 0.5.3
 
 ### Added (Stage 2b plumbing — logging-only)
