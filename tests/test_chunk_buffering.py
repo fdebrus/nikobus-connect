@@ -206,29 +206,66 @@ def test_switch_alt_alignment_recovers_offset_8_records():
 
 
 def test_alt_alignment_resets_per_scan():
-    """``reset_scan_buffers`` re-arms the first-frame skip counter so a
-    new module scan starts clean — otherwise the alt alignment would
-    drift across module boundaries."""
+    """``reset_scan_buffers`` re-arms each alt-skip's first-frame
+    counter so a new module scan starts clean — otherwise the alt
+    alignments would drift across module boundaries."""
 
     decoder = SwitchDecoder(_coordinator())
     decoder.set_module_address("M1")
     decoder.reset_scan_buffers()
 
-    # Drive one frame through to consume the first-frame skip.
+    # Switch has alt skips at {4, 8} since 0.5.9.
+    assert set(decoder._alt_first_frame_skip_pending.keys()) == {4, 8}
+    assert decoder._alt_first_frame_skip_pending == {4: 4, 8: 8}
+
+    # Drive a couple of frames to consume the first-frame skips.
     decoder.analyze_frame_payload("", "F6353CF010FFF7637CF011FFFFFFFFFF" + "AAAAAA")
-    # Drive another to exercise post-skip buffered behaviour.
     decoder.analyze_frame_payload("", "00112233445566778899AABBCCDDEEFF" + "BBBBBB")
 
-    assert decoder._alt_first_frame_skip_pending == 0, (
-        "skip must be fully consumed by the first frame's data region"
+    assert decoder._alt_first_frame_skip_pending == {4: 0, 8: 0}, (
+        "every skip must be fully consumed by the first frame's data region"
     )
     decoder.reset_scan_buffers()
-    assert decoder._alt_first_frame_skip_pending == 8, (
-        "reset_scan_buffers must re-arm the skip counter for the next scan"
+    assert decoder._alt_first_frame_skip_pending == {4: 4, 8: 8}, (
+        "reset_scan_buffers must re-arm every skip counter"
     )
-    assert decoder._alt_payload_buffer == "", (
-        "reset_scan_buffers must clear the alt buffer for the next scan"
+    assert decoder._alt_payload_buffers == {4: "", 8: ""}, (
+        "reset_scan_buffers must clear every alt buffer"
     )
+
+
+def test_switch_alt_alignment_recovers_offset_4_records():
+    """Some switch firmware revisions place records at stream offset
+    4 (= 2-byte prefix), neither offset 0 nor offset 8. Pinned in
+    0.5.9 after the 2026-05-04 PR-#42 follow-up scan showed B909's
+    record for button 3AC4A9 / key 1 / channel 5 sitting at frame
+    offset 16 — half-way between primary (offset 0) and the existing
+    +8 alt. Adding a +4 alt alignment recovers it."""
+
+    decoder = SwitchDecoder(_coordinator())
+    decoder.set_module_address("B909")
+    decoder.reset_scan_buffers()
+
+    # Mimic the captured layout: 2-byte prefix + 2 records + 2-byte
+    # tail. The +4 alt alignment drops the prefix and slices the
+    # records cleanly.
+    prefix = "1234"  # 2-byte non-record prefix
+    rec_a = "EB12A4F014FF"  # decodes to 3AC4A9, key=1, ch=5, M01 (the
+                            # actual missing record from B909 in the
+                            # 2026-05-04 capture)
+    rec_b = "F6353CF010FF"  # decodes to 3D8D4F, key=1, ch=1, M01
+    tail = "5678" + "1A1B1C"  # 4 chars data tail + 6-char CRC
+    frame = prefix + rec_a + rec_b + tail
+
+    analysis = decoder.analyze_frame_payload("", frame)
+
+    # Both records must surface — rec_a comes from the +4 alt
+    # alignment, rec_b is reachable from primary or +4 (same chunk).
+    assert rec_a in analysis["chunks"], (
+        "+4 alt alignment must surface offset-4 records like rec_a "
+        "(button 3AC4A9 from 2026-05-04 capture)"
+    )
+    assert rec_b in analysis["chunks"]
 
 
 def test_dimmer_no_alt_alignment_no_extra_chunks():
