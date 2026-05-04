@@ -35,10 +35,12 @@ import logging
 from typing import Any
 
 from .chunk_decoder import BaseChunkingDecoder
+from .pc_link_decoder import _known_module_addresses
 from .pc_record_parser import (
     LinkRecord,
     ModuleRegistryRecord,
     is_empty_record,
+    is_noise_chunk,
     parse_pc_record,
 )
 
@@ -53,7 +55,11 @@ def decode(payload_hex: str, raw_bytes: list[str], context) -> dict[str, Any] | 
     layer. Logs the parsed record at INFO for visibility.
     """
 
-    return _log_record(payload_hex, getattr(context, "module_address", None))
+    return _log_record(
+        payload_hex,
+        getattr(context, "module_address", None),
+        coordinator=getattr(context, "coordinator", None),
+    )
 
 
 class PcLogicDecoder(BaseChunkingDecoder):
@@ -69,12 +75,16 @@ class PcLogicDecoder(BaseChunkingDecoder):
     def decode_chunk(self, chunk, module_address=None):
         chunk = chunk.strip().upper()
         addr = module_address or self._module_address
-        _log_record(chunk, addr, prefix=_LOG_PREFIX)
+        _log_record(chunk, addr, coordinator=self._coordinator, prefix=_LOG_PREFIX)
         return []
 
 
 def _log_record(
-    chunk_hex: str, module_address: str | None, *, prefix: str = _LOG_PREFIX
+    chunk_hex: str,
+    module_address: str | None,
+    *,
+    coordinator=None,
+    prefix: str = _LOG_PREFIX,
 ) -> dict[str, Any] | None:
     """Shared logging helper used by both ``decode()`` and ``decode_chunk``.
 
@@ -92,7 +102,19 @@ def _log_record(
         )
         return None
 
-    record = parse_pc_record(chunk_hex)
+    if is_noise_chunk(chunk_hex):
+        _LOGGER.debug(
+            "%s noise chunk | module=%s payload=%s",
+            prefix,
+            module_address,
+            chunk_hex,
+        )
+        return None
+
+    record = parse_pc_record(
+        chunk_hex,
+        known_module_addresses=_known_module_addresses(coordinator),
+    )
     if record is None:
         _LOGGER.debug(
             "%s unparseable chunk | module=%s payload=%s",

@@ -28,11 +28,32 @@ from .pc_record_parser import (
     LinkRecord,
     ModuleRegistryRecord,
     is_empty_record,
+    is_noise_chunk,
     parse_pc_record,
 )
 
 _LOGGER = logging.getLogger(__name__)
 _LOG_PREFIX = "PC-Link"
+
+
+def _known_module_addresses(coordinator) -> set[str]:
+    """Collect bus-form addresses of every module in the live inventory.
+
+    Used by ``parse_pc_record`` to identify registry records by shape
+    (Module device-type + known address) when the byte-0 marker varies
+    by firmware. Returns an empty set when the coordinator is missing
+    or has no inventory yet — the parser falls back to the legacy
+    byte-0 == 0x03 fast path in that case.
+    """
+
+    if coordinator is None:
+        return set()
+    buckets = getattr(coordinator, "dict_module_data", None) or {}
+    addresses: set[str] = set()
+    for module_map in buckets.values():
+        if isinstance(module_map, dict):
+            addresses.update(addr.upper() for addr in module_map if addr)
+    return addresses
 
 
 def decode(payload_hex: str, raw_bytes: list[str], context) -> dict[str, Any] | None:
@@ -44,7 +65,11 @@ def decode(payload_hex: str, raw_bytes: list[str], context) -> dict[str, Any] | 
     ``None`` — the merge layer must not see these records yet.
     """
 
-    return _log_record(payload_hex, getattr(context, "module_address", None))
+    return _log_record(
+        payload_hex,
+        getattr(context, "module_address", None),
+        coordinator=getattr(context, "coordinator", None),
+    )
 
 
 class PcLinkDecoder(BaseChunkingDecoder):
@@ -61,12 +86,16 @@ class PcLinkDecoder(BaseChunkingDecoder):
     def decode_chunk(self, chunk, module_address=None):
         chunk = chunk.strip().upper()
         addr = module_address or self._module_address
-        _log_record(chunk, addr, prefix=_LOG_PREFIX)
+        _log_record(chunk, addr, coordinator=self._coordinator, prefix=_LOG_PREFIX)
         return []
 
 
 def _log_record(
-    chunk_hex: str, module_address: str | None, *, prefix: str = _LOG_PREFIX
+    chunk_hex: str,
+    module_address: str | None,
+    *,
+    coordinator=None,
+    prefix: str = _LOG_PREFIX,
 ) -> dict[str, Any] | None:
     """Shared logging helper used by both ``decode()`` and ``decode_chunk``.
 
@@ -85,7 +114,19 @@ def _log_record(
         )
         return None
 
-    record = parse_pc_record(chunk_hex)
+    if is_noise_chunk(chunk_hex):
+        _LOGGER.debug(
+            "%s noise chunk | module=%s payload=%s",
+            prefix,
+            module_address,
+            chunk_hex,
+        )
+        return None
+
+    record = parse_pc_record(
+        chunk_hex,
+        known_module_addresses=_known_module_addresses(coordinator),
+    )
     if record is None:
         _LOGGER.debug(
             "%s unparseable chunk | module=%s payload=%s",

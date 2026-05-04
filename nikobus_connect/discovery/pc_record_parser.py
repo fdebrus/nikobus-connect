@@ -1,21 +1,31 @@
 """Parser for the 16-byte register-record format used by PC-Link / PC-Logic.
 
-Reverse-engineered from a Nikobus PC-software serial trace captured on
-real hardware. Each register read on a controller-class module (PC Link
-05-200, PC Logic 05-201) returns a single 16-byte record. There are
-two record types, distinguished by byte 0:
+Reverse-engineered from Nikobus PC-software serial traces captured on
+real hardware across multiple installs. Each register read on a
+controller-class module (PC Link 05-200, PC Logic 05-201) returns a
+single 16-byte record. There are two record types:
 
-  - **Module registry record** (``byte_0 == 0x03``): metadata about a
-    bus module the controller knows about.
-  - **Link record** (``byte_0`` is anything else, but not ``0xFF``): a
-    button-press → output-channel routing entry.
+  - **Module registry record**: metadata about a bus module the
+    controller knows about. Layout:
+    ``<marker> 00 00 00 <type> 00 00 00 <addr_lo> <addr_hi> 00 00 <slot> 00 00 00``
+  - **Link record**: a button-press → output-channel routing entry.
+    Layout:
+    ``<chan> 00 00 00 <mode> 00 00 <flag> <p0> <p1> <p2> 00 <slot> 00 00 00``
 
-The same parser handles both because the on-wire format is the same
-across PC Link and PC Logic — both are bus controllers running the
-same firmware family, and the trace confirms they share at least the
-record-storage convention. The host-level distinction (which
-controller emitted the chunk) is preserved by the per-module decoder
-that wraps this parser.
+Discrimination between the two types is by structural shape, not by a
+single fixed byte-0 marker. Stage 2a's 0.5.0/0.5.1 parser pinned
+``byte_0 == 0x03`` for registry records based on the first install's
+trace (``86F5``); a second install (``846F``) showed the marker can be
+``0x04`` instead. The shape — byte 4 carrying a Module device-type
+code AND bytes 8-9 holding a known module address — is install-stable
+and so is what the parser keys on when ``known_module_addresses`` is
+supplied.
+
+Common to BOTH record types: bytes 1-3 are always ``0x00 0x00 0x00``.
+That invariant is the cleanest way to reject the noise chunks the PC
+Link emits at low-register reads (``00 01 02 03 ...`` counter dumps,
+``FF FF FF 00 00 ...`` partial-empty fragments) — and it's verified
+across all real records in both traces.
 
 Stage 2a contract: parse and surface records for visibility; do NOT
 synthesize ``DecodedCommand`` outputs. Stage 2b will resolve byte-0
@@ -27,14 +37,28 @@ validate the byte-0 → ``(module, channel)`` mapping against.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Union
+from typing import Iterable, Union
+
+from .mapping import DEVICE_TYPES
 
 
 RECORD_HEX_LEN = 32
 """16 bytes per record × 2 hex chars per byte."""
 
 REGISTRY_MARKER = 0x03
-"""Byte-0 value that identifies a module-registry record in the trace."""
+"""Legacy byte-0 marker for registry records. Recognised as a
+fast-path; the structural rule (Module device-type at byte 4 + known
+address at bytes 8-9) covers every variant we've actually seen."""
+
+_MODULE_DEVICE_TYPE_CODES: frozenset[int] = frozenset(
+    int(code, 16)
+    for code, info in DEVICE_TYPES.items()
+    if info.get("Category") == "Module"
+)
+"""Device-type byte values that legitimately appear in registry
+records. Buttons live in link-record payloads, not in the registry,
+so a byte-4 value outside this set is a strong signal that the chunk
+isn't a registry record."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -100,14 +124,66 @@ def is_empty_record(chunk_hex: str) -> bool:
     return all(c == "F" for c in chunk_hex)
 
 
-def parse_pc_record(chunk_hex: str) -> PcRecord | None:
+def is_noise_chunk(chunk_hex: str) -> bool:
+    """Detect chunks that aren't records but also aren't all-FF.
+
+    Two patterns observed on real hardware:
+
+    1. **Counter dumps.** When the PC Link's full-sweep scan reads
+       low registers (0x00..0x3F on the second user's install),
+       responses come back as the register-counter pattern itself —
+       e.g. ``000102030405060708090A0B0C0D0E0F``,
+       ``101112131415161718191A1B1C1D1E1F``. These are 16 sequential
+       bytes, not records.
+    2. **Partial-empty fragments.** Chunks like
+       ``0000FFFFFFFFFFFFFFFFFFFFFFFFFFFF`` or
+       ``FFFFFFFFFFFFFFFFFFFFFFFF00000000`` show up at scan boundaries
+       on the second user's install. Not all-FF, not all-zero, not a
+       record.
+
+    Real records always have ``bytes 1-3 == 00 00 00`` (verified
+    against both traces). Counter dumps fail this; partial fragments
+    fail this; only true records pass. The all-zero chunk is rejected
+    explicitly because its bytes 1-3 ARE zero but the record carries
+    no information.
+    """
+
+    if not isinstance(chunk_hex, str):
+        return False
+    chunk_hex = chunk_hex.strip().upper()
+    if len(chunk_hex) != RECORD_HEX_LEN:
+        return False
+
+    if all(c == "0" for c in chunk_hex):
+        return True
+
+    return chunk_hex[2:8] != "000000"
+
+
+def parse_pc_record(
+    chunk_hex: str,
+    *,
+    known_module_addresses: Iterable[str] | None = None,
+) -> PcRecord | None:
     """Parse a 32-hex-char (16-byte) PC controller record.
 
-    Returns ``None`` for chunks that are empty (all-FF), the wrong
-    length, or otherwise unparseable. The caller (decoder) is expected
-    to log empty / unparseable chunks and continue — the controller
-    happily returns zero-padded or all-FF responses for any register
-    in a configured range.
+    Returns ``None`` for chunks that are empty, noise, the wrong
+    length, or otherwise unparseable.
+
+    Discrimination between registry and link records:
+
+    - Fast path: ``byte_0 == REGISTRY_MARKER (0x03)``. Pins the
+      first-install (``86F5``) convention so existing tests still pass
+      without supplying address context.
+    - Structural path: when ``known_module_addresses`` is supplied,
+      a chunk whose byte 4 is a Module device-type code AND whose
+      bytes 8-9 (byte-swapped) match a known address parses as a
+      registry record regardless of byte 0. Catches the second-install
+      (``846F``) convention where the marker is ``0x04``.
+    - Otherwise the chunk is treated as a link record.
+
+    ``known_module_addresses`` should be the bus-form addresses of all
+    modules in the live inventory (``coordinator.dict_module_data``).
     """
 
     if not isinstance(chunk_hex, str):
@@ -117,6 +193,8 @@ def parse_pc_record(chunk_hex: str) -> PcRecord | None:
         return None
     if is_empty_record(chunk_hex):
         return None
+    if is_noise_chunk(chunk_hex):
+        return None
 
     try:
         marker = int(chunk_hex[0:2], 16)
@@ -125,7 +203,32 @@ def parse_pc_record(chunk_hex: str) -> PcRecord | None:
 
     if marker == REGISTRY_MARKER:
         return _parse_registry_record(chunk_hex)
+
+    if known_module_addresses is not None and _looks_like_registry_shape(
+        chunk_hex, known_module_addresses
+    ):
+        return _parse_registry_record(chunk_hex)
+
     return _parse_link_record(chunk_hex, marker)
+
+
+def _looks_like_registry_shape(
+    chunk_hex: str, known_module_addresses: Iterable[str]
+) -> bool:
+    """Structural test: byte 4 is a Module device-type AND bytes 8-9
+    byte-swapped is a known module address. Together these are strong
+    enough to override the byte-0 marker check."""
+
+    try:
+        device_type = int(chunk_hex[8:10], 16)
+    except ValueError:
+        return False
+    if device_type not in _MODULE_DEVICE_TYPE_CODES:
+        return False
+
+    address = (chunk_hex[18:20] + chunk_hex[16:18]).upper()
+    known = {a.strip().upper() for a in known_module_addresses if a}
+    return address in known
 
 
 def _parse_registry_record(chunk_hex: str) -> ModuleRegistryRecord | None:
@@ -203,5 +306,6 @@ __all__ = [
     "LinkRecord",
     "PcRecord",
     "is_empty_record",
+    "is_noise_chunk",
     "parse_pc_record",
 ]
