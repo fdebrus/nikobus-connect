@@ -1,5 +1,76 @@
 # Changelog
 
+## 0.5.3
+
+### Added (Stage 2b plumbing — logging-only)
+
+- **PC-Link link records now log a resolved target.** Each
+  `PC-Link link record` INFO line is followed by a `PC-Link link
+  target` INFO line carrying the resolved
+  `(target_module_address, channel)` derived from byte 0 of the
+  record. Resolution walks a flat output-channel map built from the
+  controller's registry section in encounter order, indexing into
+  the live install's actual channel counts via
+  `coordinator.get_module_channel_count`.
+
+  Stage 2b is **logging-only** in this release: the resolver runs in
+  production but `PcLinkDecoder.decode_chunk` still returns `[]`, so
+  the merge layer doesn't ingest PC-Link link records. Users can
+  validate the resolver's output against their physical install
+  (does pressing button X really drive `module=Y ch=Z`?) before we
+  flip the merge gate in a follow-up. Out-of-range or
+  empty-registry resolutions log at DEBUG to keep the INFO stream
+  clean.
+
+- **`RegistryBuffer` accumulator on `PcLinkDecoder`.** A per-instance
+  buffer collects `ModuleRegistryRecord` entries during a scan,
+  preserving encounter order (the link-record byte-0 indexing
+  contract) and dropping duplicates when the controller re-emits
+  the same register. Public method `reset_registry()` clears it
+  between scans.
+
+- **`OUTPUT_BEARING_DEVICE_TYPES`** in `pc_record_parser`.
+  The set of device-type bytes whose modules drive load outputs
+  and therefore appear in the flat channel map: `0x01` (switch),
+  `0x02` (roller), `0x03` (dimmer), `0x09` and `0x31` (compact
+  switch), `0x32` (compact dim). PC Link self (`0x0A`), PC Logic
+  (`0x08`), Audio Distribution (`0x2B`), Modular Interface inputs
+  (`0x37`), and Feedback Module (`0x42`) are excluded — their
+  channels (or absence thereof) don't participate in the
+  link-record byte-0 mapping.
+
+- **`build_flat_channel_map(registry, coordinator)`** and
+  **`resolve_link_target(channel_index, registry, coordinator)`**.
+  Pure functions that build the flat output map and resolve a
+  single byte-0 index. Both fail closed (return `[]` / `None`) on
+  missing coordinator, unsized modules, or out-of-range indices.
+
+### Tests
+
+- 22 new tests in `tests/test_pc_link_stage2b.py` covering the
+  registry buffer (accumulation, dedup, encounter order, reset),
+  the output-bearing device-type set (positive/negative
+  membership), the flat channel map (52-entry result for fdebrus's
+  install pinned to expected `(addr, ch)` pairs at every band
+  boundary, plus skip behaviour for excluded device types and
+  zero-channel modules), the resolver (12 known
+  `(channel_idx, addr, ch)` pinpoints from the trace, plus
+  out-of-range / negative / empty-registry / non-output-only
+  fail-closed cases), and `PcLinkDecoder` integration (registry
+  accumulation across chunks, the new `link target` INFO line on
+  successful resolution, DEBUG logging when resolution fails, and
+  the Stage-2a contract that `decode_chunk` keeps returning `[]`).
+- 186/186 passing.
+
+### Migration
+
+- HA integrations bumping `nikobus-connect>=0.5.3` start seeing
+  `PC-Link link target` INFO lines next to each link record. No
+  config or behaviour change beyond logging — the merge layer
+  output is identical to 0.5.2. Use the new lines to validate the
+  resolver against your install before opting into Stage 2b's
+  merge activation in a future release.
+
 ## 0.5.2
 
 ### Fixed
