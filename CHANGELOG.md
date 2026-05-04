@@ -4,6 +4,31 @@
 
 ### Fixed
 
+- **8-channel button link records arriving via the `+1` alias now
+  merge.** Link records on dimmer / switch / roller modules encode
+  the button address as ``physical + 1`` for raw key indices 4-7 of
+  an 8-channel button. The decoder accepts those via
+  ``is_known_button_canonical``'s sibling check, but
+  ``_resolve_operation_point`` had no analogous fallback — it tried
+  ``buttons.get(canonical)`` directly and ``bus_to_op.get(canonical)``,
+  neither of which covers the canonical+1 case (the bus index's +1
+  alias is on the bus address, not on the physical address).
+  Records dropped silently at merge.
+
+  On the 2026-05-04 install button ``1D3252`` (8-ch) was the
+  textbook case: 5 records on roller ``5538`` arrived exclusively as
+  the ``1D3253`` alias (raw key 4-7), and all 5 silently dropped.
+  Eight other 8-channel buttons on the same install (``1CBE46``,
+  ``1E1B16``, ``1E2078``, ``1E206C``, ``1C8DD8``, ``1E2A1A``,
+  ``1E1272``) had records arriving both ways — only the direct half
+  merged. The fallback recovers the alias half too: ``+1`` records
+  now fold back to the physical 8-channel button when its
+  canonical-1 sibling exists in the store and has ``channels == 8``.
+
+  4-channel and 2-channel buttons are unaffected — their link
+  records never use the ``physical + 1`` encoding, and the new path
+  guards on ``channels == 8`` so it can't invent ghost links.
+
 - **Dimmer module register scan reverts to the pre-0.4.10 full-sweep
   range.** 0.4.10 narrowed the dimmer scan to ``sub=04 → 0x00..0x3F``
   + ``sub=01 → 0x70..0x96`` (103 registers total) on the strength of
@@ -34,6 +59,12 @@
 
 ### Tests
 
+- ``test_8ch_alias_merge.py`` (new) — pins the +1-alias merge
+  fallback: 8-channel canonical+1 folds back to the physical
+  button; 4-channel and 2-channel canonical+1 must NOT fold;
+  direct match takes precedence over the fallback so we don't
+  mis-route a record when both ``X`` and ``X+1`` are registered
+  buttons.
 - ``test_register_scan_range.py`` — dimmer two-pass test and
   ``test_dimmer_scan_total_registers_full_sweep_per_pass`` updated
   to assert ``range(0x00, 0x100)`` for both dimmer passes (was
