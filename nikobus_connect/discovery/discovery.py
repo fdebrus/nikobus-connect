@@ -142,19 +142,49 @@ _SCAN_REGISTER_RANGE_BY_MODULE_TYPE: dict[str, range] = {
     "pc_link": _PC_LINK_SCAN_RANGE_OVERRIDE,
 }
 
+# Per-(module-type, sub-byte) override. When a (module_type, sub) pair
+# is registered here, it takes precedence over both the per-module-type
+# override and the per-sub-byte default — letting us widen one pass on
+# one module type without affecting any other (module, sub) combination.
+#
+# Dimmer 2026-05-04 capture (modules 116D + 0E0A on this firmware
+# revision) shows the 0.4.10 narrowing dropped link records on
+# channels 3 and 5. The dimmer's link table on this firmware extends
+# past the 0.4.10 sub=04 cap (0x3F) — PC software clearly displays
+# connections to outputs O09 / O11 / O12 of 116D, but our scan finds
+# records only on channels 1, 2, 6. Restoring the pre-0.4.10 full
+# sweep (0x00..0xFF) for both dimmer passes recovers them. Switch and
+# roller stay at the tuned ranges; their traces have been validated
+# against multiple firmware captures and the narrowing wasn't
+# observed to drop records there.
+_SCAN_REGISTER_RANGE_BY_MODULE_TYPE_AND_SUB: dict[tuple[str, str], range] = {
+    ("dimmer_module", "04"): range(0x00, 0x100),
+    ("dimmer_module", "01"): range(0x00, 0x100),
+}
+
 
 def _scan_range_for_sub(sub_byte: str, module_type: str | None = None) -> range:
     """Return the productive register range for a given sub-byte.
 
-    When ``module_type`` is supplied and has a per-type override
-    registered (currently only ``pc_logic``), the override takes
-    precedence over the per-sub mapping. This is how Stage 1.5 widens
-    PC-Logic's primary pass from the output-module's tuned 0x00..0x3F
-    to the full 0x00..0xFF sweep without changing any other module's
-    behaviour.
+    Priority: most-specific match wins.
+
+    1. ``(module_type, sub_byte)`` tuple in
+       ``_SCAN_REGISTER_RANGE_BY_MODULE_TYPE_AND_SUB`` — used for
+       per-pass overrides (e.g. dimmer's restored full sweep on both
+       sub=04 and sub=01 since 0.5.7).
+    2. ``module_type`` alone in ``_SCAN_REGISTER_RANGE_BY_MODULE_TYPE``
+       — used for whole-module overrides (PC-Link, PC-Logic).
+    3. ``sub_byte`` in ``_SCAN_REGISTER_RANGE_BY_SUB`` — the per-sub
+       default (switch/roller tuned ranges).
+    4. ``_DEFAULT_SCAN_REGISTER_RANGE`` — fallback for unknown sub-bytes.
     """
 
     if module_type is not None:
+        per_pass = _SCAN_REGISTER_RANGE_BY_MODULE_TYPE_AND_SUB.get(
+            (module_type, sub_byte)
+        )
+        if per_pass is not None:
+            return per_pass
         override = _SCAN_REGISTER_RANGE_BY_MODULE_TYPE.get(module_type)
         if override is not None:
             return override

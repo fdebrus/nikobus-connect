@@ -274,11 +274,28 @@ def test_pc_logic_chunk_length_is_sixteen_byte_record_stride():
 # types must keep their tuned range.
 
 
-def test_scan_range_for_sub_default_is_tuned_for_output_modules():
+def test_scan_range_for_sub_default_is_tuned_for_switch_and_roller():
+    """The 0.4.10 tuning of sub=04 to 0x00..0x3F applies to switch and
+    roller (multi-firmware verified). Dimmer was reverted in 0.5.7 to
+    the pre-0.4.10 full sweep — covered by a dedicated test below.
+    The bare-sub default (no ``module_type``) keeps the historical
+    tuned range so callers without a known type see the conservative
+    behaviour."""
+
     assert _scan_range_for_sub("04") == range(0x00, 0x40)
     assert _scan_range_for_sub("04", module_type="switch_module") == range(0x00, 0x40)
-    assert _scan_range_for_sub("04", module_type="dimmer_module") == range(0x00, 0x40)
     assert _scan_range_for_sub("04", module_type="roller_module") == range(0x00, 0x40)
+
+
+def test_scan_range_for_sub_dimmer_is_full_sweep_per_pass():
+    """Dimmer reverts to pre-0.4.10 ``range(0x00, 0x100)`` for both
+    sub=04 and sub=01 since 0.5.7. Real-hardware capture (2026-05-04,
+    modules 116D + 0E0A) showed the 0.4.10 narrowing dropped link
+    records on channels 3 and 5; restoring the full sweep recovers
+    them at the cost of ~3 minutes extra per dimmer scan."""
+
+    assert _scan_range_for_sub("04", module_type="dimmer_module") == range(0x00, 0x100)
+    assert _scan_range_for_sub("01", module_type="dimmer_module") == range(0x00, 0x100)
 
 
 def test_scan_range_for_sub_overrides_pc_logic_to_full_sweep():
@@ -292,6 +309,21 @@ def test_scan_range_for_sub_pc_logic_override_applies_to_all_subs():
 
     for sub in ("04", "00", "01"):
         assert _scan_range_for_sub(sub, module_type="pc_logic") == range(0x00, 0x100)
+
+
+def test_scan_range_priority_per_pass_overrides_per_module():
+    """The (module_type, sub_byte) override beats the module-type-only
+    override. This is what lets us widen one pass on one module type
+    without affecting any other (module, sub) combination."""
+
+    # Dimmer has both a per-pass widening AND falls under the per-sub
+    # default — per-pass wins for the registered sub-bytes.
+    assert _scan_range_for_sub("04", module_type="dimmer_module") == range(0x00, 0x100)
+    assert _scan_range_for_sub("01", module_type="dimmer_module") == range(0x00, 0x100)
+    # An unregistered sub-byte for dimmer falls through to the
+    # per-sub default (no per-module-type-only override exists for
+    # dimmer; PC-Logic / PC-Link are the only whole-module overrides).
+    assert _scan_range_for_sub("00", module_type="dimmer_module") == range(0x00, 0x40)
 
 
 @pytest.mark.asyncio
