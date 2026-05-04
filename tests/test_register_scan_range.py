@@ -208,12 +208,15 @@ async def test_scan_runs_three_passes_per_dimmer_module(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_scan_runs_single_pass_per_switch_module(tmp_path):
-    """Switch modules need only the historic sub=04 pass. Real-hardware
-    testing showed sub=00 duplicates sub=04 and sub=01 returns reverse-
-    link bytes the switch decoder misreads as phantoms (all rejected at
-    merge time). 0.4.8 drops both to restore pre-0.4.5 scan time on
-    switches while keeping the dimmer bank fix."""
+async def test_scan_runs_two_passes_per_switch_module(tmp_path):
+    """Switch modules get sub=04 + sub=01 since 0.5.5.
+
+    Pre-0.5.5 history: 0.4.8 dropped sub=01 from switch because the
+    cross-frame chunker (broken for 32-char switch frames) misread
+    every chunk as a phantom record. With the 0.5.5 chunker fix that
+    discards register-end padding, sub=01 returns its own productive
+    band; the merge-layer ``unknown_button`` / ``unknown_mode`` gates
+    filter any genuine config-byte phantoms that survive."""
 
     coord = _make_coordinator()
     discovery = NikobusDiscovery(
@@ -242,16 +245,21 @@ async def test_scan_runs_single_pass_per_switch_module(tmp_path):
 
     await discovery.query_module_inventory("4707")
 
-    assert len(calls) == 1, f"expected 1 pass for switch, got {len(calls)}: {calls}"
+    assert len(calls) == 2, f"expected 2 passes for switch, got {len(calls)}: {calls}"
     assert calls[0]["base_cmd"] == "100747"
     assert calls[0]["sub_byte"] == "04"
+    assert calls[1]["base_cmd"] == "100747"
+    assert calls[1]["sub_byte"] == "01"
+    assert calls[1]["command_range"].start == 0x70
+    assert calls[1]["command_range"].stop == 0x97
 
 
 @pytest.mark.asyncio
-async def test_scan_runs_single_pass_per_roller_module(tmp_path):
-    """Roller modules: single sub=04 pass. No real-hardware trace
-    has proven a secondary bank productive, so we mirror switch
-    behaviour until one does."""
+async def test_scan_runs_two_passes_per_roller_module(tmp_path):
+    """Roller modules get sub=04 + sub=01 since 0.5.5 — same family
+    layout as switch (12-char records, 32-char register frames), and
+    the same sub=01 productive band surfaces once the chunker stops
+    drifting alignment by the per-register padding."""
 
     coord = _make_coordinator()
     discovery = NikobusDiscovery(
@@ -280,9 +288,13 @@ async def test_scan_runs_single_pass_per_roller_module(tmp_path):
 
     await discovery.query_module_inventory("8394")
 
-    assert len(calls) == 1, f"expected 1 pass for roller, got {len(calls)}: {calls}"
+    assert len(calls) == 2, f"expected 2 passes for roller, got {len(calls)}: {calls}"
     assert calls[0]["base_cmd"] == "109483"
     assert calls[0]["sub_byte"] == "04"
+    assert calls[1]["base_cmd"] == "109483"
+    assert calls[1]["sub_byte"] == "01"
+    assert calls[1]["command_range"].start == 0x70
+    assert calls[1]["command_range"].stop == 0x97
 
 
 @pytest.mark.asyncio
@@ -374,9 +386,10 @@ async def test_dimmer_scan_total_registers_is_tuned_not_full_sweep(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_switch_scan_single_pass_is_tuned_not_full_sweep(tmp_path):
-    """Switch single-pass total: 64 registers (sub=04 → 0x00..0x3F).
-    Pre-0.4.10 was 256."""
+async def test_switch_scan_two_pass_total_is_tuned_not_full_sweep(tmp_path):
+    """Switch two-pass total: 64 (sub=04 → 0x00..0x3F) + 39 (sub=01 →
+    0x70..0x96) = 103 registers. Pre-0.4.10 was 256 per pass; 0.5.5
+    re-enables sub=01 with the same tuned 0x70..0x96 band."""
 
     coord = _make_coordinator()
     discovery = NikobusDiscovery(
@@ -404,5 +417,9 @@ async def test_switch_scan_single_pass_is_tuned_not_full_sweep(tmp_path):
 
     await discovery.query_module_inventory("4707")
 
-    assert len(calls) == 1
+    assert len(calls) == 2
     assert len(calls[0]["command_range"]) == 64
+    assert len(calls[1]["command_range"]) == 39
+    # Sanity bound: still well under a full 256-per-pass sweep.
+    total_regs = sum(len(c["command_range"]) for c in calls)
+    assert total_regs < 256
