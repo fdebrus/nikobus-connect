@@ -228,13 +228,22 @@ def test_byte_zero_non_zero_three_routes_to_link_record():
     assert record.channel_index == 0x04
 
 
-def test_byte_zero_zero_routes_to_registry_record_only_when_marker_matches():
+def test_byte_zero_zero_routes_to_link_when_record_has_real_data():
     """A record with byte 0 = 0x00 (not 0x03) is a link record with
-    channel_index 0, NOT a registry record. The marker is exact."""
+    ``channel_index == 0``, NOT a registry record. The marker check
+    is exact.
 
-    record = parse_pc_record("00" + "00" * 15)
+    Note: 0.5.2 rejects the all-zero chunk as noise via
+    ``is_noise_chunk``, so this case must use a chunk where bytes 1-3
+    are 00 (real-record shape) but byte 0 is 0 and at least one other
+    field is non-zero."""
+
+    # bytes 1-3 = 00 (real-record shape), but byte 4 (mode) = 0x06.
+    chunk = "00" * 4 + "06" + "00" * 11
+    record = parse_pc_record(chunk)
     assert isinstance(record, LinkRecord)
     assert record.channel_index == 0
+    assert record.mode_byte == 0x06
 
 
 # ---------------------------------------------------------------------------
@@ -285,20 +294,211 @@ def test_all_ff_extracted_fields_with_non_ff_marker_is_rejected():
 
 
 def test_link_record_with_real_data_in_one_field_is_accepted():
-    """Even a single non-FF in any of the extracted fields qualifies
-    the chunk as a real link record. Only the all-FF combination is
-    rejected — anything else is kept and surfaced for downstream
-    decoding."""
+    """A real-record-shaped chunk (bytes 1-3 = 00) where only one
+    extracted field is non-FF still parses as a link record. The
+    0.5.1 guard rejected only the fully-extracted-FF case.
 
-    # Non-FF only in mode_byte (byte 4, chars 8-9).
-    chunk_mode_only = "FF" * 4 + "06" + "FF" * 11
+    0.5.2 also requires bytes 1-3 to be 0x00 (the "real record" shape
+    invariant), so the chunks here have explicit zero bytes 1-3."""
+
+    # Non-FF only in mode_byte (byte 4, chars 8-9). Bytes 1-3 = 00.
+    chunk_mode_only = "FF" + "00" * 3 + "06" + "FF" * 11
     record = parse_pc_record(chunk_mode_only)
     assert isinstance(record, LinkRecord)
     assert record.channel_index == 0xFF
     assert record.mode_byte == 0x06
 
-    # Non-FF only in slot (byte 12, chars 24-25).
-    chunk_slot_only = "FF" * 12 + "01" + "FF" * 3
+    # Non-FF only in slot (byte 12, chars 24-25). Bytes 1-3 = 00.
+    chunk_slot_only = "FF" + "00" * 3 + "FF" * 8 + "01" + "FF" * 3
     record = parse_pc_record(chunk_slot_only)
     assert isinstance(record, LinkRecord)
     assert record.slot == 0x01
+
+
+# ---------------------------------------------------------------------------
+# Noise-chunk rejection (0.5.2)
+# ---------------------------------------------------------------------------
+#
+# A second user's full-sweep 0.5.0 log (PC Link 846F) showed the
+# parser turning low-register memory dumps and partial-empty
+# fragments into phantom link records. The shared invariant in real
+# records is that bytes 1-3 are always 0x00 0x00 0x00 — verified
+# against every record on both installs. ``is_noise_chunk`` keys on
+# that, plus the all-zero special case.
+
+
+from nikobus_connect.discovery.pc_record_parser import is_noise_chunk
+
+
+def test_is_noise_chunk_rejects_all_zero():
+    """All-zero chunks aren't records; they typically come from
+    pre-allocated, never-written register memory."""
+
+    assert is_noise_chunk("00" * 16) is True
+
+
+def test_is_noise_chunk_rejects_counter_dumps():
+    """Sequential-counter chunks are firmware self-test data at
+    low-register reads (registers 0x00..0x3F on the second user's
+    install)."""
+
+    counter_dumps = [
+        "000102030405060708090A0B0C0D0E0F",  # registers 0x00..0x0F
+        "101112131415161718191A1B1C1D1E1F",  # 0x10..0x1F
+        "202122232425262728292A2B2C2D2E2F",  # 0x20..0x2F
+        "303132333435363738393A3B3C3D3E3F",  # 0x30..0x3F
+    ]
+    for chunk in counter_dumps:
+        assert is_noise_chunk(chunk) is True, f"counter dump {chunk} not rejected"
+
+
+def test_is_noise_chunk_rejects_partial_empty_fragments():
+    """``0000FFFF...`` and ``FFFF...0000`` chunks straddle the
+    boundary between empty and partial garbage. Real records have
+    bytes 1-3 = 0x00; these don't (or are otherwise structurally
+    wrong) and should be rejected."""
+
+    assert is_noise_chunk("0000FFFFFFFFFFFFFFFFFFFFFFFFFFFF") is True
+    assert is_noise_chunk("FFFFFFFFFFFFFFFFFFFFFFFF00000000") is True
+
+
+def test_is_noise_chunk_accepts_real_records():
+    """Sanity: real registry/link records have bytes 1-3 = 00 and are
+    not all-zero — they pass the noise filter."""
+
+    # First-install registry record.
+    assert is_noise_chunk(TRACE_REGISTRY[0][1]) is False
+    # First-install link record.
+    assert is_noise_chunk(TRACE_LINKS[0][1]) is False
+    # Second-install registry-shaped record (byte 0 = 0x04).
+    assert is_noise_chunk("04000000010000005521000002000000") is False
+
+
+def test_parse_pc_record_rejects_noise_chunks():
+    """End-to-end: the full parser path drops counter dumps and
+    all-zero chunks before the marker check."""
+
+    assert parse_pc_record("000102030405060708090A0B0C0D0E0F") is None
+    assert parse_pc_record("101112131415161718191A1B1C1D1E1F") is None
+    assert parse_pc_record("00" * 16) is None
+    assert parse_pc_record("0000FFFFFFFFFFFFFFFFFFFFFFFFFFFF") is None
+
+
+# ---------------------------------------------------------------------------
+# Flexible registry-marker detection (0.5.2)
+# ---------------------------------------------------------------------------
+#
+# A second user (PC Link 846F) emits registry records with
+# ``byte_0 == 0x04`` instead of ``0x03``. The chunks have the same
+# structure: byte 4 is a Module device-type, bytes 8-9 byte-swapped
+# are a known module address, byte 12 is the per-type slot.
+# ``parse_pc_record`` keys on that shape (when given the install's
+# inventory) regardless of byte-0.
+
+# Real second-install registry chunks observed in the log.
+TRACE_REGISTRY_846F = [
+    "040000000100000009B9000001000000",  # switch B909 slot 1
+    "04000000010000005521000002000000",  # switch 2155 slot 2
+    "0400000001000000FA29000003000000",  # switch 29FA slot 3
+    "0400000002000000C872000001000000",  # roller 72C8 slot 1
+    "0400000002000000057B000002000000",  # roller 7B05 slot 2
+    "04000000020000003855000003000000",  # roller 5538 slot 3
+    "0400000002000000914F000004000000",  # roller 4F91 slot 4
+    "0400000002000000A748000005000000",  # roller 48A7 slot 5
+    "04000000030000006D11000001000000",  # dimmer 116D slot 1
+    "04000000030000000A0E000002000000",  # dimmer 0E0A slot 2
+    "0400000008000000D980000001000000",  # PC Logic 80D9 slot 1
+    "040000000A0000006F84000001000000",  # PC Link 846F (self) slot 1
+]
+
+TRACE_846F_KNOWN_ADDRESSES = {
+    "B909", "2155", "29FA", "3162",  # switches
+    "116D", "0E0A",                  # dimmers
+    "72C8", "7B05", "5538", "4F91", "48A7", "53D5",  # rollers
+    "846F",                          # PC Link self
+    "80D9",                          # PC Logic
+}
+
+
+@pytest.mark.parametrize("body_hex", TRACE_REGISTRY_846F)
+def test_flex_marker_parses_byte0_0x04_registry(body_hex):
+    """With the install's known addresses supplied, every
+    second-install registry chunk parses as a ``ModuleRegistryRecord``
+    despite byte-0 being 0x04, not 0x03."""
+
+    record = parse_pc_record(
+        body_hex, known_module_addresses=TRACE_846F_KNOWN_ADDRESSES
+    )
+    assert isinstance(record, ModuleRegistryRecord), (
+        f"chunk {body_hex} should be a registry record by structural shape"
+    )
+
+
+def test_flex_marker_extracts_correct_address_and_slot():
+    """Spot-check that the registry parser still extracts fields
+    correctly when reached via the flex path (not the byte-0 fast
+    path)."""
+
+    chunk = "0400000002000000914F000004000000"  # roller 4F91 slot 4
+    record = parse_pc_record(
+        chunk, known_module_addresses=TRACE_846F_KNOWN_ADDRESSES
+    )
+    assert isinstance(record, ModuleRegistryRecord)
+    assert record.device_type == 0x02
+    assert record.address == "4F91"
+    assert record.type_slot == 4
+
+
+def test_flex_marker_falls_through_when_address_unknown():
+    """A chunk that LOOKS registry-shaped but whose bytes 8-9 don't
+    match any known address must NOT be misclassified — fall through
+    to link-record parsing instead."""
+
+    # Same shape as a registry record but address 0xDEAD isn't in the
+    # known-address set.
+    chunk = "0400000001000000ADDE000001000000"
+    record = parse_pc_record(
+        chunk, known_module_addresses=TRACE_846F_KNOWN_ADDRESSES
+    )
+    assert isinstance(record, LinkRecord)
+    assert record.channel_index == 0x04
+
+
+def test_flex_marker_skips_non_module_device_types():
+    """Byte 4 holding a Button device-type (e.g. 0x06 — button with 4
+    operation points) means the chunk isn't a registry entry, even if
+    the address happens to match. Buttons appear in link payloads,
+    not in the registry."""
+
+    # Address 846F (a known PC Link) but byte 4 = 0x06 (button type).
+    chunk = "0400000006000000F684000001000000"
+    record = parse_pc_record(
+        chunk, known_module_addresses=TRACE_846F_KNOWN_ADDRESSES
+    )
+    # Should fall through to link-record parsing, not be misclassified
+    # as a registry record.
+    assert isinstance(record, LinkRecord)
+
+
+def test_byte0_0x03_fast_path_still_works_without_known_addresses():
+    """Backward compatibility: existing code calling ``parse_pc_record``
+    without the new kwarg still gets registry records via the byte-0
+    == 0x03 fast path. This is what every test prior to 0.5.2 relies
+    on."""
+
+    record = parse_pc_record(TRACE_REGISTRY[0][1])  # byte-0 = 0x03
+    assert isinstance(record, ModuleRegistryRecord)
+    assert record.address == "0E6C"
+
+
+def test_flex_marker_does_not_override_byte0_0x03_fast_path():
+    """A chunk with byte-0 == 0x03 still parses via the fast path
+    even when ``known_module_addresses`` is supplied. Both paths agree
+    on first-install records."""
+
+    record = parse_pc_record(
+        TRACE_REGISTRY[0][1],
+        known_module_addresses={"0E6C"},
+    )
+    assert isinstance(record, ModuleRegistryRecord)
+    assert record.address == "0E6C"

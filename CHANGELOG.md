@@ -1,5 +1,71 @@
 # Changelog
 
+## 0.5.2
+
+### Fixed
+
+- **Registry records with byte-0 marker `0x04` are now recognised.**
+  A second user's PC Link (`846F`) emits registry records with
+  `byte_0 == 0x04` instead of `0x03`. Same 16-byte structure (byte 4 =
+  Module device-type, bytes 8-9 byte-swapped = address, byte 12 =
+  per-type slot), but our 0.5.0/0.5.1 parser pinned `0x03` as the
+  marker and routed every `0x04` registry chunk to
+  `_parse_link_record`, emitting a phantom link record per registered
+  module. `parse_pc_record` now accepts an optional
+  `known_module_addresses` kwarg; when supplied, a chunk whose byte 4
+  is a Module device-type AND whose bytes 8-9 byte-swapped match a
+  known address is parsed as a registry record regardless of byte 0.
+  The `0x03` fast path is preserved for backward compatibility.
+
+- **Counter-pattern and partial-empty noise chunks are now rejected.**
+  The same user's full-sweep 0.5.0 log contained:
+  - Sequential register-counter dumps from the PC Link's low-register
+    self-test data (e.g. `000102030405060708090A0B0C0D0E0F`,
+    `101112131415161718191A1B1C1D1E1F`) — all 16 bytes are sequential,
+    not a record.
+  - Partial-empty fragments like `0000FFFFFFFFFFFFFFFFFFFFFFFFFFFF`
+    and `FFFFFFFFFFFFFFFFFFFFFFFF00000000` at scan boundaries.
+  Both classes were being parsed as link records with garbage fields.
+  New `is_noise_chunk` helper in `pc_record_parser` keys on the
+  invariant that real records always have `bytes 1-3 == 0x00 0x00
+  0x00` (verified against both installs' traces) and explicitly
+  rejects all-zero chunks. The PC Link / PC Logic decoders run this
+  check between `is_empty_record` and `parse_pc_record`, so noise
+  chunks now log at DEBUG instead of emitting phantom INFO records.
+
+### Tests
+
+- 12 new tests in `tests/test_pc_record_parser.py`:
+  - 4 noise-rejection tests covering all-zero, counter dumps, and
+    partial-empty fragments.
+  - 7 flex-marker tests covering the 12 second-install registry
+    chunks (parametrised), positive structural extraction, fall-
+    through when the address is unknown, fall-through when byte 4 is
+    a Button device-type, plus two backward-compat assertions for
+    the byte-0 == 0x03 fast path.
+- 1 existing 0.5.1 test (`test_link_record_with_real_data_in_one_field_is_accepted`)
+  updated to use real-record-shape chunks (bytes 1-3 = 00) since
+  0.5.2's noise filter now rejects chunks where bytes 1-3 are
+  non-zero.
+- 1 existing test (`test_byte_zero_zero_routes_to_registry_record_only_when_marker_matches`)
+  reframed as `test_byte_zero_zero_routes_to_link_when_record_has_real_data`
+  for the same reason.
+- 164/164 passing.
+
+### Migration
+
+- HA integrations bumping `nikobus-connect>=0.5.2` get the fixes
+  automatically. The visible difference for users on installs where
+  the registry marker is `0x04`: previously-misclassified registry
+  chunks now emit `PC-Link module-registry record` INFO lines
+  instead of phantom `PC-Link link record` lines, and noise chunks
+  no longer pollute the INFO stream.
+
+- Stage 2b (merging real link records into `linked_modules`) is
+  still gated; this release is preparation for it. Stage 2b will
+  start once the cleaned-up logs from a second install confirm the
+  byte-0 → `(target_module, channel)` mapping hypothesis.
+
 ## 0.5.1
 
 ### Fixed
