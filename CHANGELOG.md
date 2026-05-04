@@ -1,5 +1,55 @@
 # Changelog
 
+## 0.5.9
+
+### Fixed
+
+- **Switch / roller chunker adds a third alt alignment at stream
+  offset 4.** 0.5.6 introduced a dual alignment (offsets 0 and 8) to
+  cover firmware revisions that did or didn't prepend a 4-byte
+  response header. The 2026-05-04 PR-#42 follow-up scan showed a
+  third productive offset on the same install: button ``3AC4A9``'s
+  link record on switch ``B909`` (key=1, channel=5, mode M01)
+  sits at frame offset 16 of register 58, half-way between the
+  primary (offset 0) and existing +8 alt — neither alignment
+  catches it. Probing all 12 stream-start offsets across every
+  output module on this install showed offset 4 is consistently
+  productive on B909 (8 records exclusive to off=4), 72C8 (5),
+  3162 (2), and 48A7 (4). The chunker now runs three alignments
+  in parallel — offsets {0, 4, 8} — for switch and roller modules.
+  Replay numbers, 2026-05-04 capture, all 12 output modules:
+
+  | Strategy | Matched chunks |
+  |---|---|
+  | 0.5.4 (buffered+0 only) | 21 |
+  | 0.5.5 (per-frame@0) | 49 |
+  | 0.5.6 (buffered+0 ∪ +8) | 280 |
+  | 0.5.9 (buffered+0 ∪ +4 ∪ +8) | **323** |
+
+  CPU cost is negligible — each additional alt alignment runs
+  through the same decoder gates that filter phantoms on every
+  call. Coverage is the union of all three alignments. Dimmer
+  doesn't run alt alignment (16-char chunks against 16-char
+  frames are header-insensitive across every captured firmware).
+
+### Changed
+
+- ``BaseChunkingDecoder._alt_payload_buffer`` (single string)
+  becomes ``_alt_payload_buffers`` (dict keyed on skip value);
+  ``_alt_first_frame_skip_pending`` (single int) becomes a dict
+  with the same keys. Same cost-amortisation behaviour, scaled
+  to N parallel alt alignments. ``reset_scan_buffers`` re-arms
+  every alt skip's pending counter.
+
+### Tests
+
+- ``test_chunk_buffering.py`` — new
+  ``test_switch_alt_alignment_recovers_offset_4_records`` pinning
+  the third alignment, with the actual ``3AC4A9`` record from the
+  2026-05-04 capture as the canary.
+  ``test_alt_alignment_resets_per_scan`` updated to assert the
+  per-skip dict shape (`{4: 4, 8: 8}` rearm pattern).
+
 ## 0.5.8
 
 ### Fixed
