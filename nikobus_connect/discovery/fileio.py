@@ -674,6 +674,33 @@ def _resolve_operation_point(
             if isinstance(op_point, dict):
                 return normalized, key_label, op_point
 
+    # 1a) 8-channel +1 alias fallback. Link records on dimmer / switch /
+    # roller modules encode the button address as ``physical + 1`` for
+    # raw key indices 4-7 of an 8-channel button. The decoder accepts
+    # those via ``is_known_button_canonical``'s sibling check, but the
+    # decoded ``button_address`` (and the fallback ``push_button_address``
+    # in ``add_to_command_mapping`` when the channel-count lookup
+    # returned None) is the +1 form. ``buttons`` is keyed by physical
+    # address, so the direct match above misses; resolve to the
+    # canonical-1 sibling when it's an 8-channel button.
+    try:
+        sibling_minus1 = f"{(int(normalized, 16) - 1) & 0xFFFFFF:06X}"
+    except ValueError:
+        sibling_minus1 = None
+    if sibling_minus1:
+        candidate = buttons.get(sibling_minus1)
+        if (
+            isinstance(candidate, dict)
+            and candidate.get("channels") == 8
+        ):
+            key_label = _key_raw_to_label(8, key_raw)
+            if key_label:
+                op_point = (candidate.get("operation_points") or {}).get(
+                    key_label
+                )
+                if isinstance(op_point, dict):
+                    return sibling_minus1, key_label, op_point
+
     # 2) Bus-address match (the usual case for wall buttons).
     bus_hit = bus_to_op.get(normalized)
     if bus_hit is not None:
