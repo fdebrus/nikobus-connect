@@ -2,6 +2,15 @@
 
 ## 0.5.10
 
+### Fixed
+
+- **05-057 Switch Interface channel count corrected from 4 to 2.**
+  Cross-referenced against the printed device image — the 05-057 has
+  exactly two ``IN`` terminals (an external switching contact module
+  with 2 inputs), not 4. ``DEVICE_TYPES["22"]`` now carries
+  ``"Channels": 2``. Existing installs that already discovered this
+  device with channels=4 will refresh on the next inventory scan.
+
 ### Added
 
 - **PC Logic (05-201) inventory now declares 6 channels.** ``DEVICE_TYPES["08"]``

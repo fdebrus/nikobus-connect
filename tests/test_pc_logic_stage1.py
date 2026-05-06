@@ -57,6 +57,10 @@ def test_device_type_0x22_is_switch_interface():
     entry = DEVICE_TYPES["22"]
     assert entry["Model"] == "05-057"
     assert entry["Category"] == "Button"
+    # 05-057 is a 2-input external switching contact (two ``IN``
+    # terminals on the physical device). Earlier versions had this
+    # as 4 — corrected in 0.5.10 against the printed module image.
+    assert entry["Channels"] == 2
 
 
 def test_device_type_0x26_is_rf868_mini_transmitter():

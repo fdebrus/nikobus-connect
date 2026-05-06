@@ -68,7 +68,7 @@ DEVICE_TYPES = {
     "22": {
         "Category": "Button",
         "Model": "05-057",
-        "Channels": 4,
+        "Channels": 2,
         "Name": "Switch Interface",
     },
     "23": {
