@@ -1,5 +1,58 @@
 # Changelog
 
+## 0.5.13
+
+### Added
+
+- **``NikobusDiscovery.detect_stale_inventory()``** — bus-presence
+  cross-check for inventory entries left over from a previous install
+  on the same PC-Link. Reverse-engineering note: Niko's PC software
+  writes new programming on top of old register space but doesn't
+  zero-fill unused slots, so a second-hand PC-Link's flash still
+  carries the previous owner's module / button records. The user
+  reporting this had a clean install with three modules (8110, 1CEC,
+  3D28 from the dump) but only two of them physically present —
+  ``3D28`` was the previous owner's hardware. Their inventory dump
+  also showed 34 stale buttons across the 0x3Bxx-0x3Exx and 100xxx-
+  102xxx address bands.
+
+  The new method:
+
+  1. Iterates output-bearing module addresses
+     (``switch_module`` / ``dimmer_module`` / ``roller_module``) in
+     ``coordinator.dict_module_data``.
+  2. Sends ``$1012<addr>`` (output-state group 1) to each. Modules
+     replying within ``timeout`` (default 0.6 s) classify as
+     ``present_modules``; modules timing out classify as
+     ``absent_modules``.
+  3. Iterates ``button_data["nikobus_button"]`` and flags any button
+     whose ``linked_modules`` set is a non-empty subset of
+     ``absent_modules`` as ``orphaned_buttons``. Buttons with mixed
+     present + absent links stay (they still drive something real);
+     buttons with no links at all stay (they may just be undecoded
+     so far).
+
+  Returns a manifest the caller decides what to do with — surface in
+  HA UI, auto-purge ``nikobus_module.json`` /
+  ``nikobus_button.json``, etc. The library deliberately doesn't
+  mutate the persisted stores; the integration's HA-side service
+  handler does.
+
+  Non-output module types (``pc_link``, ``pc_logic``, ``feedback_module``,
+  ``audio_module``, ``interface_module``) are excluded from the
+  probe pass — they either ARE the bridge or don't respond uniformly
+  to ``$1012`` queries, so a probe failure there can't be safely
+  interpreted as "stale".
+
+- ``tests/test_stale_inventory_detection.py`` — nine tests covering:
+  empty-coordinator defensive default, present/absent classification,
+  non-output-module exclusion, orphaned-button cascade (mixed-link
+  case stays, no-link case stays, only-absent-link case orphans),
+  case-insensitive address comparison, empty ``dict_module_data``,
+  ``CancelledError`` propagation, per-probe timeout boundary, and a
+  pin against the real-world second-hand-PC-Link install (8110 +
+  1CEC present, 3D28 absent).
+
 ## 0.5.12
 
 ### Changed

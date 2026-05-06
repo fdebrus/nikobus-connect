@@ -1156,6 +1156,183 @@ class NikobusDiscovery:
         self._schedule_inventory_timeout()
         await self._emit_progress(PHASE_INVENTORY)
 
+    # Output-bearing module types: only these respond predictably to
+    # the ``$1012<addr>`` status query that ``detect_stale_inventory``
+    # uses as a presence probe. PC Link / PC Logic / feedback / audio
+    # / modular interface either ARE the bridge or don't respond
+    # uniformly, so they're excluded from the probe pass.
+    _BUS_PROBE_MODULE_TYPES: frozenset[str] = frozenset({
+        "switch_module",
+        "dimmer_module",
+        "roller_module",
+    })
+
+    async def detect_stale_inventory(
+        self,
+        *,
+        timeout: float = 0.6,
+    ) -> dict[str, list[str]]:
+        """Cross-check Module-category entries against bus presence.
+
+        Use case: a user with a second-hand PC-Link sees records from
+        the previous owner's installation in their inventory dump.
+        Niko's PC software writes new programming on top of old, but
+        unused register slots aren't auto-zeroed, so any module /
+        button records the new install doesn't overwrite stay present
+        in PC-Link flash. There's no on-wire signal that distinguishes
+        stale from current — the only reliable check is "does the
+        device actually respond on the bus?"
+
+        For each output-bearing module address in
+        ``coordinator.dict_module_data``, send a ``$1012<addr>``
+        status query. Modules that reply within ``timeout`` are
+        present; modules that don't are stale.
+
+        Buttons aren't probed directly (they only emit on press), but
+        when a button's ``linked_modules`` block points only at stale
+        modules, it's flagged as orphaned — the link table says it
+        drives nothing real. Buttons with no ``linked_modules`` at
+        all are NOT flagged: discovery may not have reached them yet,
+        or they may genuinely have no programmed routing today.
+
+        Returns a manifest the caller (typically the HA integration)
+        decides what to do with — surface in UI, auto-purge, etc. The
+        library doesn't mutate the persisted stores; the caller does.
+
+        Args:
+            timeout: Per-probe deadline in seconds. Defaults to 0.6 —
+                generous enough that a module taking 500 ms to ACK
+                still classifies as present, tight enough that a
+                full 8-module probe completes in ~5 s worst-case.
+
+        Returns:
+            Dict with four lists, all sorted, addresses upper-case:
+              - ``checked``: every address probed
+              - ``present_modules``: probes that ACK'd
+              - ``absent_modules``: probes that timed out
+              - ``orphaned_buttons``: buttons whose entire
+                ``linked_modules`` set sits inside ``absent_modules``
+        """
+
+        empty: dict[str, list[str]] = {
+            "checked": [],
+            "present_modules": [],
+            "absent_modules": [],
+            "orphaned_buttons": [],
+        }
+
+        nikobus_command = getattr(self._coordinator, "nikobus_command", None)
+        if nikobus_command is None or not hasattr(
+            nikobus_command, "get_output_state"
+        ):
+            _LOGGER.warning(
+                "detect_stale_inventory: coordinator has no nikobus_command "
+                "with get_output_state; returning empty manifest"
+            )
+            return empty
+
+        addresses: list[str] = []
+        bucket = getattr(self._coordinator, "dict_module_data", {}) or {}
+        if isinstance(bucket, dict):
+            for module_type, modules in bucket.items():
+                if module_type not in self._BUS_PROBE_MODULE_TYPES:
+                    continue
+                if isinstance(modules, dict):
+                    for addr in modules:
+                        if addr:
+                            addresses.append(str(addr).upper())
+                elif isinstance(modules, list):
+                    for entry in modules:
+                        if isinstance(entry, dict) and entry.get("address"):
+                            addresses.append(str(entry["address"]).upper())
+
+        addresses = sorted(set(addresses))
+
+        present: list[str] = []
+        absent: list[str] = []
+
+        for addr in addresses:
+            try:
+                await asyncio.wait_for(
+                    nikobus_command.get_output_state(addr, group=1),
+                    timeout=timeout,
+                )
+            except asyncio.CancelledError:
+                raise
+            except asyncio.TimeoutError:
+                _LOGGER.info(
+                    "Bus presence probe | addr=%s status=absent reason=timeout",
+                    addr,
+                )
+                absent.append(addr)
+                continue
+            except Exception as exc:  # pragma: no cover - defensive
+                _LOGGER.info(
+                    "Bus presence probe | addr=%s status=absent reason=%s",
+                    addr,
+                    type(exc).__name__,
+                )
+                absent.append(addr)
+                continue
+            _LOGGER.debug(
+                "Bus presence probe | addr=%s status=present", addr
+            )
+            present.append(addr)
+
+        orphaned: list[str] = []
+        if absent and self._button_data is not None:
+            absent_set = set(absent)
+            buttons = self._button_data.get("nikobus_button") or {}
+            entries: list[tuple[str, dict]] = []
+            if isinstance(buttons, dict):
+                for phys_addr, button in buttons.items():
+                    if isinstance(button, dict):
+                        entries.append((str(phys_addr), button))
+            elif isinstance(buttons, list):
+                for button in buttons:
+                    if isinstance(button, dict) and button.get("address"):
+                        entries.append((str(button["address"]), button))
+
+            for phys_addr, button in entries:
+                target_addrs: set[str] = set()
+                op_points = button.get("operation_points") or {}
+                if not isinstance(op_points, dict):
+                    continue
+                for op in op_points.values():
+                    if not isinstance(op, dict):
+                        continue
+                    links = op.get("linked_modules") or []
+                    if not isinstance(links, list):
+                        continue
+                    for block in links:
+                        if (
+                            isinstance(block, dict)
+                            and block.get("module_address")
+                        ):
+                            target_addrs.add(
+                                str(block["module_address"]).upper()
+                            )
+                if target_addrs and target_addrs.issubset(absent_set):
+                    orphaned.append(phys_addr.upper())
+
+        manifest = {
+            "checked": addresses,
+            "present_modules": sorted(present),
+            "absent_modules": sorted(absent),
+            "orphaned_buttons": sorted(set(orphaned)),
+        }
+
+        _LOGGER.info(
+            "Stale-inventory probe complete | checked=%d present=%d "
+            "absent=%d orphaned_buttons=%d",
+            len(manifest["checked"]),
+            len(manifest["present_modules"]),
+            len(manifest["absent_modules"]),
+            len(manifest["orphaned_buttons"]),
+        )
+
+        return manifest
+
     def handle_device_address_inventory(self, message: str) -> None:
         # Signal the sequential scan loop first. A $18 frame that hits
         # this handler during a register scan is either an (unexpected)
