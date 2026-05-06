@@ -142,6 +142,32 @@ _SCAN_REGISTER_RANGE_BY_MODULE_TYPE: dict[str, range] = {
     "pc_link": _PC_LINK_SCAN_RANGE_OVERRIDE,
 }
 
+# Module-type buckets whose addresses are NOT included in the
+# ``query_module_inventory("ALL")`` register-scan queue and whose
+# per-module dispatch path is short-circuited (no ``$1410…04`` reads
+# issued).
+#
+# - ``feedback_module`` (0x42): 05-207 doesn't expose a routable link
+#   table; its programming lives on the source modules' BP cells.
+# - ``other_module``: catch-all bucket — primarily Button-class devices
+#   (4-OP / 2-OP / RF / IR / Motion / Feedback Button) that carry no
+#   register memory, plus any Module-category device whose name fails
+#   to match a more specific keyword in
+#   ``get_module_type_from_device_type``.
+# - ``interface_module`` (0x37, 05-206): Modular Interface, 6 inputs.
+#   The inputs feed the PC-Logic for routing — the interface itself
+#   has no BP-cell table to scan. If a future capture proves
+#   otherwise, drop the bucket from this set and add a decoder.
+# - ``audio_module`` (0x2B, 05-205): Audio Distribution. No
+#   button-link routing surface today; left as visibility-only until
+#   a real install validates the storage format.
+NON_OUTPUT_MODULE_TYPES: frozenset[str] = frozenset({
+    "feedback_module",
+    "other_module",
+    "interface_module",
+    "audio_module",
+})
+
 # Per-(module-type, sub-byte) override. When a (module_type, sub) pair
 # is registered here, it takes precedence over both the per-module-type
 # override and the per-sub-byte default — letting us widen one pass on
@@ -357,8 +383,18 @@ def add_to_command_mapping(command_mapping, decoded_command, module_address, ir_
 
     channel_number = decoded_command.get("channel")
 
+    # PC-Link / PC-Logic decoders set ``module_address`` in the
+    # decoded metadata to the **resolved target** module — not the
+    # controller they were scanned from. Honour that override so the
+    # link lands on the real output module. Switch/dimmer/roller
+    # decoders never set this field, so the positional argument (the
+    # module being scanned) is used in those cases.
+    target_module_address = (
+        decoded_command.get("module_address") or module_address
+    )
+
     output_definition = {
-        "module_address": module_address,
+        "module_address": target_module_address,
         "channel": channel_number,
         "mode": decoded_command.get("M"),
         "t1": decoded_command.get("T1"),
@@ -1213,7 +1249,7 @@ class NikobusDiscovery:
             all_addresses = []
             dict_data = getattr(self._coordinator, "dict_module_data", {})
             for module_type, modules in dict_data.items():
-                if module_type not in ("feedback_module", "other_module"):
+                if module_type not in NON_OUTPUT_MODULE_TYPES:
                     module_iter = modules.values() if isinstance(modules, dict) else modules
                     for module in module_iter:
                         addr = module.get("address") if isinstance(module, dict) else None
@@ -1273,8 +1309,7 @@ class NikobusDiscovery:
         # resolved and ``linked_modules`` ends up empty for those
         # buttons. The PcLogicDecoder is currently a logging stub
         # (Stage 1 instrumentation); see CHANGELOG 0.4.11.
-        non_output_modules = {"feedback_module", "other_module"}
-        is_output_module = self._module_type not in non_output_modules
+        is_output_module = self._module_type not in NON_OUTPUT_MODULE_TYPES
 
         coordinator_channels = (
             self._coordinator.get_module_channel_count(normalized_address)

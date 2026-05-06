@@ -423,20 +423,95 @@ def test_pc_link_decoder_logs_unresolved_at_debug_when_registry_incomplete(caplo
     assert len(debug_lines) == 1
 
 
-def test_pc_link_decoder_decode_chunk_still_returns_empty_list():
-    """Stage 2b ships in logging-only mode: the resolver runs and
-    logs targets, but ``decode_chunk`` keeps returning ``[]`` so
-    the merge layer doesn't ingest PC-Link link records. This
-    contract stays until the byte-0 → channel-index hypothesis is
-    cross-validated against a button-press → output ground truth."""
+def test_pc_link_decoder_registry_records_emit_no_commands():
+    """Registry records carry inventory metadata that the inventory
+    phase already populates. ``decode_chunk`` accumulates them into
+    the registry buffer for resolver use but emits no
+    ``DecodedCommand`` — only link records produce merge-layer
+    output."""
 
     coord = _make_fdebrus_coordinator()
     decoder = PcLinkDecoder(coord)
     decoder.set_module_address("86F5")
 
-    # A real registry record and a real link record from the trace.
     assert decoder.decode_chunk("03000000030000006C0E000001000000") == []
+
+
+def test_pc_link_decoder_link_record_without_button_channels_returns_empty():
+    """Defensive contract: when the coordinator can't size the source
+    button (no ``get_button_channels`` data, e.g. an isolated test
+    harness), ``key_raw`` can't be derived from the flag byte, the
+    metadata builder returns ``None``, and ``decode_chunk`` emits no
+    command. The link is logged but kept out of the merge layer to
+    avoid attaching to the wrong operation point."""
+
+    coord = _make_fdebrus_coordinator()
+    # MagicMock returns a MagicMock by default — not an int — so the
+    # metadata builder treats the lookup as "channel count unknown".
+    decoder = PcLinkDecoder(coord)
+    decoder.set_module_address("86F5")
+
+    # Populate the registry first so the resolver can run.
+    decoder.decode_chunk("03000000030000006C0E000001000000")
+    # Link record: channel_idx=0x04 → ("0E6C", 5) on this registry.
     assert decoder.decode_chunk("0400000006000080B443180001000000") == []
+
+
+def test_pc_link_decoder_emits_decoded_command_for_resolved_link_record():
+    """When the resolver succeeds AND the source button's channel
+    count is available, ``decode_chunk`` returns a ``DecodedCommand``
+    whose metadata carries:
+
+    - ``module_address`` set to the **target** module (not the
+      PC-Link controller being scanned), so
+      ``add_to_command_mapping``'s override picks the right output.
+    - ``channel`` set to the resolved 1-based channel.
+    - ``M`` set to the target's mode-table label.
+    - ``button_address`` set to the byte-swapped payload (the source
+      button's physical address).
+    - ``key_raw`` set to the index reverse-looked-up from the flag
+      byte against the source button's channel count.
+    """
+
+    coord = _make_fdebrus_coordinator()
+    coord.get_button_channels = MagicMock(side_effect=lambda addr: {
+        "1843B4": 4,  # 4-OP wall button
+    }.get(addr.upper()))
+
+    decoder = PcLinkDecoder(coord)
+    decoder.set_module_address("86F5")
+
+    # Feed full registry so flat map is complete.
+    registry_chunks = [
+        "03000000030000006C0E000001000000",  # 0E6C dimmer
+        "030000000A000000F586000001000000",  # 86F5 PC Link self
+        "03000000020000000591000001000000",  # 9105 roller
+        "03000000020000009483000002000000",  # 8394 roller
+        "0300000001000000A5C9000001000000",  # C9A5 switch
+        "03000000080000000C94000001000000",  # 940C PC Logic
+        "0300000031000000055B000002000000",  # 5B05 compact switch
+        "03000000010000000747000003000000",  # 4707 switch
+        "03000000420000006C96000001000000",  # 966C feedback
+    ]
+    for chunk in registry_chunks:
+        decoder.decode_chunk(chunk)
+
+    # channel_idx=0x21 → flat map idx 33 → ("C9A5", 10), a switch
+    # channel. mode_byte=0x06 → SWITCH_MODE_MAPPING[6] = "M07
+    # (Delayed on (long up to 2h))". flag_byte=0x80, source button
+    # 1843B4 has 4 channels → KEY_MAPPING_MODULE[4] reverse on "8"
+    # = key_raw 1. payload bytes B44318 byte-swap to 1843B4.
+    commands = decoder.decode_chunk("2100000006000080B443180018000000")
+
+    assert len(commands) == 1
+    cmd = commands[0]
+    assert cmd.module_type == "pc_link"
+    assert cmd.metadata["module_address"] == "C9A5"
+    assert cmd.metadata["channel"] == 10
+    assert cmd.metadata["M"] == "M07 (Delayed on (long up to 2h))"
+    assert cmd.metadata["button_address"] == "1843B4"
+    assert cmd.metadata["push_button_address"] == "1843B4"
+    assert cmd.metadata["key_raw"] == 1
 
 
 def test_pc_link_decoder_reset_registry_clears_buffer_between_scans():

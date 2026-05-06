@@ -57,6 +57,10 @@ def test_device_type_0x22_is_switch_interface():
     entry = DEVICE_TYPES["22"]
     assert entry["Model"] == "05-057"
     assert entry["Category"] == "Button"
+    # 05-057 is a 2-input external switching contact (two ``IN``
+    # terminals on the physical device). Earlier versions had this
+    # as 4 — corrected in 0.5.10 against the printed module image.
+    assert entry["Channels"] == 2
 
 
 def test_device_type_0x26_is_rf868_mini_transmitter():
@@ -70,8 +74,43 @@ def test_device_type_0x2b_is_audio_distribution_module():
     entry = DEVICE_TYPES["2B"]
     assert entry["Model"] == "05-205"
     assert entry["Category"] == "Module"
-    # No dedicated decoder yet — falls through to other_module.
-    assert get_module_type_from_device_type("2B") == "other_module"
+    # 0.5.10: 05-205 lands in its own ``audio_module`` bucket so the
+    # integration can platform-route it deliberately. The bucket has
+    # no decoder yet — Audio Distribution storage format is
+    # unvalidated — but the dedicated bucket means HA-side code can
+    # opt in without inheriting the catch-all ``other_module``
+    # button-creation behaviour.
+    assert get_module_type_from_device_type("2B") == "audio_module"
+
+
+def test_device_type_0x37_is_modular_interface():
+    """05-206 (Modular Interface, 6 inputs) gets the
+    ``interface_module`` bucket so HA can render its inputs as a
+    distinct entity class. Excluded from the per-module register-scan
+    queue — its routing is held by the PC-Logic, not by itself."""
+
+    entry = DEVICE_TYPES["37"]
+    assert entry["Model"] == "05-206"
+    assert entry["Category"] == "Module"
+    assert entry["Channels"] == 6
+    assert get_module_type_from_device_type("37") == "interface_module"
+
+
+def test_audio_and_interface_buckets_are_excluded_from_scan_queue():
+    """``NON_OUTPUT_MODULE_TYPES`` carries the four buckets whose
+    addresses are kept out of ``query_module_inventory("ALL")``'s
+    sequential queue and whose per-module dispatch short-circuits
+    before issuing any register reads. Pin the set so neither bucket
+    silently leaks into the scan path on a refactor."""
+
+    from nikobus_connect.discovery.discovery import NON_OUTPUT_MODULE_TYPES
+
+    assert NON_OUTPUT_MODULE_TYPES == frozenset({
+        "feedback_module",
+        "other_module",
+        "interface_module",
+        "audio_module",
+    })
 
 
 # ---------------------------------------------------------------------------
@@ -415,3 +454,94 @@ async def test_switch_register_scan_range_unaffected_by_pc_logic_override(tmp_pa
 
     assert scan_calls
     assert scan_calls[0]["command_range"] == range(0x00, 0x40)
+
+
+# ---------------------------------------------------------------------------
+# Stage 2c (0.5.10): PC-Logic class decoder emits DecodedCommands for resolved
+# link records, mirroring PcLinkDecoder. Function-level ``decode()`` stays
+# return-``None`` because it has no registry context.
+# ---------------------------------------------------------------------------
+
+
+def test_device_type_0x08_carries_six_channels():
+    """PC Logic (0x08) is the master logic controller; the local-input
+    population (LM01..LM06) means the inventory must carry a non-zero
+    channel count so HA can surface them."""
+
+    entry = DEVICE_TYPES["08"]
+    assert entry["Channels"] == 6
+
+
+def test_pc_logic_decoder_emits_decoded_command_for_resolved_link_record():
+    """PC-Logic Stage 2c parity with PC-Link: a resolved link record
+    produces a ``DecodedCommand`` whose metadata carries the resolved
+    target module as ``module_address`` (so the merge-layer override
+    routes the link to the real output, not the PC-Logic controller)."""
+
+    from nikobus_connect.discovery.pc_logic_decoder import PcLogicDecoder
+
+    coord = MagicMock()
+    coord.dict_module_data = {
+        "switch_module": {"C9A5": {}, "4707": {}, "5B05": {}},
+        "dimmer_module": {"0E6C": {}},
+        "roller_module": {"9105": {}, "8394": {}},
+        "pc_link": {"86F5": {}},
+        "pc_logic": {"940C": {}},
+        "feedback_module": {"966C": {}},
+    }
+    counts = {
+        "0E6C": 12, "9105": 6, "8394": 6, "C9A5": 12,
+        "5B05": 4, "4707": 12, "86F5": 0, "940C": 0, "966C": 0,
+    }
+    coord.get_module_channel_count = MagicMock(side_effect=lambda addr: counts.get(addr, 0))
+    coord.get_button_channels = MagicMock(side_effect=lambda addr: {
+        "1843B4": 4,
+    }.get(addr.upper()))
+
+    decoder = PcLogicDecoder(coord)
+    decoder.set_module_address("940C")
+
+    # Same registry order as the PC-Link Stage 2b test — PC-Link and
+    # PC-Logic share the parser and resolver, so the flat map index
+    # 0x21 still resolves to (C9A5, 10).
+    registry_chunks = [
+        "03000000030000006C0E000001000000",  # 0E6C dimmer
+        "030000000A000000F586000001000000",  # 86F5 PC Link self
+        "03000000020000000591000001000000",  # 9105 roller
+        "03000000020000009483000002000000",  # 8394 roller
+        "0300000001000000A5C9000001000000",  # C9A5 switch
+        "03000000080000000C94000001000000",  # 940C PC Logic self
+        "0300000031000000055B000002000000",  # 5B05 compact switch
+        "03000000010000000747000003000000",  # 4707 switch
+        "03000000420000006C96000001000000",  # 966C feedback
+    ]
+    for chunk in registry_chunks:
+        decoder.decode_chunk(chunk)
+
+    commands = decoder.decode_chunk("2100000006000080B443180018000000")
+
+    assert len(commands) == 1
+    cmd = commands[0]
+    assert cmd.module_type == "pc_logic"
+    assert cmd.metadata["module_address"] == "C9A5"
+    assert cmd.metadata["channel"] == 10
+    assert cmd.metadata["M"] == "M07 (Delayed on (long up to 2h))"
+    assert cmd.metadata["button_address"] == "1843B4"
+    assert cmd.metadata["key_raw"] == 1
+
+
+def test_pc_logic_decoder_reset_scan_buffers_clears_registry():
+    """``reset_scan_buffers`` runs at scan boundaries via the chunker
+    base class. PC-Logic must extend it to also clear its registry
+    buffer so a fresh scan doesn't carry registry residue from the
+    previous one."""
+
+    from nikobus_connect.discovery.pc_logic_decoder import PcLogicDecoder
+
+    coord = _make_coordinator()
+    decoder = PcLogicDecoder(coord)
+    decoder.decode_chunk("03000000030000006C0E000001000000")
+    assert len(decoder._registry) == 1
+
+    decoder.reset_scan_buffers()
+    assert len(decoder._registry) == 0
