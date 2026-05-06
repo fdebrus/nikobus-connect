@@ -213,6 +213,23 @@ def get_module_type_from_device_type(device_type_hex: str) -> str:
         return "dimmer_module"
     if "switch" in name:
         return "switch_module"
+    # Specialty Module-category devices that don't drive output loads
+    # get their own buckets so the integration can platform-route them
+    # instead of inheriting whatever the catch-all ``other_module``
+    # bucket does (today: button-style entity creation, which doesn't
+    # match these devices' semantics). Keywords are deliberately
+    # specific to avoid collisions with output-module names —
+    # ``"modular"`` rather than ``"interface"`` because button-class
+    # devices like 05-058 also carry ``"interface"`` in their names
+    # but are Category=Button (handled by the early-exit above) —
+    # narrowing the keyword keeps the resolver robust even if a
+    # future product mixes "interface" into a Module name.
+    if "modular" in name:
+        # 05-206 (0x37): 6 inputs feeding the PC-Logic for routing.
+        return "interface_module"
+    if "audio" in name:
+        # 05-205 (0x2B): Audio Distribution module.
+        return "audio_module"
 
     return "other_module"
 

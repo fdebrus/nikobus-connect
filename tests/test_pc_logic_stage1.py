@@ -74,8 +74,43 @@ def test_device_type_0x2b_is_audio_distribution_module():
     entry = DEVICE_TYPES["2B"]
     assert entry["Model"] == "05-205"
     assert entry["Category"] == "Module"
-    # No dedicated decoder yet — falls through to other_module.
-    assert get_module_type_from_device_type("2B") == "other_module"
+    # 0.5.10: 05-205 lands in its own ``audio_module`` bucket so the
+    # integration can platform-route it deliberately. The bucket has
+    # no decoder yet — Audio Distribution storage format is
+    # unvalidated — but the dedicated bucket means HA-side code can
+    # opt in without inheriting the catch-all ``other_module``
+    # button-creation behaviour.
+    assert get_module_type_from_device_type("2B") == "audio_module"
+
+
+def test_device_type_0x37_is_modular_interface():
+    """05-206 (Modular Interface, 6 inputs) gets the
+    ``interface_module`` bucket so HA can render its inputs as a
+    distinct entity class. Excluded from the per-module register-scan
+    queue — its routing is held by the PC-Logic, not by itself."""
+
+    entry = DEVICE_TYPES["37"]
+    assert entry["Model"] == "05-206"
+    assert entry["Category"] == "Module"
+    assert entry["Channels"] == 6
+    assert get_module_type_from_device_type("37") == "interface_module"
+
+
+def test_audio_and_interface_buckets_are_excluded_from_scan_queue():
+    """``NON_OUTPUT_MODULE_TYPES`` carries the four buckets whose
+    addresses are kept out of ``query_module_inventory("ALL")``'s
+    sequential queue and whose per-module dispatch short-circuits
+    before issuing any register reads. Pin the set so neither bucket
+    silently leaks into the scan path on a refactor."""
+
+    from nikobus_connect.discovery.discovery import NON_OUTPUT_MODULE_TYPES
+
+    assert NON_OUTPUT_MODULE_TYPES == frozenset({
+        "feedback_module",
+        "other_module",
+        "interface_module",
+        "audio_module",
+    })
 
 
 # ---------------------------------------------------------------------------

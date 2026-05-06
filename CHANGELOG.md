@@ -2,6 +2,32 @@
 
 ## 0.5.10
 
+### Changed
+
+- **Specialty Module-category devices get their own ``module_type``
+  buckets.** Previously every Module whose ``Name`` failed to match the
+  switch / dimmer / roller / pc_link / pc_logic / feedback keyword tree
+  fell through to ``other_module`` — the same bucket the integration
+  uses for button-class devices, so HA-side routing couldn't tell a
+  05-206 from a 4-OP wall button. ``get_module_type_from_device_type``
+  now produces:
+
+  - ``interface_module`` for 0x37 / 05-206 (Modular Interface, 6 inputs).
+  - ``audio_module`` for 0x2B / 05-205 (Audio Distribution).
+
+  Both new buckets are added to a hoisted ``NON_OUTPUT_MODULE_TYPES``
+  constant in ``discovery.py`` so the scan-queue exclusion in
+  ``query_module_inventory("ALL")`` and the per-module dispatch
+  short-circuit stay in lock-step. The new buckets short-circuit the
+  scan today (no validated link-table format for either device);
+  toggling that off later is a one-line change.
+
+- **The non-output exclusion list is now a single shared constant.**
+  ``discovery.py`` previously duplicated ``{"feedback_module",
+  "other_module"}`` in two places (scan-queue selection + per-module
+  dispatch). Both call sites now read from
+  ``NON_OUTPUT_MODULE_TYPES``.
+
 ### Fixed
 
 - **05-057 Switch Interface channel count corrected from 4 to 2.**
