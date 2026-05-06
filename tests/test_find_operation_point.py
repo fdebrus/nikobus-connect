@@ -11,10 +11,10 @@ def _sample_store() -> dict:
     return {
         "nikobus_button": {
             "182F18": {
-                "type": "Button with 4 Operation Points",
+                "type": "Bus push button, 4 control buttons",
                 "model": "05-346",
                 "channels": 4,
-                "description": "Button with 4 Operation Points #N182F18",
+                "description": "Bus push button, 4 control buttons #N182F18",
                 "operation_points": {
                     "1A": {
                         "bus_address": "863D06",
@@ -35,10 +35,10 @@ def _sample_store() -> dict:
                 },
             },
             "0D1C80": {
-                "type": "IR Button with 4 Operation Points",
+                "type": "IR Bus push button, 4 control buttons",
                 "model": "05-348",
                 "channels": 4,
-                "description": "IR Button with 4 Operation Points #N0D1C80",
+                "description": "IR Bus push button, 4 control buttons #N0D1C80",
                 "operation_points": {
                     "1A": {
                         "bus_address": "804E2C",

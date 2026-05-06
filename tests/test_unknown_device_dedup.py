@@ -61,9 +61,13 @@ def _make_discovery(tmp_path) -> NikobusDiscovery:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("device_type_hex", ["05", "14", "21", "24", "34", "3B", "46"])
+@pytest.mark.parametrize("device_type_hex", ["05", "14", "24", "34", "3B", "46"])
 def test_reserved_device_types_are_catalogued(device_type_hex):
-    """All seven types observed in the user-attachments log have entries."""
+    """Types observed in the user-attachments log that remain
+    unidentified carry Category=Reserved entries so the inventory
+    log line is readable. ``0x21`` was originally on this list but
+    was promoted to a real ``05-056 Push Button Interface`` entry
+    in 0.5.11 — it now lives in the Button-category section above."""
 
     entry = DEVICE_TYPES.get(device_type_hex)
     assert entry is not None, f"missing catalogue entry for 0x{device_type_hex}"
