@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.5.11
+## 0.5.12
 
 ### Changed
 
@@ -23,7 +23,6 @@
   | 0C | 05-348 | IR Button with 4 Operation Points | Bus push button, 4 control buttons with IR receiver |
   | 12 | 05-349 | Button with 8 Operation Points | Bus push button, 8 control buttons |
   | 1F | 05-311 | RF Transmitter with 2 Operation Points | Mini hand-held RF transmitter, 2 channels |
-  | 21 | 05-056 | Push Button Interface | Interface for push buttons |
   | 22 | 05-057 | Switch Interface | Interface for switches |
   | 23 | 05-312 | RF Transmitter with 4 Operation Points | Easywave hand-held RF transmitter, 4 channels |
   | 25 | 05-311 | Portable RF Transmitter with 1 Operation Point | Mini hand-held RF transmitter, 1 channel |
@@ -47,7 +46,7 @@
 
 - **``get_module_type_from_device_type`` switched from name-based
   keyword matching to a static
-  ``device-type-byte → bucket`` map.** Pre-0.5.11 the resolver
+  ``device-type-byte → bucket`` map.** The pre-0.5.12 resolver
   matched substrings of the ``Name`` field (``"pc link"``, ``"dimmer"``,
   ``"audio"``, etc.) — every name change carried hidden risk of
   re-routing a device. The new resolver consults
@@ -63,9 +62,13 @@
   Same family as 05-057 (``0x22``); the differentiator is just the
   variant. A user install confirmed the device-type byte against the
   printed model number, removing the last unverified entry from the
-  Reserved block for that user's hardware. The cataloguing test in
-  ``tests/test_unknown_device_dedup.py`` drops ``0x21`` from its
-  parametrize list since the entry is no longer Reserved.
+  Reserved block for that user's hardware. The new entry uses the
+  Niko-aligned name ``"Interface for push buttons"`` and the
+  cataloguing test in ``tests/test_unknown_device_dedup.py`` drops
+  ``0x21`` from its parametrize list since the entry is no longer
+  Reserved.
+
+## 0.5.11
 
 ### Fixed
 
