@@ -37,6 +37,7 @@ from ..const import (
     MODULE_SCAN_DATA_TIMEOUT,
     MODULE_SCAN_RETRY_LIMIT,
     MODULE_SCAN_TRAILER_PREFIX,
+    PC_LINK_INVENTORY_SIGNATURE_BYTE,
 )
 from .fileio import (
     merge_discovered_buttons,
@@ -1171,6 +1172,37 @@ class NikobusDiscovery:
             return
         start_index = marker_index + len(DEVICE_ADDRESS_INVENTORY)
         raw_address = (clean_message[start_index : start_index + 4] or "").upper()
+
+        # Validate the signature byte before treating this as a PC-Link
+        # response. Both PC-Link (0x50) and PC-Logic (0x40) reply to
+        # the broadcast ``#A`` query; if PC-Logic wins the race, our
+        # subsequent inventory reads would target the wrong controller
+        # and come back empty. The signature byte is at payload offset
+        # 1 (after the address bytes and a leading 0x00 padding byte):
+        # ``$18 <addr_lo><addr_hi> 00 <sig> 0F 3F FF <crc>``.
+        signature_hex = (
+            clean_message[start_index + 6 : start_index + 8] or ""
+        ).upper()
+        try:
+            signature_byte = int(signature_hex, 16) if signature_hex else None
+        except ValueError:
+            signature_byte = None
+        if (
+            signature_byte is not None
+            and signature_byte != PC_LINK_INVENTORY_SIGNATURE_BYTE
+        ):
+            _LOGGER.warning(
+                "Inventory record rejected | reason=non_pc_link_signature "
+                "raw=%s signature=0x%02X (expected 0x%02X — PC-Link); "
+                "this responder is most likely a PC-Logic answering #A "
+                "before the PC-Link did. Verify a PC-Link (model 0A) "
+                "is present on the bus.",
+                raw_address,
+                signature_byte,
+                PC_LINK_INVENTORY_SIGNATURE_BYTE,
+            )
+            return
+
         normalized = self.normalize_module_address(
             raw_address, source="device_address_inventory", reverse_bus_order=True
         )

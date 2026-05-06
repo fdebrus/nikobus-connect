@@ -64,3 +64,21 @@ CONTROLLER_ADDRESS: Final[str] = "$18"
 # Discovery constants
 DEVICE_ADDRESS_INVENTORY: Final[str] = "$18"
 DEVICE_INVENTORY_ANSWER: Final[tuple[str, str]] = ("$2E", "$1E")
+
+# Signature byte that distinguishes PC-Link from PC-Logic in the
+# response to the broadcast ``#A`` ("address inquiry") command.
+#
+# Both controllers listen to ``#A`` and reply with a ``$18 <addr>
+# 00 <sig> 0F 3F FF <crc>`` frame. Byte 4 of the payload (``<sig>``)
+# is ``0x50`` on PC-Link (model 0A) and ``0x40`` on PC-Logic
+# (model 08), confirmed across three real installs:
+#
+#   - fdebrus PC-Link 86F5: ``$18F586 00 50 0F3FFF AC61FE``
+#   - issue-307 PC-Link 846F: ``$186F84 00 50 0F3FFF 48EDCE``
+#   - new-user PC-Logic 8835: ``$183588 00 40 0F3FFF 4170C4``
+#
+# Without this filter our discovery accepts whichever controller
+# answered first as "the PC-Link" — when both controllers exist on
+# the bus and the PC-Logic wins the response race, all subsequent
+# inventory reads go to the wrong device and come back empty.
+PC_LINK_INVENTORY_SIGNATURE_BYTE: Final[int] = 0x50
