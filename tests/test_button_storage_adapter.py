@@ -52,7 +52,7 @@ def test_merge_discovered_buttons_produces_physical_keyed_shape():
     discovered = {
         "0083C6": {
             "category": "Button",
-            "description": "Button with 4 Operation Points",
+            "description": "Bus push button, 4 control buttons",
             "model": "05-346",
             "channels": 4,
             "address": "0083C6",
@@ -67,7 +67,7 @@ def test_merge_discovered_buttons_produces_physical_keyed_shape():
     assert set(buttons.keys()) == {"0083C6"}
 
     entry = buttons["0083C6"]
-    assert entry["type"] == "Button with 4 Operation Points"
+    assert entry["type"] == "Bus push button, 4 control buttons"
     assert entry["model"] == "05-346"
     assert entry["channels"] == 4
     assert set(entry["operation_points"].keys()) == {"1A", "1B", "1C", "1D"}
@@ -89,14 +89,14 @@ def test_merge_discovered_buttons_generates_unique_descriptions():
     discovered = {
         "0083C6": {
             "category": "Button",
-            "description": "Button with 4 Operation Points",
+            "description": "Bus push button, 4 control buttons",
             "model": "05-346",
             "channels": 4,
             "address": "0083C6",
         },
         "17C554": {
             "category": "Button",
-            "description": "Button with 4 Operation Points",
+            "description": "Bus push button, 4 control buttons",
             "model": "05-346",
             "channels": 4,
             "address": "17C554",
@@ -108,8 +108,8 @@ def test_merge_discovered_buttons_generates_unique_descriptions():
     )
 
     buttons = button_data["nikobus_button"]
-    assert buttons["0083C6"]["description"] == "Button with 4 Operation Points #N0083C6"
-    assert buttons["17C554"]["description"] == "Button with 4 Operation Points #N17C554"
+    assert buttons["0083C6"]["description"] == "Bus push button, 4 control buttons #N0083C6"
+    assert buttons["17C554"]["description"] == "Bus push button, 4 control buttons #N17C554"
 
     # Op-point descriptions follow "Push button {key} #N{bus_addr}".
     for physical_addr, entry in buttons.items():
@@ -136,7 +136,7 @@ def test_merge_discovered_buttons_preserves_user_renamed_descriptions():
     discovered = {
         "0083C6": {
             "category": "Button",
-            "description": "Button with 4 Operation Points",
+            "description": "Bus push button, 4 control buttons",
             "model": "05-346",
             "channels": 4,
             "address": "0083C6",
@@ -174,7 +174,7 @@ def test_merge_discovered_buttons_is_idempotent():
     discovered = {
         "0083C6": {
             "category": "Button",
-            "description": "Button with 4 Operation Points",
+            "description": "Bus push button, 4 control buttons",
             "model": "05-346",
             "channels": 4,
             "address": "0083C6",
@@ -201,7 +201,7 @@ def test_merge_linked_modules_routes_by_bus_address_to_op_point():
     button_data = {
         "nikobus_button": {
             "182F18": {
-                "type": "Button with 4 Operation Points",
+                "type": "Bus push button, 4 control buttons",
                 "model": "05-346",
                 "channels": 4,
                 "description": "Test",
@@ -270,7 +270,7 @@ def test_finalize_inventory_phase_mutates_button_data_and_calls_save(
     discovery.discovered_devices = {
         "0083C6": {
             "category": "Button",
-            "description": "Button with 4 Operation Points",
+            "description": "Bus push button, 4 control buttons",
             "model": "05-346",
             "channels": 4,
             "address": "0083C6",
@@ -316,7 +316,7 @@ def test_discovery_without_button_data_skips_button_merge(tmp_path, monkeypatch)
     discovery.discovered_devices = {
         "0083C6": {
             "category": "Button",
-            "description": "Button with 4 Operation Points",
+            "description": "Bus push button, 4 control buttons",
             "model": "05-346",
             "channels": 4,
             "address": "0083C6",

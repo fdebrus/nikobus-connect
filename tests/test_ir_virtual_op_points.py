@@ -24,10 +24,10 @@ def _ir_receiver_store() -> dict:
     return {
         "nikobus_button": {
             "0D1C80": {
-                "type": "IR Button with 4 Operation Points",
+                "type": "IR Bus push button, 4 control buttons",
                 "model": "05-348",
                 "channels": 4,
-                "description": "IR Button with 4 Operation Points #N0D1C80",
+                "description": "IR Bus push button, 4 control buttons #N0D1C80",
                 "operation_points": {
                     "1A": {
                         "bus_address": "88F3EC",
@@ -509,10 +509,10 @@ def test_ir_op_point_heals_missing_bus_address_on_rediscovery():
     store = {
         "nikobus_button": {
             "0D1C80": {
-                "type": "IR Button with 4 Operation Points",
+                "type": "IR Bus push button, 4 control buttons",
                 "model": "05-348",
                 "channels": 4,
-                "description": "IR Button with 4 Operation Points #N0D1C80",
+                "description": "IR Bus push button, 4 control buttons #N0D1C80",
                 "operation_points": {
                     "1A": {
                         "bus_address": "88F3EC",

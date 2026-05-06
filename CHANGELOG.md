@@ -2,6 +2,58 @@
 
 ## 0.5.11
 
+### Changed
+
+- **``DEVICE_TYPES`` ``Name`` fields aligned with Niko's official
+  product-page wording** so the inventory log line, the device
+  registry entry, and the entity description all match what users
+  see in Niko's catalogue and the Nikobus PC software. Mapping
+  before → after:
+
+  | Hex | Model | Before | After |
+  |---|---|---|---|
+  | 01 | 05-000-02 | Switch Module | Switching module |
+  | 02 | 05-001-02 | Roller Shutter Module | Roller shutter module |
+  | 03 | 05-007-02 | Dimmer Module | Dimmer module |
+  | 04 | 05-342 | Button with 2 Operation Points | Bus push button, 2 control buttons |
+  | 06 | 05-346 | Button with 4 Operation Points | Bus push button, 4 control buttons |
+  | 08 | 05-201 | PC Logic | PC-Logic |
+  | 09 | 05-002-02 | Compact Switch Module | Compact switch module |
+  | 0A | 05-200 | PC Link | PC-Link |
+  | 0C | 05-348 | IR Button with 4 Operation Points | Bus push button, 4 control buttons with IR receiver |
+  | 12 | 05-349 | Button with 8 Operation Points | Bus push button, 8 control buttons |
+  | 1F | 05-311 | RF Transmitter with 2 Operation Points | Mini hand-held RF transmitter, 2 channels |
+  | 21 | 05-056 | Push Button Interface | Interface for push buttons |
+  | 22 | 05-057 | Switch Interface | Interface for switches |
+  | 23 | 05-312 | RF Transmitter with 4 Operation Points | Easywave hand-held RF transmitter, 4 channels |
+  | 25 | 05-311 | Portable RF Transmitter with 1 Operation Point | Mini hand-held RF transmitter, 1 channel |
+  | 26 | 05-314 | RF868 Mini Transmitter with 4 Operation Points | RF868 mini transmitter, 4 channels |
+  | 28 | 05-7X5 | Motion Detector | Motion detector with Nikobus interface |
+  | 2B | 05-205 | Audio Distribution | Audio distribution module |
+  | 31 | 05-002-02 | Compact Switch Module | Compact switch module |
+  | 32 | 05-008-02 | Compact Dim Controller | Compact dim controller |
+  | 37 | 05-206 | Modular Interface 6 inputs | Modular interface, 6 inputs |
+  | 3D | 05-312 | RF Transmitter, 52 operation points | Easywave RF transmitter, 52 operation points |
+  | 3F | 05-060-02 | Feedback Button with 2 Operation Points | Bus push button, 2 control buttons with two feedback LEDs |
+  | 40 | 05-064-02 | Feedback Button with 4 Operation Points | Bus push button, 4 control buttons with four feedback LEDs |
+  | 41 | 05-078-02 | Feedback Button with 8 Operation Points | Bus push button, 8 control buttons with eight feedback LEDs |
+  | 42 | 05-207 | Feedback Module | Feedback module |
+  | 43 | 05-058 | Universal interface | Universal interface, 4 channels |
+  | 44 | 05-058 | Switch Interface | Universal interface, 8 channels |
+
+  Existing user data (``nikobus_module.json`` / ``nikobus_button.json``)
+  is unaffected at load time — descriptions stay whatever the previous
+  scan wrote. The new names land on the next inventory refresh.
+
+- **``get_module_type_from_device_type`` switched from name-based
+  keyword matching to a static
+  ``device-type-byte → bucket`` map.** Pre-0.5.11 the resolver
+  matched substrings of the ``Name`` field (``"pc link"``, ``"dimmer"``,
+  ``"audio"``, etc.) — every name change carried hidden risk of
+  re-routing a device. The new resolver consults
+  ``_MODULE_TYPE_BY_DEVICE_TYPE`` directly. Naming becomes a pure
+  display concern.
+
 ### Added
 
 - **``0x21 → 05-056 Push Button Interface``** promoted from

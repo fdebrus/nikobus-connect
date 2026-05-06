@@ -50,7 +50,7 @@ def _eight_channel_button() -> dict:
 
     return {
         "1D3252": {
-            "type": "Button with 8 Operation Points",
+            "type": "Bus push button, 8 control buttons",
             "model": "05-349",
             "channels": 8,
             "operation_points": {
@@ -104,7 +104,7 @@ def test_4ch_button_plus_one_does_not_fold():
 
     buttons = {
         "182F18": {
-            "type": "Button with 4 Operation Points",
+            "type": "Bus push button, 4 control buttons",
             "model": "05-346",
             "channels": 4,
             "operation_points": {
@@ -135,7 +135,7 @@ def test_2ch_button_plus_one_does_not_fold():
 
     buttons = {
         "3CDE66": {
-            "type": "Button with 2 Operation Points",
+            "type": "Bus push button, 2 control buttons",
             "model": "05-342",
             "channels": 2,
             "operation_points": {
@@ -168,7 +168,7 @@ def test_direct_physical_match_takes_precedence_over_alias_fallback():
     # itself a registered button).
     buttons = _eight_channel_button()
     buttons["1D3253"] = {
-        "type": "Button with 8 Operation Points",
+        "type": "Bus push button, 8 control buttons",
         "model": "05-349",
         "channels": 8,
         "operation_points": {

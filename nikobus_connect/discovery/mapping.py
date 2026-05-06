@@ -1,165 +1,207 @@
-"""Constants for the Nikobus integration."""
+"""Constants for the Nikobus integration.
+
+Device-type catalogue and bus protocol constants. The ``Name`` field
+on each ``DEVICE_TYPES`` entry mirrors the wording on Niko's official
+product pages (https://products.niko.eu/en/article/<MODEL>) so the
+HA inventory log line, the device registry entry, and the entity
+description all line up with what users see in Niko's catalogue and
+in the Nikobus PC software. Sources are noted per-entry.
+
+Routing (which decoder / scan path / HA platform handles each device)
+is keyed off the device-type byte via ``_MODULE_TYPE_BY_DEVICE_TYPE``,
+NOT off keyword matching against the ``Name`` field. That keeps name
+edits free of hidden side-effects.
+"""
 
 # =============================================================================
 # Discovery
 # =============================================================================
 DEVICE_TYPES = {
+    # ------------------------------------------------------------------
+    # Output modules — drive switching / dimming / shutter loads.
+    # ------------------------------------------------------------------
     "01": {
         "Category": "Module",
         "Model": "05-000-02",
         "Channels": 12,
-        "Name": "Switch Module",
+        "Name": "Switching module",
     },
     "02": {
         "Category": "Module",
         "Model": "05-001-02",
         "Channels": 6,
-        "Name": "Roller Shutter Module",
+        "Name": "Roller shutter module",
     },
     "03": {
         "Category": "Module",
         "Model": "05-007-02",
         "Channels": 12,
-        "Name": "Dimmer Module",
-    },
-    "04": {
-        "Category": "Button",
-        "Model": "05-342",
-        "Channels": 2,
-        "Name": "Button with 2 Operation Points",
-    },
-    "06": {
-        "Category": "Button",
-        "Model": "05-346",
-        "Channels": 4,
-        "Name": "Button with 4 Operation Points",
-    },
-    "08": {
-        "Category": "Module",
-        "Model": "05-201",
-        "Channels": 6,
-        "Name": "PC Logic",
+        "Name": "Dimmer module",
     },
     "09": {
         "Category": "Module",
         "Model": "05-002-02",
         "Channels": 4,
-        "Name": "Compact Switch Module",
-    },
-    "0A": {"Category": "Module", "Model": "05-200", "Name": "PC Link"},
-    "0C": {
-        "Category": "Button",
-        "Model": "05-348",
-        "Channels": 4,
-        "Name": "IR Button with 4 Operation Points",
-    },
-    "12": {
-        "Category": "Button",
-        "Model": "05-349",
-        "Channels": 8,
-        "Name": "Button with 8 Operation Points",
-    },
-    "1F": {
-        "Category": "Button",
-        "Model": "05-311",
-        "Channels": 2,
-        "Name": "RF Transmitter with 2 Operation Points",
-    },
-    "21": {
-        "Category": "Button",
-        "Model": "05-056",
-        "Channels": 2,
-        "Name": "Push Button Interface",
-    },
-    "22": {
-        "Category": "Button",
-        "Model": "05-057",
-        "Channels": 2,
-        "Name": "Switch Interface",
-    },
-    "23": {
-        "Category": "Button",
-        "Model": "05-312",
-        "Channels": 4,
-        "Name": "RF Transmitter with 4 Operation Points",
-    },
-    "25": {
-        "Category": "Button",
-        "Model": "05-311",
-        "Channels": 1,
-        "Name": "Portable RF Transmitter with 1 Operation Point",
-    },
-    "26": {
-        "Category": "Button",
-        "Model": "05-314",
-        "Channels": 4,
-        "Name": "RF868 Mini Transmitter with 4 Operation Points",
-    },
-    "2B": {
-        "Category": "Module",
-        "Model": "05-205",
-        "Name": "Audio Distribution",
-    },
-    "28": {
-        "Category": "Button",
-        "Model": "05-7X5",
-        "Channels": 2,
-        "Name": "Motion Detector",
+        "Name": "Compact switch module",
     },
     "31": {
         "Category": "Module",
         "Model": "05-002-02",
         "Channels": 4,
-        "Name": "Compact Switch Module",
+        "Name": "Compact switch module",
     },
     "32": {
         "Category": "Module",
         "Model": "05-008-02",
         "Channels": 4,
-        "Name": "Compact Dim Controller",
+        "Name": "Compact dim controller",
+    },
+    # ------------------------------------------------------------------
+    # Controller / system modules — bridge, logic, feedback, audio.
+    # ------------------------------------------------------------------
+    "08": {
+        "Category": "Module",
+        "Model": "05-201",
+        "Channels": 6,
+        "Name": "PC-Logic",
+    },
+    "0A": {
+        "Category": "Module",
+        "Model": "05-200",
+        "Name": "PC-Link",
+    },
+    "2B": {
+        "Category": "Module",
+        "Model": "05-205",
+        "Name": "Audio distribution module",
     },
     "37": {
         "Category": "Module",
         "Model": "05-206",
         "Channels": 6,
-        "Name": "Modular Interface 6 inputs",
+        "Name": "Modular interface, 6 inputs",
     },
-    "3D": {
+    "42": {
+        "Category": "Module",
+        "Model": "05-207",
+        "Name": "Feedback module",
+    },
+    # ------------------------------------------------------------------
+    # Bus push buttons — Nikobus original (no LEDs).
+    # ------------------------------------------------------------------
+    "04": {
         "Category": "Button",
-        "Model": "05-312",
-        "Channels": 52,
-        "Name": "RF Transmitter, 52 operation points",
+        "Model": "05-342",
+        "Channels": 2,
+        "Name": "Bus push button, 2 control buttons",
     },
+    "06": {
+        "Category": "Button",
+        "Model": "05-346",
+        "Channels": 4,
+        "Name": "Bus push button, 4 control buttons",
+    },
+    "0C": {
+        "Category": "Button",
+        "Model": "05-348",
+        "Channels": 4,
+        "Name": "Bus push button, 4 control buttons with IR receiver",
+    },
+    "12": {
+        "Category": "Button",
+        "Model": "05-349",
+        "Channels": 8,
+        "Name": "Bus push button, 8 control buttons",
+    },
+    # ------------------------------------------------------------------
+    # Bus push buttons — feedback-LED variants.
+    # ------------------------------------------------------------------
     "3F": {
         "Category": "Button",
         "Model": "05-060-02",
         "Channels": 2,
-        "Name": "Feedback Button with 2 Operation Points",
+        "Name": "Bus push button, 2 control buttons with two feedback LEDs",
     },
     "40": {
         "Category": "Button",
         "Model": "05-064-02",
         "Channels": 4,
-        "Name": "Feedback Button with 4 Operation Points",
+        "Name": "Bus push button, 4 control buttons with four feedback LEDs",
     },
     "41": {
         "Category": "Button",
         "Model": "05-078-02",
         "Channels": 8,
-        "Name": "Feedback Button with 8 Operation Points",
+        "Name": "Bus push button, 8 control buttons with eight feedback LEDs",
     },
-    "42": {"Category": "Module", "Model": "05-207", "Name": "Feedback Module"},
+    # ------------------------------------------------------------------
+    # External-contact interfaces.
+    # ------------------------------------------------------------------
+    "21": {
+        "Category": "Button",
+        "Model": "05-056",
+        "Channels": 2,
+        "Name": "Interface for push buttons",
+    },
+    "22": {
+        "Category": "Button",
+        "Model": "05-057",
+        "Channels": 2,
+        "Name": "Interface for switches",
+    },
     "43": {
         "Category": "Button",
         "Model": "05-058",
         "Channels": 4,
-        "Name": "Universal interface",
+        "Name": "Universal interface, 4 channels",
     },
     "44": {
         "Category": "Button",
         "Model": "05-058",
         "Channels": 8,
-        "Name": "Switch Interface",
+        "Name": "Universal interface, 8 channels",
+    },
+    # ------------------------------------------------------------------
+    # RF transmitters.
+    # ------------------------------------------------------------------
+    "1F": {
+        "Category": "Button",
+        "Model": "05-311",
+        "Channels": 2,
+        "Name": "Mini hand-held RF transmitter, 2 channels",
+    },
+    "23": {
+        "Category": "Button",
+        "Model": "05-312",
+        "Channels": 4,
+        "Name": "Easywave hand-held RF transmitter, 4 channels",
+    },
+    "25": {
+        "Category": "Button",
+        "Model": "05-311",
+        "Channels": 1,
+        "Name": "Mini hand-held RF transmitter, 1 channel",
+    },
+    "26": {
+        "Category": "Button",
+        "Model": "05-314",
+        "Channels": 4,
+        "Name": "RF868 mini transmitter, 4 channels",
+    },
+    "3D": {
+        "Category": "Button",
+        "Model": "05-312",
+        "Channels": 52,
+        "Name": "Easywave RF transmitter, 52 operation points",
+    },
+    # ------------------------------------------------------------------
+    # Sensors.
+    # ------------------------------------------------------------------
+    "28": {
+        "Category": "Button",
+        "Model": "05-7X5",
+        "Channels": 2,
+        "Name": "Motion detector with Nikobus interface",
     },
     # ------------------------------------------------------------------
     # Reserved / not-yet-identified types observed on real hardware.
@@ -177,6 +219,7 @@ DEVICE_TYPES = {
     # against fdebrus/nikobus-connect with the device-type byte,
     # observed bus addresses, and any model number printed on the
     # physical device.
+    # ------------------------------------------------------------------
     "05": {"Category": "Reserved", "Model": "Unknown", "Name": "Reserved 0x05"},
     "14": {"Category": "Reserved", "Model": "Unknown", "Name": "Reserved 0x14"},
     "24": {"Category": "Reserved", "Model": "Unknown", "Name": "Reserved 0x24"},
@@ -196,47 +239,42 @@ DEVICE_TYPES = {
 }
 
 
+# Routing table: device-type byte → ``module_type`` bucket. Decoupled
+# from the ``Name`` field so name edits can't accidentally change which
+# decoder / scan path / platform handles a device. Only Module-category
+# entries appear here; Button-category devices and Reserved entries fall
+# through to ``other_module`` below.
+_MODULE_TYPE_BY_DEVICE_TYPE: dict[str, str] = {
+    "01": "switch_module",
+    "02": "roller_module",
+    "03": "dimmer_module",
+    "08": "pc_logic",
+    "09": "switch_module",
+    "0A": "pc_link",
+    "2B": "audio_module",
+    "31": "switch_module",
+    "32": "dimmer_module",
+    "37": "interface_module",
+    "42": "feedback_module",
+}
+
+
 def get_module_type_from_device_type(device_type_hex: str) -> str:
-    """Return the module type bucket for a given device type hex code."""
+    """Return the module type bucket for a given device type hex code.
+
+    Module-category devices are routed by the static
+    ``_MODULE_TYPE_BY_DEVICE_TYPE`` table. Button-category and Reserved
+    entries (and unknown bytes) fall through to ``other_module``.
+    """
 
     normalized_type = (device_type_hex or "").strip().upper()
     device_info = DEVICE_TYPES.get(normalized_type, {})
-    name = str(device_info.get("Name", "")).lower()
     category = str(device_info.get("Category", "")).lower()
 
     if category != "module":
         return "other_module"
-    if "pc link" in name:
-        return "pc_link"
-    if "pc logic" in name:
-        return "pc_logic"
-    if "feedback" in name:
-        return "feedback_module"
-    if "roller" in name:
-        return "roller_module"
-    if "dimmer" in name or "dim controller" in name:
-        return "dimmer_module"
-    if "switch" in name:
-        return "switch_module"
-    # Specialty Module-category devices that don't drive output loads
-    # get their own buckets so the integration can platform-route them
-    # instead of inheriting whatever the catch-all ``other_module``
-    # bucket does (today: button-style entity creation, which doesn't
-    # match these devices' semantics). Keywords are deliberately
-    # specific to avoid collisions with output-module names —
-    # ``"modular"`` rather than ``"interface"`` because button-class
-    # devices like 05-058 also carry ``"interface"`` in their names
-    # but are Category=Button (handled by the early-exit above) —
-    # narrowing the keyword keeps the resolver robust even if a
-    # future product mixes "interface" into a Module name.
-    if "modular" in name:
-        # 05-206 (0x37): 6 inputs feeding the PC-Logic for routing.
-        return "interface_module"
-    if "audio" in name:
-        # 05-205 (0x2B): Audio Distribution module.
-        return "audio_module"
 
-    return "other_module"
+    return _MODULE_TYPE_BY_DEVICE_TYPE.get(normalized_type, "other_module")
 
 
 CHANNEL_MAPPING = {

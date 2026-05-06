@@ -1248,7 +1248,7 @@ class NikobusDiscovery:
             return
 
         pc_link_info = DEVICE_TYPES.get("0A", {})
-        name = pc_link_info.get("Name", "PC Link")
+        name = pc_link_info.get("Name", "PC-Link")
         model = pc_link_info.get("Model", "05-200")
         last_seen = datetime.now(timezone.utc).isoformat()
         module_type = get_module_type_from_device_type("0A")

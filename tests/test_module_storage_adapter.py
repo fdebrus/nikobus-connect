@@ -56,8 +56,8 @@ def _switch_device(address: str = "C9A5", channels: int = 12) -> dict:
     return {
         "address": address,
         "category": "Module",
-        "description": "Switch Module",
-        "discovered_name": "Switch Module",
+        "description": "Switching module",
+        "discovered_name": "Switching module",
         "device_type": "01",
         "model": "05-000-02",
         "module_type": "switch_module",
@@ -70,8 +70,8 @@ def _roller_device(address: str = "9105", channels: int = 6) -> dict:
     return {
         "address": address,
         "category": "Module",
-        "description": "Roller Shutter Module",
-        "discovered_name": "Roller Shutter Module",
+        "description": "Roller shutter module",
+        "discovered_name": "Roller shutter module",
         "device_type": "02",
         "model": "05-001-02",
         "module_type": "roller_module",
@@ -100,7 +100,7 @@ def test_new_module_gets_auto_description_and_default_channels():
     # Roller defaults include operation_time_up.
     assert "operation_time_up" not in entry["channels"][0]
     assert entry["discovered_info"] == {
-        "name": "Switch Module",
+        "name": "Switching module",
         "device_type": "01",
         "channels_count": 12,
     }
@@ -144,7 +144,7 @@ def test_user_fields_preserved_on_rediscovery():
                      "led_off": "352A02", "entity_type": "light"},
                 ] + [{"description": f"not_in_use output_{i}"} for i in range(3, 13)],
                 "discovered_info": {
-                    "name": "Switch Module",
+                    "name": "Switching module",
                     "device_type": "01",
                     "channels_count": 12,
                 },
@@ -182,7 +182,7 @@ def test_roller_user_timing_preserved():
                 ] + [{"description": f"not_in_use output_{i}",
                       "operation_time_up": "30"} for i in range(2, 7)],
                 "discovered_info": {
-                    "name": "Roller Shutter Module",
+                    "name": "Roller shutter module",
                     "device_type": "02",
                     "channels_count": 6,
                 },
@@ -226,7 +226,7 @@ def test_non_module_devices_skipped():
         "1843B4": {
             "address": "1843B4",
             "category": "Button",
-            "description": "Button with 4 Operation Points",
+            "description": "Bus push button, 4 control buttons",
             "model": "05-346",
         },
         "C9A5": _switch_device("C9A5", 12),

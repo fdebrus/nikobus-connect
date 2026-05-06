@@ -125,10 +125,10 @@ def test_m01_per_output_filtering_does_not_mirror_other_modes():
     store = {
         "nikobus_button": {
             "17C554": {
-                "type": "Button with 4 Operation Points",
+                "type": "Bus push button, 4 control buttons",
                 "model": "05-346",
                 "channels": 4,
-                "description": "Button with 4 Operation Points #N17C554",
+                "description": "Bus push button, 4 control buttons #N17C554",
                 "operation_points": {
                     "1A": {"bus_address": "8AA8FA"},
                     "1B": {"bus_address": "CAA8FA"},
@@ -322,10 +322,10 @@ def test_m02_on_8op_unit_uses_row_groups_independently():
     store = {
         "nikobus_button": {
             "1DF256": {
-                "type": "Button with 8 Operation Points",
+                "type": "Bus push button, 8 control buttons",
                 "model": "05-349",
                 "channels": 8,
-                "description": "Button with 8 Operation Points #N1DF256",
+                "description": "Bus push button, 8 control buttons #N1DF256",
                 "operation_points": {
                     "1A": {
                         "bus_address": "BA93EE",
