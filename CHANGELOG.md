@@ -1,5 +1,51 @@
 # Changelog
 
+## 0.5.11
+
+### Fixed
+
+- **PC-Link inventory enumeration now ignores PC-Logic responses to
+  the broadcast ``#A`` query.** Both controllers reply to the
+  address-inquiry broadcast with a
+  ``$18 <addr> 00 <sig> 0F 3F FF <crc>`` frame; byte 4 of the
+  payload (``<sig>``) carries the device signature — ``0x50`` on
+  PC-Link, ``0x40`` on PC-Logic. Pre-0.5.11 ``handle_device_address_inventory``
+  accepted whichever frame arrived first, so on installs with both
+  controllers the PC-Logic could win the race and our subsequent
+  inventory-memory reads (``$1410<pc-logic-addr>NN04``) would target
+  the wrong device — every register came back empty and discovery
+  silently produced nothing.
+
+  ``handle_device_address_inventory`` now reads the signature byte
+  out of the frame and rejects responses where it isn't ``0x50``
+  with a clear WARNING:
+
+  ```
+  Inventory record rejected | reason=non_pc_link_signature
+  raw=3588 signature=0x40 (expected 0x50 — PC-Link); this responder
+  is most likely a PC-Logic answering #A before the PC-Link did.
+  Verify a PC-Link (model 0A) is present on the bus.
+  ```
+
+  Validated against three real-hardware traces: fdebrus PC-Link 86F5
+  and issue-307 PC-Link 846F both carry sig=0x50; the new-user
+  PC-Logic 8835 carries sig=0x40.
+
+### Added
+
+- ``PC_LINK_INVENTORY_SIGNATURE_BYTE = 0x50`` in ``const.py``,
+  documented with the three trace-confirmed sample frames so future
+  edits don't need to re-derive the value from raw captures.
+- ``tests/test_pc_link_signature_filter.py`` — 8 tests pinning the
+  signature filter:
+  - 0x50 frames accepted (both real-install samples).
+  - 0x40 frames rejected with a structured WARNING that names the
+    raw address and both signature bytes.
+  - Mixed-order races (PC-Link first vs. PC-Logic first) end with
+    only the PC-Link recorded.
+  - Unknown signature bytes rejected (defensive default).
+  - Truncated frames don't crash.
+
 ## 0.5.10
 
 ### Changed
