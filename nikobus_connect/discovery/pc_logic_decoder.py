@@ -1,4 +1,4 @@
-"""PC Logic (05-201) decoder — Stage 2a, structured logging.
+"""PC Logic (05-201) decoder.
 
 PC Logic is the Nikobus bus's logic controller (separate from the PC
 Link, which is the USB serial bridge). It can host BP grids — virtual
@@ -16,17 +16,21 @@ output-module-tuned 0x00..0x3F to the full 0x00..0xFF.
 Stage 2a (0.5.0): a Nikobus PC-software serial trace from a real
 install (roswennen, Nikobus-HA#303) showed the on-wire format is a
 **16-byte (32 hex chars) per-record** structure shared with PC Link
-— not the 6-byte BP-cell stride we guessed in Stage 1. This module
-now parses those records via the shared ``pc_record_parser`` and
+— not the 6-byte BP-cell stride we guessed in Stage 1. The decoder
+parses those records via the shared ``pc_record_parser`` and
 surfaces them at INFO. PC Logic and PC Link are isomorphic at the
-record-storage layer, so they share the parser; only the log-prefix
-distinguishes them.
+record-storage layer, so they share the parser.
 
-Like PC Link, this stays in visibility-only mode for Stage 2a — no
-``DecodedCommand`` is emitted into the merge layer. Stage 2b will
-add the resolution of byte-0 channel-indices to concrete
-``(module_address, channel)`` pairs once the mapping is validated
-across multiple installs.
+Stage 2c (0.5.10): PC Logic and PC Link both ingest into the merge
+layer. The decoder now mirrors ``PcLinkDecoder`` exactly: per-scan
+``RegistryBuffer``, link-record resolution against the registry-built
+flat output map, and ``DecodedCommand`` emission for resolved link
+records. The only difference between the two classes is the log
+prefix.
+
+The function-level ``decode()`` hook stays return-``None`` because
+it's a one-shot path with no registry context — without registry
+buffering the resolver can't run.
 """
 
 from __future__ import annotations
@@ -35,14 +39,8 @@ import logging
 from typing import Any
 
 from .chunk_decoder import BaseChunkingDecoder
-from .pc_link_decoder import _known_module_addresses
-from .pc_record_parser import (
-    LinkRecord,
-    ModuleRegistryRecord,
-    is_empty_record,
-    is_noise_chunk,
-    parse_pc_record,
-)
+from .pc_link_decoder import _decode_and_log, _known_module_addresses
+from .pc_record_parser import RegistryBuffer
 
 _LOGGER = logging.getLogger(__name__)
 _LOG_PREFIX = "PC-Logic"
@@ -51,105 +49,63 @@ _LOG_PREFIX = "PC-Logic"
 def decode(payload_hex: str, raw_bytes: list[str], context) -> dict[str, Any] | None:
     """Module-level decoder hook used by ``decode_command_payload``.
 
-    Returns ``None`` — Stage 2a never produces a record for the merge
-    layer. Logs the parsed record at INFO for visibility.
+    One-shot path with no registry buffer plumbed through, so the
+    resolver can't run here and no ``DecodedCommand`` can be returned.
+    Logs the parsed record at INFO for visibility and returns ``None``.
+    Class-based scans go through ``PcLogicDecoder`` instead, which
+    carries a per-scan registry and emits commands for resolved link
+    records.
     """
 
-    return _log_record(
+    _decode_and_log(
         payload_hex,
         getattr(context, "module_address", None),
         coordinator=getattr(context, "coordinator", None),
+        prefix=_LOG_PREFIX,
+        registry=None,
+        module_type=None,
+        logger=_LOGGER,
     )
+    return None
 
 
 class PcLogicDecoder(BaseChunkingDecoder):
     """PC-Logic variant of the chunk-based decoder pipeline.
 
-    Same on-wire format as ``PcLinkDecoder``; differs only in the
-    log prefix it emits.
+    Same on-wire format as ``PcLinkDecoder`` — both share the
+    parser, the registry buffer, and the link-target resolver. The
+    only difference is the log prefix used for diagnostic lines.
     """
 
     def __init__(self, coordinator):
         super().__init__(coordinator, "pc_logic")
+        self._registry = RegistryBuffer()
+
+    def reset_registry(self) -> None:
+        """Clear the registry buffer between scans."""
+
+        self._registry.reset()
+
+    def reset_scan_buffers(self) -> None:
+        """Clear per-scan state. Extends the base alt-alignment reset
+        with the registry reset so a fresh scan starts with no carried
+        registry state."""
+
+        super().reset_scan_buffers()
+        self._registry.reset()
 
     def decode_chunk(self, chunk, module_address=None):
         chunk = chunk.strip().upper()
         addr = module_address or self._module_address
-        _log_record(chunk, addr, coordinator=self._coordinator, prefix=_LOG_PREFIX)
-        return []
-
-
-def _log_record(
-    chunk_hex: str,
-    module_address: str | None,
-    *,
-    coordinator=None,
-    prefix: str = _LOG_PREFIX,
-) -> dict[str, Any] | None:
-    """Shared logging helper used by both ``decode()`` and ``decode_chunk``.
-
-    Always returns ``None`` — Stage 2a is visibility-only.
-    """
-
-    chunk_hex = (chunk_hex or "").strip().upper()
-
-    if is_empty_record(chunk_hex):
-        _LOGGER.debug(
-            "%s empty record | module=%s payload=%s",
-            prefix,
-            module_address,
-            chunk_hex,
+        return _decode_and_log(
+            chunk,
+            addr,
+            coordinator=self._coordinator,
+            prefix=_LOG_PREFIX,
+            registry=self._registry,
+            module_type=self.module_type,
+            logger=_LOGGER,
         )
-        return None
-
-    if is_noise_chunk(chunk_hex):
-        _LOGGER.debug(
-            "%s noise chunk | module=%s payload=%s",
-            prefix,
-            module_address,
-            chunk_hex,
-        )
-        return None
-
-    record = parse_pc_record(
-        chunk_hex,
-        known_module_addresses=_known_module_addresses(coordinator),
-    )
-    if record is None:
-        _LOGGER.debug(
-            "%s unparseable chunk | module=%s payload=%s",
-            prefix,
-            module_address,
-            chunk_hex,
-        )
-        return None
-
-    if isinstance(record, ModuleRegistryRecord):
-        _LOGGER.info(
-            "%s module-registry record | module=%s device_type=0x%02X "
-            "address=%s type_slot=%d raw=%s",
-            prefix,
-            module_address,
-            record.device_type,
-            record.address,
-            record.type_slot,
-            record.raw_hex,
-        )
-    elif isinstance(record, LinkRecord):
-        _LOGGER.info(
-            "%s link record | module=%s channel_idx=0x%02X mode=0x%02X "
-            "flag=0x%02X payload=%s slot=0x%02X raw=%s",
-            prefix,
-            module_address,
-            record.channel_index,
-            record.mode_byte,
-            record.flag_byte,
-            record.payload_bytes,
-            record.slot,
-            record.raw_hex,
-        )
-
-    return None
 
 
 __all__ = ["PcLogicDecoder", "decode"]

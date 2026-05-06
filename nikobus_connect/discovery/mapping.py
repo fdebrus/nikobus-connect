@@ -34,7 +34,12 @@ DEVICE_TYPES = {
         "Channels": 4,
         "Name": "Button with 4 Operation Points",
     },
-    "08": {"Category": "Module", "Model": "05-201", "Name": "PC Logic"},
+    "08": {
+        "Category": "Module",
+        "Model": "05-201",
+        "Channels": 6,
+        "Name": "PC Logic",
+    },
     "09": {
         "Category": "Module",
         "Model": "05-002-02",

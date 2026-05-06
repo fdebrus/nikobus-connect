@@ -357,8 +357,18 @@ def add_to_command_mapping(command_mapping, decoded_command, module_address, ir_
 
     channel_number = decoded_command.get("channel")
 
+    # PC-Link / PC-Logic decoders set ``module_address`` in the
+    # decoded metadata to the **resolved target** module — not the
+    # controller they were scanned from. Honour that override so the
+    # link lands on the real output module. Switch/dimmer/roller
+    # decoders never set this field, so the positional argument (the
+    # module being scanned) is used in those cases.
+    target_module_address = (
+        decoded_command.get("module_address") or module_address
+    )
+
     output_definition = {
-        "module_address": module_address,
+        "module_address": target_module_address,
         "channel": channel_number,
         "mode": decoded_command.get("M"),
         "t1": decoded_command.get("T1"),

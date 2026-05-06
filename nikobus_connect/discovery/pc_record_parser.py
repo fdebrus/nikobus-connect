@@ -39,7 +39,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Iterable, Union
 
-from .mapping import DEVICE_TYPES
+from .mapping import (
+    DEVICE_TYPES,
+    DIMMER_MODE_MAPPING,
+    KEY_MAPPING_MODULE,
+    ROLLER_MODE_MAPPING,
+    SWITCH_MODE_MAPPING,
+)
 
 
 RECORD_HEX_LEN = 32
@@ -444,6 +450,149 @@ def resolve_link_target(
     return flat[channel_index]
 
 
+_MODE_TABLE_BY_DEVICE_TYPE: dict[int, dict[int, str]] = {
+    0x01: SWITCH_MODE_MAPPING,    # Switch Module
+    0x09: SWITCH_MODE_MAPPING,    # Compact Switch Module
+    0x31: SWITCH_MODE_MAPPING,    # Compact Switch Module variant
+    0x02: ROLLER_MODE_MAPPING,    # Roller Shutter Module
+    0x03: DIMMER_MODE_MAPPING,    # Dimmer Module
+    0x32: DIMMER_MODE_MAPPING,    # Compact Dim Controller
+}
+"""Mode-mapping table to use when decoding a PC-Link / PC-Logic link
+record's mode byte against the resolved target module's device type.
+Keys mirror ``OUTPUT_BEARING_DEVICE_TYPES`` exactly."""
+
+
+def _device_type_for_address(
+    registry: RegistryBuffer, address: str
+) -> int | None:
+    """Return the device-type byte for ``address`` in the registry, or
+    ``None`` if the address isn't known. Case-insensitive."""
+
+    address_upper = (address or "").upper()
+    for record in registry.records:
+        if record.address.upper() == address_upper:
+            return record.device_type
+    return None
+
+
+def _key_raw_from_flag_byte(
+    flag_byte: int, num_channels: int | None
+) -> int | None:
+    """Reverse-lookup a key index from a link record's flag byte.
+
+    The flag byte's high nibble matches the per-key add value used by
+    ``KEY_MAPPING_MODULE`` to derive push-button addresses. Reversing
+    that table for the source button's channel count yields the
+    ``key_raw`` index the merge layer needs to attach the link to the
+    right operation point.
+
+    Best-effort, single-install-validated. If a future capture shows
+    the encoding differs (or varies by source-device class), only this
+    function changes — the rest of the merge pipeline is unaffected.
+    Returns ``None`` when the channel count is unknown or the nibble
+    doesn't appear in ``KEY_MAPPING_MODULE`` for that count.
+    """
+
+    if not isinstance(num_channels, int):
+        return None
+    mapping = KEY_MAPPING_MODULE.get(num_channels)
+    if mapping is None:
+        return None
+    high_nibble = f"{(flag_byte >> 4) & 0xF:X}"
+    for key_idx, value in mapping.items():
+        if value == high_nibble:
+            return key_idx
+    return None
+
+
+def link_record_to_decoded_metadata(
+    record: LinkRecord,
+    registry: RegistryBuffer,
+    coordinator,
+) -> dict | None:
+    """Translate a parsed ``LinkRecord`` into ``DecodedCommand`` metadata.
+
+    Combines three resolutions:
+
+    1. ``record.channel_index`` → ``(target_module_address, channel)``
+       via the registry-driven flat channel map.
+    2. Target module's device type → mode-mapping table → mode label
+       string compatible with what switch/dimmer/roller decoders emit.
+    3. ``record.payload_bytes`` (button address in bus byte order) →
+       canonical button address; ``record.flag_byte`` → ``key_raw``
+       using ``KEY_MAPPING_MODULE`` reverse lookup against the source
+       button's channel count.
+
+    Returns ``None`` when:
+
+    - The channel index can't be resolved (registry incomplete, idx
+      out of range, no output-bearing modules).
+    - The target's device type isn't in
+      ``_MODE_TABLE_BY_DEVICE_TYPE``.
+    - The mode byte's low nibble doesn't map to a known mode for the
+      target.
+    - The source button's channel count is unknown or the flag byte
+      doesn't yield a valid key index for it.
+
+    The returned dict carries ``module_address`` set to the **target**
+    module — ``add_to_command_mapping`` consumes it as an override to
+    the positional argument so the link lands on the resolved output
+    module, not on the controller (PC-Link / PC-Logic) currently being
+    scanned.
+    """
+
+    target = resolve_link_target(record.channel_index, registry, coordinator)
+    if target is None:
+        return None
+    target_address, target_channel = target
+
+    target_device_type = _device_type_for_address(registry, target_address)
+    if target_device_type is None:
+        return None
+
+    mode_table = _MODE_TABLE_BY_DEVICE_TYPE.get(target_device_type)
+    if mode_table is None:
+        return None
+
+    mode_index = record.mode_byte & 0x0F
+    mode_label = mode_table.get(mode_index)
+    if mode_label is None:
+        return None
+
+    payload = record.payload_bytes or ""
+    if len(payload) != 6:
+        return None
+    button_address = (payload[4:6] + payload[2:4] + payload[0:2]).upper()
+
+    num_channels: int | None = None
+    if coordinator is not None:
+        get_btn_channels = getattr(coordinator, "get_button_channels", None)
+        if get_btn_channels is not None:
+            try:
+                lookup = get_btn_channels(button_address)
+            except Exception:  # pragma: no cover - defensive
+                lookup = None
+            if isinstance(lookup, int) and lookup > 0:
+                num_channels = lookup
+
+    key_raw = _key_raw_from_flag_byte(record.flag_byte, num_channels)
+    if key_raw is None:
+        return None
+
+    return {
+        "module_address": target_address,
+        "channel": target_channel,
+        "M": mode_label,
+        "T1": None,
+        "T2": None,
+        "payload": record.raw_hex,
+        "button_address": button_address,
+        "push_button_address": button_address,
+        "key_raw": key_raw,
+    }
+
+
 __all__ = [
     "RECORD_HEX_LEN",
     "REGISTRY_MARKER",
@@ -455,6 +604,7 @@ __all__ = [
     "build_flat_channel_map",
     "is_empty_record",
     "is_noise_chunk",
+    "link_record_to_decoded_metadata",
     "parse_pc_record",
     "resolve_link_target",
 ]

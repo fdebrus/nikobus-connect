@@ -1,5 +1,74 @@
 # Changelog
 
+## 0.5.10
+
+### Added
+
+- **PC Logic (05-201) inventory now declares 6 channels.** ``DEVICE_TYPES["08"]``
+  was missing the ``Channels`` field, so PC-Logic modules entered the
+  inventory with ``channels=0`` and HA had nothing to surface for the
+  Master PC-Logic's six local inputs (LM01–LM06). The entry now carries
+  ``"Channels": 6`` so the inventory phase produces a 6-channel
+  ``channels_count`` and downstream platforms can create one entity per
+  local input.
+
+- **PC-Link / PC-Logic decoders ingest into the merge layer (Stage 2c).**
+  Both decoders held the resolver in logging-only mode through Stage 2b
+  (0.5.1). With the byte-0 → ``(target_module, channel)`` resolution
+  validated against the fdebrus install (52-channel flat map across 6
+  output-bearing modules; 9 link records cross-checked), ``decode_chunk``
+  now emits ``DecodedCommand`` entries for every link record where:
+
+  1. ``channel_index`` resolves to an output-bearing target via the
+     registry-built flat channel map.
+  2. The target's device type is in
+     ``_MODE_TABLE_BY_DEVICE_TYPE`` (switch / roller / dimmer
+     variants).
+  3. The mode byte's low nibble maps to a known mode for the target.
+  4. The source button's channel count is known (so ``flag_byte``
+     reverse-resolves to a key index via ``KEY_MAPPING_MODULE``).
+
+  When any of those gates fail, the link is logged but no command is
+  emitted — defensive behaviour that keeps the merge layer free of
+  half-resolved entries. Registry records remain visibility-only;
+  their inventory-phase equivalent already populates ``module_data``.
+
+- **``add_to_command_mapping`` honours a ``module_address`` override
+  in the decoded metadata.** PC-Link / PC-Logic decoders set the
+  resolved **target** module as ``module_address`` so the link lands
+  on the real output module's ``linked_modules`` block, not on the
+  controller (PC-Link / PC-Logic) currently being scanned.
+  Switch/dimmer/roller decoders never set this field; their links
+  continue to use the positional ``module_address`` argument (the
+  module being scanned), so this change is invisible to those paths.
+
+### Changed
+
+- ``PcLinkDecoder.reset_scan_buffers`` and ``PcLogicDecoder.reset_scan_buffers``
+  now clear the per-instance ``RegistryBuffer`` in addition to the base
+  alt-alignment state. Discovery already calls ``reset_scan_buffers``
+  at scan boundaries, so a fresh scan starts with no carried registry.
+- The shared decode-and-log helper (formerly ``pc_link_decoder._log_record``)
+  takes an explicit ``logger`` argument so PC-Logic's structured INFO
+  lines surface under the ``pc_logic_decoder`` logger rather than
+  ``pc_link_decoder``. The log prefix (``"PC-Link"`` / ``"PC-Logic"``)
+  is unchanged, so log greps and existing dashboards keep working.
+
+### Tests
+
+- ``test_pc_logic_stage1.py`` — three new tests:
+  ``test_device_type_0x08_carries_six_channels``,
+  ``test_pc_logic_decoder_emits_decoded_command_for_resolved_link_record``
+  (PC-Logic Stage 2c parity with PC-Link, asserting the full
+  ``DecodedCommand`` shape and the resolved-target override),
+  ``test_pc_logic_decoder_reset_scan_buffers_clears_registry``.
+- ``test_pc_link_stage2b.py`` — split the old "still returns []"
+  assertion into two narrower tests:
+  ``test_pc_link_decoder_registry_records_emit_no_commands`` and
+  ``test_pc_link_decoder_link_record_without_button_channels_returns_empty``.
+  Added ``test_pc_link_decoder_emits_decoded_command_for_resolved_link_record``
+  to pin the positive path.
+
 ## 0.5.9
 
 ### Fixed
