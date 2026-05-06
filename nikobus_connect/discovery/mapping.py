@@ -65,6 +65,12 @@ DEVICE_TYPES = {
         "Channels": 2,
         "Name": "RF Transmitter with 2 Operation Points",
     },
+    "21": {
+        "Category": "Button",
+        "Model": "05-056",
+        "Channels": 2,
+        "Name": "Push Button Interface",
+    },
     "22": {
         "Category": "Button",
         "Model": "05-057",
@@ -173,7 +179,6 @@ DEVICE_TYPES = {
     # physical device.
     "05": {"Category": "Reserved", "Model": "Unknown", "Name": "Reserved 0x05"},
     "14": {"Category": "Reserved", "Model": "Unknown", "Name": "Reserved 0x14"},
-    "21": {"Category": "Reserved", "Model": "Unknown", "Name": "Reserved 0x21"},
     "24": {"Category": "Reserved", "Model": "Unknown", "Name": "Reserved 0x24"},
     "34": {"Category": "Reserved", "Model": "Unknown", "Name": "Reserved 0x34"},
     "46": {"Category": "Reserved", "Model": "Unknown", "Name": "Reserved 0x46"},

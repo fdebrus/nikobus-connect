@@ -53,6 +53,20 @@ def _make_coordinator() -> MagicMock:
 # ---------------------------------------------------------------------------
 
 
+def test_device_type_0x21_is_push_button_interface():
+    """05-056 is a 2-input push-button interface — Niko's product page
+    (https://products.niko.eu/de-at/article/05-056) describes it as
+    "interface for push buttons for connection to the home automation
+    system" with 2 inputs. Promoted from ``Reserved`` in 0.5.11 after
+    a user install confirmed the device-type byte against the
+    printed model number."""
+
+    entry = DEVICE_TYPES["21"]
+    assert entry["Model"] == "05-056"
+    assert entry["Category"] == "Button"
+    assert entry["Channels"] == 2
+
+
 def test_device_type_0x22_is_switch_interface():
     entry = DEVICE_TYPES["22"]
     assert entry["Model"] == "05-057"

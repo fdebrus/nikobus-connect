@@ -2,6 +2,19 @@
 
 ## 0.5.11
 
+### Added
+
+- **``0x21 → 05-056 Push Button Interface``** promoted from
+  ``Reserved`` to a real ``DEVICE_TYPES`` entry. The 05-056 is the
+  Niko Nikobus interface for push buttons (2 inputs, ``Category="Button"``)
+  per Niko's product page (https://products.niko.eu/de-at/article/05-056).
+  Same family as 05-057 (``0x22``); the differentiator is just the
+  variant. A user install confirmed the device-type byte against the
+  printed model number, removing the last unverified entry from the
+  Reserved block for that user's hardware. The cataloguing test in
+  ``tests/test_unknown_device_dedup.py`` drops ``0x21`` from its
+  parametrize list since the entry is no longer Reserved.
+
 ### Fixed
 
 - **PC-Link inventory enumeration now ignores PC-Logic responses to
