@@ -4,15 +4,32 @@
 
 ### Fixed
 
-- **PC-Link inventory sweep stops at the first all-FF terminator,
-  matching Niko's PC software.** The previous behaviour read the full
-  ``A0..FF`` register range and picked up records that the active
-  project doesn't reach — typically residue left in flash by a
-  previous installation on the same PC-Link (the second-hand-PC-Link
-  scenario from
-  https://github.com/user-attachments/files/27457361/log-2.txt
-  where one user's dump showed 1 module + 34 buttons from the
-  previous owner mixed in with their current install).
+- **PC-Link inventory sweep stops at the first all-FF terminator
+  *that follows real records*, matching Niko's PC software.** The
+  previous behaviour read the full ``A0..FF`` register range and
+  picked up records that the active project doesn't reach —
+  typically residue left in flash by a previous installation on the
+  same PC-Link (the second-hand-PC-Link scenario from
+  https://github.com/user-attachments/files/27457361/log-2.txt where
+  one user's dump showed 1 module + 34 buttons from the previous
+  owner mixed in with their current install).
+
+  Important nuance (caught after the first commit on this branch
+  via a real-install test): registers ``A0..A2`` (or similar) on
+  many real installs are **pure all-FF — untouched flash before the
+  active project's actual start register**. The first cut of this
+  fix triggered the terminator on register A0 unconditionally and
+  drained the queue before any records had been read. The
+  user-2026-05-07 install was one such case: A0 came back all-FF,
+  the terminator fired, all 95 remaining queued reads drained, and
+  only the PC-Link itself was discovered.
+
+  The corrected rule mirrors what the Niko PC software actually
+  does: only treat all-FF as the terminator AFTER at least one
+  non-all-FF response has been seen (``_pc_link_inventory_data_seen``
+  gate). Leading untouched-flash registers are skipped without
+  triggering the drain; the drain fires only on the all-FF block
+  that comes after the project's records.
 
   Wire-level capture of Niko's PC software performing its
   ``Read preview`` operation against fdebrus's PC-Link

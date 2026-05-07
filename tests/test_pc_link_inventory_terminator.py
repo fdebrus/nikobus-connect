@@ -75,9 +75,35 @@ REAL_REGISTRY_FRAME = "2EF586" + "03000000030000006C0E000001000000" + "F938E8"
 
 
 @pytest.mark.asyncio
-async def test_first_all_ff_response_drains_queue(tmp_path):
-    """First all-FF response in the inventory phase drains the
-    coordinator's command queue and sets the terminator flag."""
+async def test_leading_all_ff_does_not_drain_before_data(tmp_path):
+    """Pure all-FF responses BEFORE any real data are leading
+    untouched flash, not the terminator. PC-Link memory often has
+    A0..A2 (or similar) untouched before the project's actual start
+    register; the user-2026-05-07 install is one such case. We must
+    NOT treat the first all-FF as the terminator — that's the bug
+    fix for 0.5.13 after the initial ship."""
+
+    coord = _make_coordinator()
+    coord.nikobus_command.drain_queue = MagicMock(return_value=95)
+
+    discovery = _make_discovery(coord, tmp_path)
+    discovery.discovery_stage = "inventory_addresses"
+
+    # Three leading all-FF responses (A0..A2 untouched flash).
+    for _ in range(3):
+        await discovery.parse_inventory_response(ALL_FF_INVENTORY_FRAME)
+
+    # No drain, no terminator flag.
+    assert coord.nikobus_command.drain_queue.call_count == 0
+    assert discovery._pc_link_inventory_terminator_seen is False
+    # Data not seen yet either.
+    assert discovery._pc_link_inventory_data_seen is False
+
+
+@pytest.mark.asyncio
+async def test_all_ff_after_data_drains_queue(tmp_path):
+    """The first all-FF response AFTER at least one non-all-FF
+    response is the terminator. Drains the queue and sets the flag."""
 
     coord = _make_coordinator()
     coord.nikobus_command.drain_queue = MagicMock(return_value=42)
@@ -85,11 +111,42 @@ async def test_first_all_ff_response_drains_queue(tmp_path):
     discovery = _make_discovery(coord, tmp_path)
     discovery.discovery_stage = "inventory_addresses"
 
+    # Real record arrives → ``data_seen`` flips True.
+    await discovery.parse_inventory_response(REAL_REGISTRY_FRAME)
+    assert discovery._pc_link_inventory_data_seen is True
     assert discovery._pc_link_inventory_terminator_seen is False
+    assert coord.nikobus_command.drain_queue.call_count == 0
 
+    # All-FF after data → terminator fires.
     await discovery.parse_inventory_response(ALL_FF_INVENTORY_FRAME)
-
     assert discovery._pc_link_inventory_terminator_seen is True
+    coord.nikobus_command.drain_queue.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_leading_all_ff_then_data_then_terminator(tmp_path):
+    """Realistic install pattern: A0..A2 untouched flash, A3+ real
+    records, eventual all-FF terminator. The terminator should fire
+    only on the all-FF that appears after records, not on the
+    leading flash."""
+
+    coord = _make_coordinator()
+    coord.nikobus_command.drain_queue = MagicMock(return_value=10)
+
+    discovery = _make_discovery(coord, tmp_path)
+    discovery.discovery_stage = "inventory_addresses"
+
+    # Leading untouched flash.
+    for _ in range(3):
+        await discovery.parse_inventory_response(ALL_FF_INVENTORY_FRAME)
+    assert coord.nikobus_command.drain_queue.call_count == 0
+
+    # Real records.
+    for _ in range(5):
+        await discovery.parse_inventory_response(REAL_REGISTRY_FRAME)
+
+    # Trailing all-FF → terminator fires.
+    await discovery.parse_inventory_response(ALL_FF_INVENTORY_FRAME)
     coord.nikobus_command.drain_queue.assert_called_once()
 
 
@@ -104,7 +161,10 @@ async def test_subsequent_all_ff_responses_do_not_drain_again(tmp_path):
     discovery = _make_discovery(coord, tmp_path)
     discovery.discovery_stage = "inventory_addresses"
 
+    # Establish the data-seen state and fire the terminator.
+    await discovery.parse_inventory_response(REAL_REGISTRY_FRAME)
     await discovery.parse_inventory_response(ALL_FF_INVENTORY_FRAME)
+    # Repeat all-FFs.
     await discovery.parse_inventory_response(ALL_FF_INVENTORY_FRAME)
     await discovery.parse_inventory_response(ALL_FF_INVENTORY_FRAME)
 
@@ -114,7 +174,8 @@ async def test_subsequent_all_ff_responses_do_not_drain_again(tmp_path):
 @pytest.mark.asyncio
 async def test_real_records_before_terminator_do_not_drain(tmp_path):
     """A registry record (well-formed, non-FF) does NOT trigger the
-    drain. Only the terminator does."""
+    drain. Only the terminator does. Real records flip the
+    ``data_seen`` gate so the next all-FF qualifies as terminator."""
 
     coord = _make_coordinator()
     discovery = _make_discovery(coord, tmp_path)
@@ -125,6 +186,7 @@ async def test_real_records_before_terminator_do_not_drain(tmp_path):
         await discovery.parse_inventory_response(REAL_REGISTRY_FRAME)
     assert coord.nikobus_command.drain_queue.call_count == 0
     assert discovery._pc_link_inventory_terminator_seen is False
+    assert discovery._pc_link_inventory_data_seen is True
 
     await discovery.parse_inventory_response(ALL_FF_INVENTORY_FRAME)
     assert coord.nikobus_command.drain_queue.call_count == 1
@@ -150,21 +212,28 @@ async def test_terminator_outside_inventory_phase_does_not_drain(tmp_path):
 
 @pytest.mark.asyncio
 async def test_terminator_flag_resets_between_scans(tmp_path):
-    """A subsequent inventory enumeration must start fresh — the
-    terminator flag is cleared by ``reset_state``."""
+    """A subsequent inventory enumeration must start fresh — both
+    the terminator flag and the ``data_seen`` gate are cleared by
+    ``reset_state``."""
 
     coord = _make_coordinator()
     discovery = _make_discovery(coord, tmp_path)
     discovery.discovery_stage = "inventory_addresses"
 
+    # First scan: data + terminator.
+    await discovery.parse_inventory_response(REAL_REGISTRY_FRAME)
     await discovery.parse_inventory_response(ALL_FF_INVENTORY_FRAME)
     assert discovery._pc_link_inventory_terminator_seen is True
+    assert discovery._pc_link_inventory_data_seen is True
 
     discovery.reset_state(update_flags=False)
     assert discovery._pc_link_inventory_terminator_seen is False
+    assert discovery._pc_link_inventory_data_seen is False
 
-    # Subsequent run — terminator triggers drain again.
+    # Second scan: data + terminator again. Drain count should
+    # increment.
     discovery.discovery_stage = "inventory_addresses"
+    await discovery.parse_inventory_response(REAL_REGISTRY_FRAME)
     await discovery.parse_inventory_response(ALL_FF_INVENTORY_FRAME)
     assert discovery._pc_link_inventory_terminator_seen is True
     assert coord.nikobus_command.drain_queue.call_count == 2
@@ -182,6 +251,8 @@ async def test_drain_call_is_safe_when_command_lacks_drain_queue(tmp_path):
     discovery = _make_discovery(coord, tmp_path)
     discovery.discovery_stage = "inventory_addresses"
 
+    # Establish data_seen state first.
+    await discovery.parse_inventory_response(REAL_REGISTRY_FRAME)
     # Should not raise.
     await discovery.parse_inventory_response(ALL_FF_INVENTORY_FRAME)
 

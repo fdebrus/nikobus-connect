@@ -525,14 +525,25 @@ class NikobusDiscovery:
         self._module_consecutive_empties: int = 0
         # First-all-FF terminator tracking for the PC-Link sub=04 sweep
         # over registers A0..FF. The Niko PC software reads this region
-        # in order and stops at the first 16-byte all-FF response,
-        # treating it as end-of-active-project. Records past that
-        # terminator can exist when a second-hand PC-Link's flash
-        # carries residue from a previous owner's install — Niko's
-        # software never sees them, but our pre-0.5.13 sweep did.
-        # We mirror Niko's behaviour: drain the remaining inventory
-        # commands the first time an all-FF response arrives.
+        # in order and stops at the first 16-byte all-FF response *that
+        # follows real records* — treating it as end-of-active-project.
+        # Records past that terminator can exist when a second-hand
+        # PC-Link's flash carries residue from a previous owner's
+        # install — Niko's software never sees them, but our pre-0.5.13
+        # sweep did. We mirror Niko's behaviour: drain the remaining
+        # inventory commands when the first qualifying all-FF response
+        # arrives.
+        #
+        # Important nuance: the very first registers of the A0..FF
+        # range are often pure all-FF on real installs (untouched
+        # flash before the project's start register; e.g. A0..A2 on
+        # the user-2026-05-07 install where the project starts later).
+        # If we triggered the terminator on the FIRST all-FF
+        # unconditionally, we'd stop before reaching the records.
+        # So the terminator only fires AFTER at least one non-all-FF
+        # response has been seen — that's the ``data_seen`` gate.
         self._pc_link_inventory_terminator_seen: bool = False
+        self._pc_link_inventory_data_seen: bool = False
         # Sequential register-scan coordination. The listener dispatches
         # $2E / $1E / $18 frames directly to the event callback (they
         # bypass the command-handler response queue). During a scan we
@@ -563,6 +574,7 @@ class NikobusDiscovery:
         self._module_found_data = False
         self._module_consecutive_empties = 0
         self._pc_link_inventory_terminator_seen = False
+        self._pc_link_inventory_data_seen = False
         self.discovery_stage = None
         self._decoded_buffer: dict | None = None
         if update_flags:
@@ -1477,15 +1489,25 @@ class NikobusDiscovery:
             self._schedule_inventory_timeout()
 
             if self._is_pc_link_inventory_terminator("", data_bytes):
-                # First all-FF response of this scan is the
-                # end-of-active-project marker. Niko's PC software
-                # stops here too — every register past this point
-                # holds either FF (untouched flash) or residue from
-                # a previous install. Drain the rest of the queue so
-                # we don't read records that aren't part of the
-                # current project.
+                # All-FF response. Two distinct cases:
+                #
+                # 1. ``data_seen=True``: this is the all-FF block AFTER
+                #    the active project's records. Niko's PC software
+                #    treats this as end-of-active-project and stops;
+                #    we mirror that by draining the remaining queued
+                #    reads. Records past this point are residue from
+                #    a previous install on the same PC-Link.
+                #
+                # 2. ``data_seen=False``: this is leading untouched
+                #    flash (registers A0..A2 on the user-2026-05-07
+                #    install start with all-FF before the project
+                #    actually begins). DON'T treat this as the
+                #    terminator — we'd stop before ever reaching the
+                #    real records. Just skip and continue, same as
+                #    the pre-0.5.13 behaviour.
                 if (
                     not self._pc_link_inventory_terminator_seen
+                    and self._pc_link_inventory_data_seen
                     and self.discovery_stage in {
                         "inventory_addresses",
                         "inventory_identity",
@@ -1511,6 +1533,12 @@ class NikobusDiscovery:
                         "Skipping to next."
                     )
                 return result
+
+            # Any non-all-FF response — including test patterns and
+            # malformed records — flips the ``data_seen`` gate. The
+            # next time we see an all-FF block, it's the end-of-
+            # project terminator, not leading untouched flash.
+            self._pc_link_inventory_data_seen = True
 
             if len(payload_bytes) < 15:
                 _LOGGER.debug(
