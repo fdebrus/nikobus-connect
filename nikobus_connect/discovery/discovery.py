@@ -523,6 +523,16 @@ class NikobusDiscovery:
         self._inventory_addresses: set[str] = set()
         self._module_found_data: bool = False
         self._module_consecutive_empties: int = 0
+        # First-all-FF terminator tracking for the PC-Link sub=04 sweep
+        # over registers A0..FF. The Niko PC software reads this region
+        # in order and stops at the first 16-byte all-FF response,
+        # treating it as end-of-active-project. Records past that
+        # terminator can exist when a second-hand PC-Link's flash
+        # carries residue from a previous owner's install — Niko's
+        # software never sees them, but our pre-0.5.13 sweep did.
+        # We mirror Niko's behaviour: drain the remaining inventory
+        # commands the first time an all-FF response arrives.
+        self._pc_link_inventory_terminator_seen: bool = False
         # Sequential register-scan coordination. The listener dispatches
         # $2E / $1E / $18 frames directly to the event callback (they
         # bypass the command-handler response queue). During a scan we
@@ -552,6 +562,7 @@ class NikobusDiscovery:
         self._inventory_identity_queued: set[str] = set()
         self._module_found_data = False
         self._module_consecutive_empties = 0
+        self._pc_link_inventory_terminator_seen = False
         self.discovery_stage = None
         self._decoded_buffer: dict | None = None
         if update_flags:
@@ -1088,6 +1099,17 @@ class NikobusDiscovery:
             )
 
             for reg in range(0xA0, 0x100):
+                if self._pc_link_inventory_terminator_seen:
+                    # Terminator response arrived between iterations
+                    # (event-loop yield in queue_command let the
+                    # listener run). Stop queueing the rest — they'd
+                    # only get drained by the response handler anyway.
+                    _LOGGER.debug(
+                        "PC Link inventory: terminator already received, "
+                        "skipping queue for reg=%02X..FF",
+                        reg,
+                    )
+                    break
                 payload = f"10{bus_order_address}{reg:02X}04"
                 pc_link_command = make_pc_link_inventory_command(payload)
 
@@ -1454,11 +1476,40 @@ class NikobusDiscovery:
 
             self._schedule_inventory_timeout()
 
-            # --- FIX 2: Just skip the empty register, DO NOT abort the scan! ---
             if self._is_pc_link_inventory_terminator("", data_bytes):
-                _LOGGER.debug(
-                    "Empty PC Link registry block (FFFF...) detected. Skipping to next."
-                )
+                # First all-FF response of this scan is the
+                # end-of-active-project marker. Niko's PC software
+                # stops here too — every register past this point
+                # holds either FF (untouched flash) or residue from
+                # a previous install. Drain the rest of the queue so
+                # we don't read records that aren't part of the
+                # current project.
+                if (
+                    not self._pc_link_inventory_terminator_seen
+                    and self.discovery_stage in {
+                        "inventory_addresses",
+                        "inventory_identity",
+                        "inventory",
+                    }
+                ):
+                    self._pc_link_inventory_terminator_seen = True
+                    drain = getattr(
+                        self._coordinator.nikobus_command, "drain_queue", None
+                    )
+                    drained = drain() if callable(drain) else 0
+                    _LOGGER.info(
+                        "PC Link inventory: all-FF terminator received — "
+                        "stopping sweep (drained %d remaining queued reads). "
+                        "Records past the terminator are residue from a "
+                        "previous install and are deliberately ignored, "
+                        "matching the Niko PC software's behaviour.",
+                        drained or 0,
+                    )
+                else:
+                    _LOGGER.debug(
+                        "Empty PC Link registry block (FFFF...) detected. "
+                        "Skipping to next."
+                    )
                 return result
 
             if len(payload_bytes) < 15:
