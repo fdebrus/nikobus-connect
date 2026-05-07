@@ -1,5 +1,71 @@
 # Changelog
 
+## 0.5.13
+
+### Fixed
+
+- **PC-Link inventory sweep stops at the first all-FF terminator,
+  matching Niko's PC software.** The previous behaviour read the full
+  ``A0..FF`` register range and picked up records that the active
+  project doesn't reach — typically residue left in flash by a
+  previous installation on the same PC-Link (the second-hand-PC-Link
+  scenario from
+  https://github.com/user-attachments/files/27457361/log-2.txt
+  where one user's dump showed 1 module + 34 buttons from the
+  previous owner mixed in with their current install).
+
+  Wire-level capture of Niko's PC software performing its
+  ``Read preview`` operation against fdebrus's PC-Link
+  (2024-05-24, COM4) shows the sub=04 sweep going
+  ``A3 → A4 → … → C2 → C3`` and stopping. C3's response is a 22-byte
+  frame with a pure all-FF 16-byte payload:
+
+  ```
+  $0510 $2EF586 FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF CC98D0
+  ```
+
+  Niko's software treats this as the end-of-active-project marker
+  and never reads C4..FF — so any residue past that point is
+  invisible to it. The library now mirrors that behaviour: the first
+  time ``parse_inventory_response`` sees an all-FF frame during the
+  inventory phase, it sets a per-scan terminator flag, calls
+  ``coordinator.nikobus_command.drain_queue()`` to discard the
+  remaining queued reads, and logs at INFO with the count of
+  drained commands. The queueing loop in
+  ``_run_inventory_identity_queries`` also short-circuits if the
+  flag flipped between iterations.
+
+  Subsequent all-FF responses on the same scan keep the legacy
+  "skip and continue" DEBUG path — only the first occurrence
+  triggers the drain. The flag resets in ``reset_state`` so the
+  next inventory scan starts fresh.
+
+### Tests
+
+- ``tests/test_pc_link_inventory_terminator.py`` — seven tests:
+  - First all-FF response in the inventory phase drains the queue
+    and sets the terminator flag.
+  - Subsequent all-FF responses don't drain again (idempotent).
+  - Real registry records before the terminator don't drain.
+  - All-FF responses outside the inventory phase (e.g. during
+    Stage-2 register scans) don't drain — protects against draining
+    the Stage-2 queue when modules legitimately return FF for
+    unprogrammed registers.
+  - The terminator flag clears in ``reset_state`` so a subsequent
+    inventory enumeration starts fresh.
+  - Defensive: missing ``drain_queue`` on the command object
+    (older harness) doesn't raise.
+  - The queueing loop in ``_run_inventory_identity_queries``
+    bails out when the terminator flag flips mid-loop, so we don't
+    queue all 96 registers if the response arrives early.
+
+### Notes
+
+- The HA coordinator's existing "3 consecutive empty blocks"
+  early-stop is now redundant for PC-Link inventory but harmless —
+  the library's first-all-FF drain fires first. The HA-side rule
+  can stay as a defence-in-depth backstop or get removed later.
+
 ## 0.5.12
 
 ### Changed
