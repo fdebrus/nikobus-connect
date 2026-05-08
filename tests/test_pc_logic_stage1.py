@@ -181,22 +181,27 @@ def test_device_type_0x43_and_0x44_share_05_058_sku():
     assert entry_44["Channels"] == 8
 
 
-def test_device_type_0x1f_model_is_unknown_not_05_311():
+def test_device_type_0x1f_is_battery_powered_wall_push_button():
     """0x1F was previously mapped to Niko 05-311 with 2 channels.
     That's wrong: Niko's official 05-311 page
     (https://products.niko.eu/en/article/05-311) describes the
-    product as 1-channel only with 1 control button. Whatever
-    physical device emits type 0x1F on 2 channels (observed e.g.
-    at address 2E58F6 on fdebrus's install) is NOT a 05-311 —
-    likely an older / discontinued / unlisted variant. Until
-    someone reads the printed model number off the hardware, the
-    SKU stays Unknown. The channel count (2) reflects actual bus
-    emission and is correct."""
+    product as 1-channel only with 1 control button — and 05-311 is
+    a HAND-HELD device, not a wall switch.
+
+    fdebrus confirmed from physical hardware that the device type
+    0x1F device on his install is a **battery-powered wireless WALL
+    push button with 2 action points (1A, 1B)**. The corresponding
+    Nikobus-era SKU isn't in Niko's current web catalogue (Nikobus
+    reference codes have been retired from active promotion), so
+    the Model stays Unknown until someone reads the printed model
+    number off a physical device. Channel count (2) and Name reflect
+    the actual hardware."""
 
     entry = DEVICE_TYPES["1F"]
     assert entry["Model"] == "Unknown"
     assert entry["Channels"] == 2
     assert entry["Category"] == "Button"
+    assert "wall push button" in entry["Name"].lower()
 
 
 def test_device_type_0x25_remains_correct_05_311_1ch():
