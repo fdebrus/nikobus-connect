@@ -195,17 +195,22 @@ DEVICE_TYPES = {
         "Name": "Wireless RF transmitter, 2 channels",
     },
     "23": {
-        # 05-312 has two firmware-reported modes — see also 0x3D below
-        # which reports the same physical product as 52 operation
-        # points. Niko's product page describes 05-312 as "13 push
-        # buttons + 4 channel-selection buttons … controls a maximum
-        # of 52 circuits". 0x23 reflects the channel-selector view
-        # (4 channels visible to the user), 0x3D reflects the full
-        # 52-circuit population view.
+        # Real device emits type 0x23 on 4 channels — fdebrus confirmed
+        # from physical hardware that the 0x23 devices on his install
+        # (e.g. addresses ``201250`` and ``204915``) are **wall
+        # switches**, not hand-held remotes. So 0x23 is NOT Niko 05-312:
+        # the official 05-312 product page
+        # (https://www.niko.eu/en/article/05-312) describes 05-312
+        # specifically as a 13-button hand-held remote with 4 channel
+        # selectors, not a wall-mounted device. The actual SKU behind
+        # 0x23 isn't in Niko's current web catalogue (Nikobus reference
+        # codes have been retired from active promotion); marked
+        # Unknown until someone reads the printed model number off a
+        # physical device. Channels (4) reflects actual bus emission.
         "Category": "Button",
-        "Model": "05-312",
+        "Model": "Unknown",
         "Channels": 4,
-        "Name": "Easywave hand-held RF transmitter, 4 channels",
+        "Name": "Wireless RF transmitter, 4 channels",
     },
     "25": {
         "Category": "Button",
@@ -220,12 +225,18 @@ DEVICE_TYPES = {
         "Name": "RF868 mini transmitter, 4 channels",
     },
     "3D": {
-        # Same physical product as 0x23 — see comment there. 0x3D is
-        # the 52-circuit firmware-reported view of 05-312.
+        # 05-312 Easywave hand-held remote control. Niko's product
+        # page (https://www.niko.eu/en/article/05-312) describes it
+        # as a hand-held with 13 push buttons + 4 channel-selection
+        # buttons, controlling up to 52 circuits — this entry maps
+        # the 52-circuit firmware-reported population. (An earlier
+        # hypothesis paired 0x23 with this entry as two modes of a
+        # single 05-312; that was wrong — 0x23 is a wall switch,
+        # not a hand-held.)
         "Category": "Button",
         "Model": "05-312",
         "Channels": 52,
-        "Name": "Easywave RF transmitter, 52 operation points",
+        "Name": "Easywave hand-held RF transmitter, 52 operation points",
     },
     # ------------------------------------------------------------------
     # Sensors.
