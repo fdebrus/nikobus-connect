@@ -1,5 +1,59 @@
 # Changelog
 
+## 0.5.14
+
+### Fixed
+
+- **PC-Link inventory terminator no longer fires on leading
+  untouched flash.** 0.5.13's all-FF terminator-stop was too eager:
+  it triggered the queue drain on the FIRST all-FF response,
+  regardless of where it appeared. Real-install testing on
+  2026-05-07 caught the regression — the user's install has
+  register A0 returning pure all-FF (untouched flash before the
+  active project's actual start register), so 0.5.13 drained all
+  95 remaining queued reads and only the PC-Link itself was
+  discovered:
+
+  ```
+  16:35:13.725 DEBUG ... Bus Frame: $2EF586FFFF…(16 bytes FF)…CC98D0
+  16:35:13.726 INFO  ... PC Link inventory: all-FF terminator received —
+                     stopping sweep (drained 95 remaining queued reads).
+  16:35:23.736 INFO  ... PC Link inventory scan finished | discovered=1
+  ```
+
+  Niko's PC software handles this correctly — its trace shows it
+  starting reads at register A3 (skipping leading flash) and
+  stopping on the first all-FF AFTER records. The fix mirrors that
+  behaviour without hardcoding a "start register": a
+  ``_pc_link_inventory_data_seen`` gate flips True the first time
+  any non-all-FF response is parsed (real record, test pattern,
+  even malformed frame). All-FF responses BEFORE the gate flips
+  are leading flash and get skipped via the legacy DEBUG path.
+  All-FF responses AFTER the gate flips are the active-project
+  terminator and trigger the drain.
+
+  Both flags clear in ``reset_state`` so subsequent scans start
+  fresh. No behaviour change on installs where the project starts
+  at A0 — the first response there is a real record (not all-FF),
+  ``data_seen`` flips on it, and the terminator fires on the
+  all-FF after.
+
+### Tests
+
+- ``tests/test_pc_link_inventory_terminator.py`` — three new tests
+  pin the gate behaviour, plus updates to four existing tests that
+  implicitly relied on the 0.5.13 "first all-FF stops" semantics:
+
+  - ``test_leading_all_ff_does_not_drain_before_data`` (new) —
+    pins the user-2026-05-07 regression directly. Three leading
+    all-FF responses, no drain, no terminator flag.
+  - ``test_all_ff_after_data_drains_queue`` (new) — real record
+    flips the gate; subsequent all-FF triggers the drain.
+  - ``test_leading_all_ff_then_data_then_terminator`` (new) —
+    realistic install pattern: 3 leading flash registers + 5
+    records + 1 terminator. Drain fires once, on the trailing
+    all-FF.
+
 ## 0.5.13
 
 ### Fixed
