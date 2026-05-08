@@ -1,18 +1,89 @@
 # Changelog
 
+## 0.5.14
+
+### Fixed
+
+- **PC-Link inventory terminator no longer fires on leading
+  untouched flash.** 0.5.13's all-FF terminator-stop was too eager:
+  it triggered the queue drain on the FIRST all-FF response,
+  regardless of where it appeared. Real-install testing on
+  2026-05-07 caught the regression — the user's install has
+  register A0 returning pure all-FF (untouched flash before the
+  active project's actual start register), so 0.5.13 drained all
+  95 remaining queued reads and only the PC-Link itself was
+  discovered:
+
+  ```
+  16:35:13.725 DEBUG ... Bus Frame: $2EF586FFFF…(16 bytes FF)…CC98D0
+  16:35:13.726 INFO  ... PC Link inventory: all-FF terminator received —
+                     stopping sweep (drained 95 remaining queued reads).
+  16:35:23.736 INFO  ... PC Link inventory scan finished | discovered=1
+  ```
+
+  Niko's PC software handles this correctly — its trace shows it
+  starting reads at register A3 (skipping leading flash) and
+  stopping on the first all-FF AFTER records. The fix mirrors that
+  behaviour without hardcoding a "start register": a
+  ``_pc_link_inventory_data_seen`` gate flips True the first time
+  any non-all-FF response is parsed (real record, test pattern,
+  even malformed frame). All-FF responses BEFORE the gate flips
+  are leading flash and get skipped via the legacy DEBUG path.
+  All-FF responses AFTER the gate flips are the active-project
+  terminator and trigger the drain.
+
+  Both flags clear in ``reset_state`` so subsequent scans start
+  fresh. No behaviour change on installs where the project starts
+  at A0 — the first response there is a real record (not all-FF),
+  ``data_seen`` flips on it, and the terminator fires on the
+  all-FF after.
+
+### Tests
+
+- ``tests/test_pc_link_inventory_terminator.py`` — three new tests
+  pin the gate behaviour, plus updates to four existing tests that
+  implicitly relied on the 0.5.13 "first all-FF stops" semantics:
+
+  - ``test_leading_all_ff_does_not_drain_before_data`` (new) —
+    pins the user-2026-05-07 regression directly. Three leading
+    all-FF responses, no drain, no terminator flag.
+  - ``test_all_ff_after_data_drains_queue`` (new) — real record
+    flips the gate; subsequent all-FF triggers the drain.
+  - ``test_leading_all_ff_then_data_then_terminator`` (new) —
+    realistic install pattern: 3 leading flash registers + 5
+    records + 1 terminator. Drain fires once, on the trailing
+    all-FF.
+
 ## 0.5.13
 
 ### Fixed
 
-- **PC-Link inventory sweep stops at the first all-FF terminator,
-  matching Niko's PC software.** The previous behaviour read the full
-  ``A0..FF`` register range and picked up records that the active
-  project doesn't reach — typically residue left in flash by a
-  previous installation on the same PC-Link (the second-hand-PC-Link
-  scenario from
-  https://github.com/user-attachments/files/27457361/log-2.txt
-  where one user's dump showed 1 module + 34 buttons from the
-  previous owner mixed in with their current install).
+- **PC-Link inventory sweep stops at the first all-FF terminator
+  *that follows real records*, matching Niko's PC software.** The
+  previous behaviour read the full ``A0..FF`` register range and
+  picked up records that the active project doesn't reach —
+  typically residue left in flash by a previous installation on the
+  same PC-Link (the second-hand-PC-Link scenario from
+  https://github.com/user-attachments/files/27457361/log-2.txt where
+  one user's dump showed 1 module + 34 buttons from the previous
+  owner mixed in with their current install).
+
+  Important nuance (caught after the first commit on this branch
+  via a real-install test): registers ``A0..A2`` (or similar) on
+  many real installs are **pure all-FF — untouched flash before the
+  active project's actual start register**. The first cut of this
+  fix triggered the terminator on register A0 unconditionally and
+  drained the queue before any records had been read. The
+  user-2026-05-07 install was one such case: A0 came back all-FF,
+  the terminator fired, all 95 remaining queued reads drained, and
+  only the PC-Link itself was discovered.
+
+  The corrected rule mirrors what the Niko PC software actually
+  does: only treat all-FF as the terminator AFTER at least one
+  non-all-FF response has been seen (``_pc_link_inventory_data_seen``
+  gate). Leading untouched-flash registers are skipped without
+  triggering the drain; the drain fires only on the all-FF block
+  that comes after the project's records.
 
   Wire-level capture of Niko's PC software performing its
   ``Read preview`` operation against fdebrus's PC-Link
