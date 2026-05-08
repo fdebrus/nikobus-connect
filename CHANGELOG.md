@@ -4,45 +4,51 @@
 
 ### Fixed
 
-- **``DEVICE_TYPES["23"]`` no longer mis-claims to be Niko 05-312.**
-  Niko's official 05-312 product page
-  (https://www.niko.eu/en/article/05-312) describes it as a 13-button
-  hand-held Easywave remote. fdebrus confirmed from physical hardware
-  that the 0x23 devices on his install (addresses ``201250`` and
-  ``204915``) are **wall switches**, not hand-held remotes — so they
-  can't be 05-312. The actual SKU isn't in Niko's current web
-  catalogue; Model changes from ``"05-312"`` to ``"Unknown"`` and
-  Name changes from ``"Easywave hand-held RF transmitter, 4 channels"``
-  to ``"Wireless RF transmitter, 4 channels"`` to drop the misleading
-  hand-held implication.
+- **``DEVICE_TYPES["1F"]`` and ``DEVICE_TYPES["23"]`` are RF-bus
+  push buttons, not hand-held transmitters.** Niko's official
+  ``PMNikobus_EN.pdf`` catalogue (the comprehensive product manual,
+  available in fdebrus/Nikobus-HA's documentation/) describes
+  RF-bus push buttons as battery-powered wall-mounted devices
+  that pair with the 05-300 modular RF interface to integrate
+  into Nikobus over 868.3 MHz:
 
-  This also retracts the earlier pairing of ``0x23`` and ``0x3D`` as
-  "two firmware-reported modes of a single 05-312". They're now
-  believed to be different products: ``0x23`` is the wall switch
-  (Model unknown), ``0x3D`` remains the 05-312 hand-held in its
-  52-circuit population view.
+  > "Single RF-bus push button: this RF-bus push button has two
+  > operation areas available. It is finished with a full
+  > rocker, either with or without labelling."
+  >
+  > "Double RF-bus push button: this RF-bus push button has four
+  > operation areas available. It is finished with two
+  > half-rockers, either with or without labelling, or with a 3/4
+  > and a 1/4 rocker."
 
-- **``DEVICE_TYPES["1F"]`` no longer mis-claims to be Niko 05-311.**
-  Niko's official 05-311 product page
-  (https://products.niko.eu/en/article/05-311) describes the
-  Mini hand-held RF transmitter as **1 channel, 1 control button**
-  — definitively a 1-channel product. Pre-0.5.15 we mapped both
-  ``0x1F`` (2-channel emission) AND ``0x25`` (1-channel emission)
-  to model ``05-311``; ``0x25`` is correct, ``0x1F`` was wrong.
+  fdebrus confirmed from his install:
 
-  A search across Niko's wireless catalogue didn't surface a
-  2-channel mini hand-held SKU, so the actual model behind
-  ``0x1F`` is unknown — likely an older / discontinued / unlisted
-  variant. Real hardware exists (observed at address ``2E58F6``
-  on fdebrus's install, emitting cleanly on 2 channels), so the
-  channel count stays at ``2`` to match bus emission. Model
-  changes from ``"05-311"`` to ``"Unknown"`` until someone reads
-  the printed model number off a physical device with
-  device-type byte ``0x1F``.
+  - ``0x1F`` (2 channels, e.g. address ``2E58F6``) = **Single
+    RF-bus push button, 2 operation areas**.
+  - ``0x23`` (4 channels, addresses ``201250`` and ``204915``) =
+    **Double RF-bus push button, 4 operation areas**.
 
-  ``Name`` updates from ``"Mini hand-held RF transmitter, 2
-  channels"`` to ``"Wireless RF transmitter, 2 channels"`` to
-  drop the family-name implication.
+  Pre-0.5.15 we mapped these to Niko's hand-held SKUs (05-311
+  and 05-312) — both wrong: 05-311 is the 1-channel hand-held
+  mini-transmitter and 05-312 is the 13-button hand-held Easywave
+  remote. Niko sells the RF-bus push buttons as a base radio
+  module + interchangeable face plates rather than under a
+  single SKU, so the catalogue doesn't list a specific Model
+  number; Model stays ``"Unknown"`` for both until someone reads
+  the printed number off the physical radio module.
+
+  Name updates:
+
+  - ``0x1F``: ``"Mini hand-held RF transmitter, 2 channels"`` →
+    ``"Single RF-bus push button, 2 operation areas"``
+  - ``0x23``: ``"Easywave hand-held RF transmitter, 4 channels"``
+    → ``"Double RF-bus push button, 4 operation areas"``
+
+  This also retracts the earlier pairing of ``0x23`` and ``0x3D``
+  as "two firmware-reported modes of a single 05-312". They're
+  different products: ``0x23`` is the Double RF-bus push button
+  (wall device, Model unknown), ``0x3D`` remains the 05-312
+  hand-held in its 52-circuit population view.
 
 ### Changed
 

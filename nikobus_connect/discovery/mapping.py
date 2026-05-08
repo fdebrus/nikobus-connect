@@ -179,38 +179,44 @@ DEVICE_TYPES = {
     # RF transmitters.
     # ------------------------------------------------------------------
     "1F": {
-        # Real device emits type 0x1F on 2 channels (e.g. address
-        # ``2E58F6`` on fdebrus's install). Niko 05-311 — the previous
-        # mapping for this entry — is 1-channel only per the official
-        # product page (https://products.niko.eu/en/article/05-311), so
-        # whatever responds with 0x1F is NOT a 05-311. Searches across
-        # Niko's current wireless catalogue didn't surface a 2-channel
-        # SKU; this is most likely an older / discontinued variant.
-        # Channel count stays at 2 (matches actual bus emission); Model
-        # marked Unknown until someone with the physical hardware reads
-        # the printed model number off the device.
+        # Single RF-bus push button per Niko's PMNikobus catalogue:
+        # "RF-bus push button [...] has two operation areas
+        # available. It is finished with a full rocker, either with
+        # or without labelling." Battery-powered wall-mounted RF
+        # device that pairs with the 05-300 modular RF interface to
+        # integrate into Nikobus over 868.3 MHz. Niko sells these as
+        # a base radio module + interchangeable face plates rather
+        # than under a single SKU; the catalogue doesn't list a
+        # specific model number for the radio module itself, so
+        # Model stays "Unknown" until someone reads the printed
+        # number off a physical device. The previous mapping to
+        # 05-311 was wrong — 05-311 is the 1-channel hand-held
+        # mini-transmitter, not a wall device.
         "Category": "Button",
         "Model": "Unknown",
         "Channels": 2,
-        "Name": "Wireless RF transmitter, 2 channels",
+        "Name": "Single RF-bus push button, 2 operation areas",
     },
     "23": {
-        # Real device emits type 0x23 on 4 channels — fdebrus confirmed
-        # from physical hardware that the 0x23 devices on his install
-        # (e.g. addresses ``201250`` and ``204915``) are **wall
-        # switches**, not hand-held remotes. So 0x23 is NOT Niko 05-312:
-        # the official 05-312 product page
-        # (https://www.niko.eu/en/article/05-312) describes 05-312
-        # specifically as a 13-button hand-held remote with 4 channel
-        # selectors, not a wall-mounted device. The actual SKU behind
-        # 0x23 isn't in Niko's current web catalogue (Nikobus reference
-        # codes have been retired from active promotion); marked
-        # Unknown until someone reads the printed model number off a
-        # physical device. Channels (4) reflects actual bus emission.
+        # Double RF-bus push button per Niko's PMNikobus catalogue:
+        # "RF-bus push button [...] has four operation areas
+        # available. It is finished with two half-rockers, either
+        # with or without labelling, or with a 3/4 and a 1/4
+        # rocker." Battery-powered wall-mounted RF device that
+        # pairs with the 05-300 modular RF interface to integrate
+        # into Nikobus over 868.3 MHz. Confirmed by fdebrus from
+        # physical hardware (devices at addresses 201250 and
+        # 204915 on his install). Niko sells these as a base
+        # radio module + interchangeable face plates rather than
+        # under a single SKU, so Model stays "Unknown" until
+        # someone reads the printed number off a physical device.
+        # The previous mapping to 05-312 was wrong — 05-312 is
+        # the 13-button hand-held Easywave remote, not a wall
+        # device.
         "Category": "Button",
         "Model": "Unknown",
         "Channels": 4,
-        "Name": "Wireless RF transmitter, 4 channels",
+        "Name": "Double RF-bus push button, 4 operation areas",
     },
     "25": {
         "Category": "Button",
