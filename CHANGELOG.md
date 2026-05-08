@@ -23,15 +23,8 @@
   device-type byte ``0x1F``.
 
   ``Name`` updates from ``"Mini hand-held RF transmitter, 2
-  channels"`` to ``"Battery-powered wireless wall push button, 2
-  action points"`` — fdebrus confirmed from physical hardware
-  that the 0x1F device on his install is a battery-powered
-  wireless WALL push button (not a hand-held). The new Name
-  reflects the actual hardware shape; the corresponding
-  Nikobus-era SKU isn't in Niko's current web catalogue
-  (Nikobus reference codes have been retired from active
-  promotion), so Model stays ``"Unknown"`` until someone reads
-  the printed model number off a physical device.
+  channels"`` to ``"Wireless RF transmitter, 2 channels"`` to
+  drop the family-name implication.
 
 ### Changed
 
