@@ -179,20 +179,21 @@ DEVICE_TYPES = {
     # RF transmitters.
     # ------------------------------------------------------------------
     "1F": {
-        # Real device emits type 0x1F on 2 channels (e.g. address
-        # ``2E58F6`` on fdebrus's install). Niko 05-311 — the previous
-        # mapping for this entry — is 1-channel only per the official
-        # product page (https://products.niko.eu/en/article/05-311), so
-        # whatever responds with 0x1F is NOT a 05-311. Searches across
-        # Niko's current wireless catalogue didn't surface a 2-channel
-        # mini hand-held SKU; this is most likely an older / discontinued
-        # variant. Channel count stays at 2 (matches actual bus emission);
-        # Model marked Unknown until someone with the physical hardware
-        # reads the printed model number off the device.
+        # Battery-powered wireless WALL push button with 2 action
+        # points (1A, 1B) — confirmed by fdebrus from the physical
+        # hardware. NOT a Niko 05-311 (which is the 1-channel mini
+        # HAND-HELD per the official product page at
+        # https://products.niko.eu/en/article/05-311). The
+        # corresponding Nikobus-era SKU isn't in Niko's current web
+        # catalogue (Nikobus reference codes have been retired from
+        # active promotion), so Model stays Unknown until someone
+        # reads the printed model number off a physical device with
+        # device-type byte 0x1F. Channels (2) and Name reflect the
+        # actual hardware shape.
         "Category": "Button",
         "Model": "Unknown",
         "Channels": 2,
-        "Name": "Wireless RF transmitter, 2 channels",
+        "Name": "Battery-powered wireless wall push button, 2 action points",
     },
     "23": {
         # 05-312 has two firmware-reported modes — see also 0x3D below
