@@ -154,18 +154,35 @@ def test_device_type_0x09_and_0x31_share_05_002_02_sku():
     assert entry_09["Category"] == entry_31["Category"] == "Module"
 
 
-def test_device_type_0x23_and_0x3d_share_05_312_sku():
-    """Niko 05-312 is a single physical Easywave hand-held that the
-    firmware reports two ways: 0x23 = channel-selector view (4
-    channels), 0x3D = full-population view (52 circuits). Both
-    entries reflect the same product in different operational
-    modes."""
+def test_device_type_0x23_model_is_unknown_not_05_312():
+    """0x23 was previously mapped to Niko 05-312 with 4 channels
+    (paired with 0x3D as the "channel-selector view" of the same
+    product). That pairing was wrong: fdebrus confirmed from
+    physical hardware that the 0x23 devices on his install (e.g.
+    addresses 201250 and 204915) are **wall switches**, not the
+    hand-held 05-312 described on Niko's product page
+    (https://www.niko.eu/en/article/05-312). The actual SKU isn't
+    in Niko's current web catalogue; Model stays Unknown until
+    someone reads the printed model number off a physical
+    device."""
 
-    entry_23 = DEVICE_TYPES["23"]
-    entry_3d = DEVICE_TYPES["3D"]
-    assert entry_23["Model"] == entry_3d["Model"] == "05-312"
-    assert entry_23["Channels"] == 4
-    assert entry_3d["Channels"] == 52
+    entry = DEVICE_TYPES["23"]
+    assert entry["Model"] == "Unknown"
+    assert entry["Channels"] == 4
+    assert entry["Category"] == "Button"
+
+
+def test_device_type_0x3d_remains_05_312_easywave_hand_held():
+    """0x3D maps to 05-312 — Niko's 13-button Easywave hand-held
+    that controls up to 52 circuits. This entry pins the 52-circuit
+    firmware-reported population. (Earlier the entry was paired with
+    0x23 as "two modes of one product"; that pairing was dropped
+    when 0x23 was identified as a wall switch.)"""
+
+    entry = DEVICE_TYPES["3D"]
+    assert entry["Model"] == "05-312"
+    assert entry["Channels"] == 52
+    assert entry["Category"] == "Button"
 
 
 def test_device_type_0x43_and_0x44_share_05_058_sku():

@@ -4,6 +4,24 @@
 
 ### Fixed
 
+- **``DEVICE_TYPES["23"]`` no longer mis-claims to be Niko 05-312.**
+  Niko's official 05-312 product page
+  (https://www.niko.eu/en/article/05-312) describes it as a 13-button
+  hand-held Easywave remote. fdebrus confirmed from physical hardware
+  that the 0x23 devices on his install (addresses ``201250`` and
+  ``204915``) are **wall switches**, not hand-held remotes — so they
+  can't be 05-312. The actual SKU isn't in Niko's current web
+  catalogue; Model changes from ``"05-312"`` to ``"Unknown"`` and
+  Name changes from ``"Easywave hand-held RF transmitter, 4 channels"``
+  to ``"Wireless RF transmitter, 4 channels"`` to drop the misleading
+  hand-held implication.
+
+  This also retracts the earlier pairing of ``0x23`` and ``0x3D`` as
+  "two firmware-reported modes of a single 05-312". They're now
+  believed to be different products: ``0x23`` is the wall switch
+  (Model unknown), ``0x3D`` remains the 05-312 hand-held in its
+  52-circuit population view.
+
 - **``DEVICE_TYPES["1F"]`` no longer mis-claims to be Niko 05-311.**
   Niko's official 05-311 product page
   (https://products.niko.eu/en/article/05-311) describes the
@@ -28,26 +46,24 @@
 
 ### Changed
 
-- **Documented three other duplicate-Model entries that are
-  intentionally correct.** Niko firmware uses different
-  device-type bytes for the same physical SKU in three known
-  cases — caught during the catalogue audit and now pinned with
-  inline comments + invariants tests so a future "deduplicate"
-  cleanup can't silently break real installs:
+- **Documented two duplicate-Model entries that are intentionally
+  correct.** Niko firmware uses different device-type bytes for the
+  same physical SKU in two known cases — caught during the catalogue
+  audit and now pinned with inline comments + invariants tests so a
+  future "deduplicate" cleanup can't silently break real installs:
 
   - ``0x09`` and ``0x31`` both → ``05-002-02`` Compact switch
     module. Single 4-output product per Niko; firmware-revision
     artefact dictates which byte is reported.
-  - ``0x23`` and ``0x3D`` both → ``05-312`` Easywave hand-held
-    transmitter. Niko's product page describes a single device
-    with 13 push buttons + 4 channel selectors controlling up to
-    52 circuits. ``0x23`` reports the channel-selector view
-    (4 channels), ``0x3D`` reports the full-population view
-    (52 operation points).
   - ``0x43`` and ``0x44`` both → ``05-058`` Universal interface.
     Niko 05-058 is a single 4-input product configurable as push
     buttons (4 telegrams = ``0x43``) OR switches (4 inputs × 2
     state-change telegrams = 8 channels = ``0x44``).
+
+  (An earlier draft of this audit also paired ``0x23`` and ``0x3D``
+  as "two modes of 05-312"; that pairing was retracted when
+  ``0x23`` was identified as a wall switch — see the Fixed section
+  above.)
 
 ### Tests
 
@@ -55,9 +71,10 @@
   invariants:
 
   - ``test_device_type_0x09_and_0x31_share_05_002_02_sku``
-  - ``test_device_type_0x23_and_0x3d_share_05_312_sku``
   - ``test_device_type_0x43_and_0x44_share_05_058_sku``
   - ``test_device_type_0x1f_model_is_unknown_not_05_311``
+  - ``test_device_type_0x23_model_is_unknown_not_05_312``
+  - ``test_device_type_0x3d_remains_05_312_easywave_hand_held``
   - ``test_device_type_0x25_remains_correct_05_311_1ch``
 
   248/248 pass.
