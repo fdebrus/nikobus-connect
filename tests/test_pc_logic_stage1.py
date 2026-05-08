@@ -128,6 +128,89 @@ def test_audio_and_interface_buckets_are_excluded_from_scan_queue():
 
 
 # ---------------------------------------------------------------------------
+# 0.5.15: catalogue audit — duplicate-Model invariants
+#
+# Several DEVICE_TYPES entries legitimately share a Model number because
+# the same physical Niko product reports different device-type bytes in
+# different firmware revisions or operational modes. These tests pin the
+# expected invariants so a future "deduplicate" cleanup doesn't silently
+# break real installs.
+#
+# Also pins the 0x1F → Unknown change (Niko 05-311 is 1-channel only;
+# 0x1F's previous mapping to 05-311 was incorrect).
+# ---------------------------------------------------------------------------
+
+
+def test_device_type_0x09_and_0x31_share_05_002_02_sku():
+    """Two firmware-revision device-type bytes for the same physical
+    Niko 05-002-02 compact switch module. Niko's product page describes
+    a single 4-output configuration; some installs report 0x09, others
+    report 0x31. Both entries must stay, not deduplicate."""
+
+    entry_09 = DEVICE_TYPES["09"]
+    entry_31 = DEVICE_TYPES["31"]
+    assert entry_09["Model"] == entry_31["Model"] == "05-002-02"
+    assert entry_09["Channels"] == entry_31["Channels"] == 4
+    assert entry_09["Category"] == entry_31["Category"] == "Module"
+
+
+def test_device_type_0x23_and_0x3d_share_05_312_sku():
+    """Niko 05-312 is a single physical Easywave hand-held that the
+    firmware reports two ways: 0x23 = channel-selector view (4
+    channels), 0x3D = full-population view (52 circuits). Both
+    entries reflect the same product in different operational
+    modes."""
+
+    entry_23 = DEVICE_TYPES["23"]
+    entry_3d = DEVICE_TYPES["3D"]
+    assert entry_23["Model"] == entry_3d["Model"] == "05-312"
+    assert entry_23["Channels"] == 4
+    assert entry_3d["Channels"] == 52
+
+
+def test_device_type_0x43_and_0x44_share_05_058_sku():
+    """Niko 05-058 universal interface: 4 inputs, configurable as
+    push buttons (0x43, 4 telegrams) OR switches (0x44, 4 inputs ×
+    2 state-change telegrams = 8 channels). Same physical product,
+    two firmware-reported modes."""
+
+    entry_43 = DEVICE_TYPES["43"]
+    entry_44 = DEVICE_TYPES["44"]
+    assert entry_43["Model"] == entry_44["Model"] == "05-058"
+    assert entry_43["Channels"] == 4
+    assert entry_44["Channels"] == 8
+
+
+def test_device_type_0x1f_model_is_unknown_not_05_311():
+    """0x1F was previously mapped to Niko 05-311 with 2 channels.
+    That's wrong: Niko's official 05-311 page
+    (https://products.niko.eu/en/article/05-311) describes the
+    product as 1-channel only with 1 control button. Whatever
+    physical device emits type 0x1F on 2 channels (observed e.g.
+    at address 2E58F6 on fdebrus's install) is NOT a 05-311 —
+    likely an older / discontinued / unlisted variant. Until
+    someone reads the printed model number off the hardware, the
+    SKU stays Unknown. The channel count (2) reflects actual bus
+    emission and is correct."""
+
+    entry = DEVICE_TYPES["1F"]
+    assert entry["Model"] == "Unknown"
+    assert entry["Channels"] == 2
+    assert entry["Category"] == "Button"
+
+
+def test_device_type_0x25_remains_correct_05_311_1ch():
+    """Sanity check: 0x25 is the genuine 1-channel mini hand-held
+    05-311 per Niko's product page. The audit didn't touch this
+    entry; pin it so it can't drift."""
+
+    entry = DEVICE_TYPES["25"]
+    assert entry["Model"] == "05-311"
+    assert entry["Channels"] == 1
+    assert entry["Category"] == "Button"
+
+
+# ---------------------------------------------------------------------------
 # PC-Logic register scan inclusion
 # ---------------------------------------------------------------------------
 

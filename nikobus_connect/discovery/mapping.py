@@ -39,12 +39,17 @@ DEVICE_TYPES = {
         "Name": "Dimmer module",
     },
     "09": {
+        # Same physical product as 0x31 — two device-type bytes for one
+        # SKU. Niko 05-002-02 has a single 4-output configuration; the
+        # firmware on different revisions reports as 0x09 on some installs
+        # and 0x31 on others. Both entries are correct, do not deduplicate.
         "Category": "Module",
         "Model": "05-002-02",
         "Channels": 4,
         "Name": "Compact switch module",
     },
     "31": {
+        # Same physical product as 0x09 — see comment there.
         "Category": "Module",
         "Model": "05-002-02",
         "Channels": 4,
@@ -150,12 +155,21 @@ DEVICE_TYPES = {
         "Name": "Interface for switches",
     },
     "43": {
+        # 05-058 push-button mode: 4 inputs → 4 telegrams (one per
+        # press). See 0x44 below for the switch-mode variant.
         "Category": "Button",
         "Model": "05-058",
         "Channels": 4,
         "Name": "Universal interface, 4 channels",
     },
     "44": {
+        # Same physical product as 0x43 in switch mode: 4 inputs ×
+        # 2 state-change telegrams (close + open) = 8 bus channels.
+        # Niko 05-058 supports both push-button and switch contacts;
+        # the firmware reports 0x43 in push-button mode and 0x44 in
+        # switch mode. Niko's 05-057 documentation (the 2-input
+        # sibling) confirms each switch contact emits 2 telegrams,
+        # which scales to 4×2=8 for the 4-input 05-058.
         "Category": "Button",
         "Model": "05-058",
         "Channels": 8,
@@ -165,12 +179,29 @@ DEVICE_TYPES = {
     # RF transmitters.
     # ------------------------------------------------------------------
     "1F": {
+        # Real device emits type 0x1F on 2 channels (e.g. address
+        # ``2E58F6`` on fdebrus's install). Niko 05-311 — the previous
+        # mapping for this entry — is 1-channel only per the official
+        # product page (https://products.niko.eu/en/article/05-311), so
+        # whatever responds with 0x1F is NOT a 05-311. Searches across
+        # Niko's current wireless catalogue didn't surface a 2-channel
+        # mini hand-held SKU; this is most likely an older / discontinued
+        # variant. Channel count stays at 2 (matches actual bus emission);
+        # Model marked Unknown until someone with the physical hardware
+        # reads the printed model number off the device.
         "Category": "Button",
-        "Model": "05-311",
+        "Model": "Unknown",
         "Channels": 2,
-        "Name": "Mini hand-held RF transmitter, 2 channels",
+        "Name": "Wireless RF transmitter, 2 channels",
     },
     "23": {
+        # 05-312 has two firmware-reported modes — see also 0x3D below
+        # which reports the same physical product as 52 operation
+        # points. Niko's product page describes 05-312 as "13 push
+        # buttons + 4 channel-selection buttons … controls a maximum
+        # of 52 circuits". 0x23 reflects the channel-selector view
+        # (4 channels visible to the user), 0x3D reflects the full
+        # 52-circuit population view.
         "Category": "Button",
         "Model": "05-312",
         "Channels": 4,
@@ -189,6 +220,8 @@ DEVICE_TYPES = {
         "Name": "RF868 mini transmitter, 4 channels",
     },
     "3D": {
+        # Same physical product as 0x23 — see comment there. 0x3D is
+        # the 52-circuit firmware-reported view of 05-312.
         "Category": "Button",
         "Model": "05-312",
         "Channels": 52,

@@ -1,5 +1,77 @@
 # Changelog
 
+## 0.5.15
+
+### Fixed
+
+- **``DEVICE_TYPES["1F"]`` no longer mis-claims to be Niko 05-311.**
+  Niko's official 05-311 product page
+  (https://products.niko.eu/en/article/05-311) describes the
+  Mini hand-held RF transmitter as **1 channel, 1 control button**
+  — definitively a 1-channel product. Pre-0.5.15 we mapped both
+  ``0x1F`` (2-channel emission) AND ``0x25`` (1-channel emission)
+  to model ``05-311``; ``0x25`` is correct, ``0x1F`` was wrong.
+
+  A search across Niko's wireless catalogue didn't surface a
+  2-channel mini hand-held SKU, so the actual model behind
+  ``0x1F`` is unknown — likely an older / discontinued / unlisted
+  variant. Real hardware exists (observed at address ``2E58F6``
+  on fdebrus's install, emitting cleanly on 2 channels), so the
+  channel count stays at ``2`` to match bus emission. Model
+  changes from ``"05-311"`` to ``"Unknown"`` until someone reads
+  the printed model number off a physical device with
+  device-type byte ``0x1F``.
+
+  ``Name`` updates from ``"Mini hand-held RF transmitter, 2
+  channels"`` to ``"Wireless RF transmitter, 2 channels"`` to
+  drop the family-name implication.
+
+### Changed
+
+- **Documented three other duplicate-Model entries that are
+  intentionally correct.** Niko firmware uses different
+  device-type bytes for the same physical SKU in three known
+  cases — caught during the catalogue audit and now pinned with
+  inline comments + invariants tests so a future "deduplicate"
+  cleanup can't silently break real installs:
+
+  - ``0x09`` and ``0x31`` both → ``05-002-02`` Compact switch
+    module. Single 4-output product per Niko; firmware-revision
+    artefact dictates which byte is reported.
+  - ``0x23`` and ``0x3D`` both → ``05-312`` Easywave hand-held
+    transmitter. Niko's product page describes a single device
+    with 13 push buttons + 4 channel selectors controlling up to
+    52 circuits. ``0x23`` reports the channel-selector view
+    (4 channels), ``0x3D`` reports the full-population view
+    (52 operation points).
+  - ``0x43`` and ``0x44`` both → ``05-058`` Universal interface.
+    Niko 05-058 is a single 4-input product configurable as push
+    buttons (4 telegrams = ``0x43``) OR switches (4 inputs × 2
+    state-change telegrams = 8 channels = ``0x44``).
+
+### Tests
+
+- ``tests/test_pc_logic_stage1.py`` — five new tests pin the audit
+  invariants:
+
+  - ``test_device_type_0x09_and_0x31_share_05_002_02_sku``
+  - ``test_device_type_0x23_and_0x3d_share_05_312_sku``
+  - ``test_device_type_0x43_and_0x44_share_05_058_sku``
+  - ``test_device_type_0x1f_model_is_unknown_not_05_311``
+  - ``test_device_type_0x25_remains_correct_05_311_1ch``
+
+  248/248 pass.
+
+### Notes
+
+- **No behaviour change for existing installs** — the routing
+  layer keys off the device-type byte, not the Model field, so
+  the ``0x1F`` device that was previously called "05-311 / 2
+  channels" still surfaces as "Wireless RF transmitter, 2
+  channels / Unknown" without losing any functionality. Channel
+  count stays at 2; the Model string only changes the displayed
+  identifier.
+
 ## 0.5.14
 
 ### Fixed
