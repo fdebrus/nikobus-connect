@@ -1,5 +1,104 @@
 # Changelog
 
+## 0.5.16
+
+### Added
+
+- **``NikobusDiscovery.detect_stale_inventory()``** — bus-presence
+  cross-check for inventory entries left over from a previous install
+  on the same PC-Link. Reverse-engineering note: Niko's PC software
+  writes new programming on top of old register space but doesn't
+  zero-fill unused slots, so a second-hand PC-Link's flash still
+  carries the previous owner's module / button records. The user
+  reporting this had a clean install with three modules in their
+  inventory dump but only two of them physically present — the third
+  was the previous owner's hardware. Their inventory dump also
+  showed 34 stale buttons across the 0x3Bxx-0x3Exx and 100xxx-102xxx
+  address bands.
+
+  The new method:
+
+  1. Iterates output-bearing module addresses
+     (``switch_module`` / ``dimmer_module`` / ``roller_module``) in
+     ``coordinator.dict_module_data``.
+  2. Sends ``$1012<addr>`` (output-state group 1) to each. Modules
+     replying within ``timeout`` (default 0.6 s) classify as
+     ``present_modules``; modules timing out classify as
+     ``absent_modules``.
+  3. Iterates ``button_data["nikobus_button"]`` and flags any button
+     whose ``linked_modules`` set is a non-empty subset of
+     ``absent_modules`` as ``orphaned_buttons``. Buttons with mixed
+     present + absent links stay (they still drive something real);
+     buttons with no links at all stay (they may just be undecoded
+     so far).
+
+  Returns a manifest the caller decides what to do with — surface in
+  HA UI, auto-purge ``nikobus_module.json`` /
+  ``nikobus_button.json``, etc. The library deliberately doesn't
+  mutate the persisted stores; the integration's HA-side service
+  handler does.
+
+  Non-output module types (``pc_link``, ``pc_logic``, ``feedback_module``,
+  ``audio_module``, ``interface_module``) are excluded from the
+  probe pass — they either ARE the bridge or don't respond uniformly
+  to ``$1012`` queries, so a probe failure there can't be safely
+  interpreted as "stale".
+
+  Originally drafted as PR #47 against a 0.5.13 base, then closed
+  in favour of the all-FF terminator approach (PR #48 → 0.5.13,
+  PR #49 → 0.5.14). Revived after the 2026-05-08 vendor trace
+  (see below) confirmed Niko's PC software has no bus-protocol
+  filter for residual records — it sidesteps the residue problem
+  by reading from the saved project file rather than bus-scanning.
+  Our library has no project file, so a presence cross-check is
+  the only reliable way to surface stale entries.
+
+- **``_VENDOR_REGISTER_MAP_BY_SUB``** — vendor's per-(sub-byte,
+  register) read sequence captured from a Niko PC software COM3
+  trace on 2026-05-08 against module ``0x3D82`` executing "load
+  current installation". Reference data only; NOT wired into the
+  scan loop.
+
+  Captured per sub-byte:
+
+  - ``sub=00`` → 6 specific regs (header / identity):
+    ``0x05, 0x06, 0x07, 0x08, 0x09, 0x3E`` (reg ``0x3E`` read TWICE
+    back-to-back as a sanity probe).
+  - ``sub=01`` → 37 regs in ``0x70..0x96`` (link table + checksum):
+    ``0x70..0x93`` contiguous (36 regs) plus ``0x96`` (vendor
+    deliberately skips ``0x94`` and ``0x95``). Reg ``0x96`` read
+    at both start and end of the readout — likely a
+    concurrent-modification detector.
+  - ``sub=04`` → 5 regs in ``0x65..0x69`` (status / state).
+
+  Total: 48 register reads per module vs. our current ~167 (~3.5x
+  faster). The most striking divergence is sub=04: the vendor
+  reads ``0x65..0x69`` while our scan covers ``0x00..0x3F``. Our
+  existing comments note "sub=00 returns byte-identical data to
+  sub=04" — this is consistent with us reading the same memory
+  region under two different sub-byte aliases, while the vendor
+  uses sub=04 for a separate state region entirely.
+
+  Captured but NOT activated: switching the default scan strategy
+  without staged validation against multiple installs risks silent
+  data loss (the vendor may rely on project-file context our scan
+  doesn't have, e.g., known module identity). Future PRs can opt
+  in once validated against more captures.
+
+- ``tests/test_stale_inventory_detection.py`` — nine tests covering:
+  empty-coordinator defensive default, present/absent classification,
+  non-output-module exclusion, orphaned-button cascade (mixed-link
+  case stays, no-link case stays, only-absent-link case orphans),
+  case-insensitive address comparison, empty ``dict_module_data``,
+  ``CancelledError`` propagation, per-probe timeout boundary, and a
+  pin against the real-world second-hand-PC-Link install.
+
+- ``tests/test_vendor_register_map.py`` — eight tests pinning the
+  vendor map exactly as decoded from the trace: per-sub register
+  lists, the deliberate ``0x94`` / ``0x95`` skip, the 48-read
+  total, the three-sub-bytes-only invariant, byte-range bounds,
+  and the trace-source attribution string.
+
 ## 0.5.15
 
 ### Fixed
