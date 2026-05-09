@@ -1,5 +1,71 @@
 # Changelog
 
+## 0.5.17
+
+### Removed
+
+- **PC-Link inventory all-FF terminator (0.5.13 / 0.5.14)** — the
+  early-stop heuristic that drained the queue on the first all-FF
+  response after at least one real record. Issue #319 (Nikobus-HA)
+  reported a user with 9 known modules where discovery surfaced
+  only 6: their PC-Link's project memory has a legitimate all-FF
+  gap mid-project (deleted module, slot zero-erased), and the
+  terminator dropped every record past the gap. The trace evidence
+  that motivated the original 0.5.13 terminator (fdebrus's 2024-05-24
+  Niko PC software capture stopping at register C3) was a contiguous
+  install where the terminator happened to coincide with the project
+  end — never validated against gapped projects.
+
+### Changed
+
+- **All-FF inventory responses are now skipped, not terminated.** The
+  PC-Link sub=04 sweep over ``range(0xA0, 0x100)`` always runs the
+  full 96 registers. ``parse_inventory_response`` treats an all-FF
+  payload as "no record at this slot, continue" — the pre-0.5.13
+  behaviour. Removed the ``_pc_link_inventory_terminator_seen`` /
+  ``_pc_link_inventory_data_seen`` state flags, the
+  ``_is_pc_link_inventory_terminator`` predicate, and the
+  ``drain_queue`` call in the inventory path.
+
+- Residue filtering moved entirely to the post-discovery layer:
+
+  1. ``detect_stale_inventory()`` (added in 0.5.16) probes each
+     output-bearing module via ``$1012<addr>`` and returns the
+     ``absent_modules`` / ``orphaned_buttons`` manifest.
+  2. The HA-side discovery flow (``Nikobus-HA`` 2.0.x) consumes the
+     manifest to drop absent modules from the persisted store and
+     classify orphan buttons.
+
+  Bus-presence is a strictly stronger signal than register-content
+  patterns — actual hardware response, not a heuristic. The read-layer
+  terminator was a pre-0.5.16 workaround; with the probe wired in,
+  it's redundant and (per #319) actively harmful on gapped projects.
+
+### Cost / behaviour notes
+
+- Wall-clock cost: ~5-9 s extra per discovery on a contiguous install
+  (96 reads × ~150 ms = ~14 s; old early-stop saved between 5-9 s
+  depending on project size). Discovery is a manual user action, not
+  a hot path — acceptable trade for never silently dropping records.
+- Second-hand PC-Link installs (residue from previous owner): the
+  store will now receive residue records at scan time; the HA-side
+  must call ``detect_stale_inventory()`` post-scan and prune. Without
+  that wire-up, residue persists in the JSON stores. Pre-0.5.17 the
+  terminator filtered residue at read time as a defence-in-depth;
+  that defence is removed because it can't distinguish residue from
+  legitimate gaps.
+
+### Tests
+
+- ``tests/test_pc_link_inventory_terminator.py`` rewritten (7 tests)
+  to pin the new contract: leading FF doesn't drain, FF-after-data
+  doesn't drain, multiple consecutive FF blocks don't drain, full
+  ``range(0xA0, 0x100)`` is always queued, ``drain_queue`` is never
+  called from the inventory path, and — the bug-fix pin for #319 —
+  ``test_record_after_ff_gap_is_decoded`` proves that a record
+  arriving after an all-FF block is still decoded into
+  ``discovered_devices``.
+
 ## 0.5.16
 
 ### Added
