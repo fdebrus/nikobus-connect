@@ -344,3 +344,28 @@ async def test_detect_stale_inventory_real_world_secondhand_install(tmp_path):
     assert manifest["checked"] == ["1CEC", "3D28", "8110"]
     assert manifest["present_modules"] == ["1CEC", "8110"]
     assert manifest["absent_modules"] == ["3D28"]
+
+
+def test_detect_stale_inventory_default_timeout_is_two_seconds():
+    """Pin the default ``timeout`` keyword at 2.0 s.
+
+    0.5.16 shipped with 0.6 s — too tight for real installs because
+    ``get_output_state`` has its own 15 s inner ACK timeout × 3
+    retries; on a busy bus a present module can take 1-2 s to ACK
+    and the 0.6 s outer cap raced the queue, falsely classifying
+    present modules as absent. fdebrus's 0.5.17 install
+    (https://github.com/fdebrus/Nikobus-HA/issues/319) misclassified
+    3 of 6 output modules. 0.5.18 raised the default to 2.0 s to
+    absorb queue-drain latency and module busy-states.
+
+    Pinning the default here so a future regression that drops it
+    back to 0.6 fails fast instead of silently re-introducing the
+    false-negative bug.
+    """
+
+    import inspect
+
+    from nikobus_connect.discovery.discovery import NikobusDiscovery
+
+    sig = inspect.signature(NikobusDiscovery.detect_stale_inventory)
+    assert sig.parameters["timeout"].default == 2.0

@@ -1204,7 +1204,7 @@ class NikobusDiscovery:
     async def detect_stale_inventory(
         self,
         *,
-        timeout: float = 0.6,
+        timeout: float = 2.0,
     ) -> dict[str, list[str]]:
         """Cross-check Module-category entries against bus presence.
 
@@ -1234,10 +1234,19 @@ class NikobusDiscovery:
         library doesn't mutate the persisted stores; the caller does.
 
         Args:
-            timeout: Per-probe deadline in seconds. Defaults to 0.6 —
-                generous enough that a module taking 500 ms to ACK
-                still classifies as present, tight enough that a
-                full 8-module probe completes in ~5 s worst-case.
+            timeout: Per-probe deadline in seconds. Defaults to 2.0
+                — bumped from 0.6 in 0.5.18 after fdebrus's install
+                reported false negatives (3 of 6 output modules
+                misclassified as absent on a fresh post-discovery
+                probe). Root cause: ``get_output_state`` itself has
+                a 15 s inner ACK timeout × 3 retries; on a busy bus
+                (queue not drained, modules momentarily serving
+                button presses) a present module can take 1-2 s to
+                ACK. 0.6 s raced the queue and falsely classified
+                present modules as absent. 2.0 s absorbs queue-drain
+                latency and module busy-states; an 8-module probe
+                completes in ~16 s worst-case, acceptable for a
+                manual discovery action.
 
         Returns:
             Dict with four lists, all sorted, addresses upper-case:
