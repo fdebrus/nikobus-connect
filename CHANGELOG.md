@@ -1,5 +1,40 @@
 # Changelog
 
+## 0.5.18
+
+### Changed
+
+- **``NikobusDiscovery.detect_stale_inventory()`` default ``timeout``
+  raised from 0.6 s to 2.0 s.** Real-install report from fdebrus on
+  0.5.17 (https://github.com/fdebrus/Nikobus-HA/issues/319): on a
+  9-module install where discovery correctly surfaced all 9, the
+  bus-presence probe (default 0.6 s) misclassified 3 of 6
+  output-bearing modules as absent. The HA-side then dropped them
+  from ``nikobus.modules`` even though they exist on the bus.
+
+  Root cause: ``get_output_state`` (the underlying ``$1012<addr>``
+  helper) has a 15 s inner ACK timeout × 3 retries. On a busy bus
+  — queue not yet drained after a fresh discovery, modules
+  momentarily serving button presses — a present module can take
+  1-2 s to ACK. The original 0.6 s outer cap raced the queue and
+  fired before the present module's ACK arrived, classifying it as
+  absent.
+
+  2.0 s absorbs queue-drain latency and momentary busy-states
+  without changing the manifest's contract. An 8-module probe
+  now completes in ~16 s worst-case (all timing out) instead of
+  ~5 s — acceptable for a manual discovery action.
+
+  Callers passing an explicit ``timeout=`` kwarg are unaffected.
+
+### Tests
+
+- ``tests/test_stale_inventory_detection.py`` adds
+  ``test_detect_stale_inventory_default_timeout_is_two_seconds`` —
+  pins the new default via ``inspect.signature``. Future regressions
+  back toward 0.6 s fail fast instead of silently re-introducing
+  the false-negative bug.
+
 ## 0.5.17
 
 ### Removed
