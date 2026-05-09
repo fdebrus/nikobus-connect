@@ -1,22 +1,31 @@
-"""All-FF terminator stops the PC-Link sub=04 inventory sweep.
+"""All-FF responses skip-and-continue; PC-Link sweep is full-range.
 
-Niko's PC software reads PC-Link memory sequentially and stops at the
-first 16-byte all-FF response — that's the end-of-active-project
-marker. Records past the terminator are either untouched flash (FF)
-or residue from a previous install (visible to a brute-force sweep
-but invisible to the Niko software's read sequence).
+0.5.13 / 0.5.14 introduced an early-stop "all-FF terminator" that
+mirrored Niko's PC software stopping at the first FF response after
+real records. Trace evidence at the time was a single contiguous
+install (fdebrus, 2024-05-24) where the FF terminator and the
+end-of-project happened to coincide.
 
-Pre-0.5.13 the library swept the full ``A0..FF`` range and picked up
-shadow records from second-hand PC-Links. The fix mirrors Niko's
-behaviour: drain the remaining queued inventory reads on the first
-all-FF response.
+A different user (issue #319 / 2026-05-09) reported discovery missing
+3 of 9 known modules. Their PC-Link's project memory has a legitimate
+all-FF gap mid-project — the sub=04 sweep terminates at the gap and
+every record past it is dropped. Re-decoding traces and reviewing
+fdebrus's intended discovery flow (probe → drop absent modules →
+keep buttons with status flags) makes the read-layer terminator
+redundant: ``detect_stale_inventory`` (0.5.16) handles residue at the
+bus-presence layer, where actual presence — not a register-value
+heuristic — distinguishes real modules from previous-install ghosts.
 
-Trace evidence: a real-hardware capture of Niko's PC software's
-``Read preview`` operation against fdebrus's install (logged
-2024-05-24) shows the sub=04 sweep going A3 → A4 → ... → C2 → C3
-and stopping. C3's response is a 22-byte frame whose 16-byte payload
-is pure FF: ``2EF586`` ``FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF`` ``CC98D0``.
-The software never reads C4..FF.
+0.5.17 removes the terminator entirely:
+
+- ``parse_inventory_response`` treats all-FF as "no record at this
+  slot, skip and continue" (the pre-0.5.13 behaviour).
+- The full ``range(0xA0, 0x100)`` sweep always runs.
+- ``drain_queue`` is no longer called from the inventory path.
+
+Tests below pin the new contract: any number of all-FF responses,
+in any position, never drain the queue and never short-circuit the
+sweep.
 """
 
 from __future__ import annotations
@@ -64,141 +73,102 @@ def _make_discovery(coord, tmp_path) -> NikobusDiscovery:
 # 22-byte payload for an all-FF inventory frame (after the $0510$ ACK
 # the listener strips). The library's parse_inventory_response drops
 # the first 3 bytes (``2E`` + 2-byte responder) and treats bytes 3..18
-# as the 16-byte record. All-FF in those 16 bytes triggers the
-# terminator path.
+# as the 16-byte record. All-FF in those 16 bytes → skip-and-continue.
 ALL_FF_INVENTORY_FRAME = "2EF586" + "FF" * 16 + "CC98D0"
 
-# A real registry record from fdebrus's install — 0E6C dimmer (type
-# 03). Used as a "non-terminator" frame to confirm we don't drain
-# while real records are still arriving.
+# Real registry record from fdebrus's install — 0E6C dimmer (type 03).
 REAL_REGISTRY_FRAME = "2EF586" + "03000000030000006C0E000001000000" + "F938E8"
 
+# Second real registry record — different module address so the
+# discovered_devices map can pin both decodes independently. C9A5
+# switch (type 01) — one of the modules issue #319 reported missing.
+REAL_REGISTRY_FRAME_C9A5 = (
+    "2EF586" + "0300000001000000A5C9000002000000" + "1234AB"
+)
+
 
 @pytest.mark.asyncio
-async def test_leading_all_ff_does_not_drain_before_data(tmp_path):
-    """Pure all-FF responses BEFORE any real data are leading
-    untouched flash, not the terminator. PC-Link memory often has
-    A0..A2 (or similar) untouched before the project's actual start
-    register; the user-2026-05-07 install is one such case. We must
-    NOT treat the first all-FF as the terminator — that's the bug
-    fix for 0.5.13 after the initial ship."""
+async def test_leading_all_ff_does_not_drain(tmp_path):
+    """Pure all-FF responses BEFORE any real data are skipped, not
+    treated as a terminator. PC-Link memory often has untouched flash
+    at A0..A2 before the project's actual start register."""
 
     coord = _make_coordinator()
-    coord.nikobus_command.drain_queue = MagicMock(return_value=95)
-
     discovery = _make_discovery(coord, tmp_path)
     discovery.discovery_stage = "inventory_addresses"
 
-    # Three leading all-FF responses (A0..A2 untouched flash).
     for _ in range(3):
         await discovery.parse_inventory_response(ALL_FF_INVENTORY_FRAME)
 
-    # No drain, no terminator flag.
     assert coord.nikobus_command.drain_queue.call_count == 0
-    assert discovery._pc_link_inventory_terminator_seen is False
-    # Data not seen yet either.
-    assert discovery._pc_link_inventory_data_seen is False
 
 
 @pytest.mark.asyncio
-async def test_all_ff_after_data_drains_queue(tmp_path):
-    """The first all-FF response AFTER at least one non-all-FF
-    response is the terminator. Drains the queue and sets the flag."""
+async def test_all_ff_after_data_does_not_drain(tmp_path):
+    """An all-FF response after real records is no longer treated as
+    end-of-project. It's just an empty slot — sweep continues."""
 
     coord = _make_coordinator()
-    coord.nikobus_command.drain_queue = MagicMock(return_value=42)
-
     discovery = _make_discovery(coord, tmp_path)
     discovery.discovery_stage = "inventory_addresses"
 
-    # Real record arrives → ``data_seen`` flips True.
     await discovery.parse_inventory_response(REAL_REGISTRY_FRAME)
-    assert discovery._pc_link_inventory_data_seen is True
-    assert discovery._pc_link_inventory_terminator_seen is False
-    assert coord.nikobus_command.drain_queue.call_count == 0
-
-    # All-FF after data → terminator fires.
     await discovery.parse_inventory_response(ALL_FF_INVENTORY_FRAME)
-    assert discovery._pc_link_inventory_terminator_seen is True
-    coord.nikobus_command.drain_queue.assert_called_once()
+
+    assert coord.nikobus_command.drain_queue.call_count == 0
 
 
 @pytest.mark.asyncio
-async def test_leading_all_ff_then_data_then_terminator(tmp_path):
-    """Realistic install pattern: A0..A2 untouched flash, A3+ real
-    records, eventual all-FF terminator. The terminator should fire
-    only on the all-FF that appears after records, not on the
-    leading flash."""
+async def test_record_after_ff_gap_is_decoded(tmp_path):
+    """Bug-fix pin for issue #319: a record that arrives AFTER an
+    all-FF block is still decoded into ``discovered_devices``.
+
+    Prior to 0.5.17 the all-FF block fired the terminator, drained
+    the queue, and the second record was lost. With the terminator
+    removed, both records land."""
 
     coord = _make_coordinator()
-    coord.nikobus_command.drain_queue = MagicMock(return_value=10)
-
     discovery = _make_discovery(coord, tmp_path)
     discovery.discovery_stage = "inventory_addresses"
 
-    # Leading untouched flash.
-    for _ in range(3):
-        await discovery.parse_inventory_response(ALL_FF_INVENTORY_FRAME)
+    await discovery.parse_inventory_response(REAL_REGISTRY_FRAME)
+    await discovery.parse_inventory_response(ALL_FF_INVENTORY_FRAME)
+    await discovery.parse_inventory_response(REAL_REGISTRY_FRAME_C9A5)
+
+    # The second valid record (C9A5) MUST be in the device map.
+    addrs = set(discovery.discovered_devices.keys())
+    assert "C9A5" in addrs, (
+        f"C9A5 should decode after FF gap; got addrs={addrs}"
+    )
+    # And the queue must not have been drained.
     assert coord.nikobus_command.drain_queue.call_count == 0
 
-    # Real records.
+
+@pytest.mark.asyncio
+async def test_multiple_consecutive_ff_blocks_do_not_drain(tmp_path):
+    """A run of multiple all-FF blocks (e.g. user deleted a contiguous
+    range of modules and the slots zero-erased) does not terminate
+    the sweep."""
+
+    coord = _make_coordinator()
+    discovery = _make_discovery(coord, tmp_path)
+    discovery.discovery_stage = "inventory_addresses"
+
+    await discovery.parse_inventory_response(REAL_REGISTRY_FRAME)
     for _ in range(5):
-        await discovery.parse_inventory_response(REAL_REGISTRY_FRAME)
+        await discovery.parse_inventory_response(ALL_FF_INVENTORY_FRAME)
+    await discovery.parse_inventory_response(REAL_REGISTRY_FRAME_C9A5)
 
-    # Trailing all-FF → terminator fires.
-    await discovery.parse_inventory_response(ALL_FF_INVENTORY_FRAME)
-    coord.nikobus_command.drain_queue.assert_called_once()
-
-
-@pytest.mark.asyncio
-async def test_subsequent_all_ff_responses_do_not_drain_again(tmp_path):
-    """Once the terminator flag is set, additional all-FF responses
-    take the legacy "skip and continue" path instead of re-draining
-    (drain_queue is already empty; the second call would be a no-op
-    but logging-wise we don't want to spam INFO each time)."""
-
-    coord = _make_coordinator()
-    discovery = _make_discovery(coord, tmp_path)
-    discovery.discovery_stage = "inventory_addresses"
-
-    # Establish the data-seen state and fire the terminator.
-    await discovery.parse_inventory_response(REAL_REGISTRY_FRAME)
-    await discovery.parse_inventory_response(ALL_FF_INVENTORY_FRAME)
-    # Repeat all-FFs.
-    await discovery.parse_inventory_response(ALL_FF_INVENTORY_FRAME)
-    await discovery.parse_inventory_response(ALL_FF_INVENTORY_FRAME)
-
-    assert coord.nikobus_command.drain_queue.call_count == 1
-
-
-@pytest.mark.asyncio
-async def test_real_records_before_terminator_do_not_drain(tmp_path):
-    """A registry record (well-formed, non-FF) does NOT trigger the
-    drain. Only the terminator does. Real records flip the
-    ``data_seen`` gate so the next all-FF qualifies as terminator."""
-
-    coord = _make_coordinator()
-    discovery = _make_discovery(coord, tmp_path)
-    discovery.discovery_stage = "inventory_addresses"
-
-    # Three real records arrive, then the terminator.
-    for _ in range(3):
-        await discovery.parse_inventory_response(REAL_REGISTRY_FRAME)
     assert coord.nikobus_command.drain_queue.call_count == 0
-    assert discovery._pc_link_inventory_terminator_seen is False
-    assert discovery._pc_link_inventory_data_seen is True
-
-    await discovery.parse_inventory_response(ALL_FF_INVENTORY_FRAME)
-    assert coord.nikobus_command.drain_queue.call_count == 1
-    assert discovery._pc_link_inventory_terminator_seen is True
+    assert "C9A5" in discovery.discovered_devices
 
 
 @pytest.mark.asyncio
-async def test_terminator_outside_inventory_phase_does_not_drain(tmp_path):
+async def test_all_ff_outside_inventory_phase_does_not_drain(tmp_path):
     """All-FF responses outside the inventory phase (e.g. during
     Stage-2 register scans where modules legitimately return FF for
-    unprogrammed registers) must not drain — Stage-2 scans queue
-    their own commands and a stray drain would abort the scan."""
+    unprogrammed registers) must not drain — they never did, and
+    don't now."""
 
     coord = _make_coordinator()
     discovery = _make_discovery(coord, tmp_path)
@@ -206,81 +176,55 @@ async def test_terminator_outside_inventory_phase_does_not_drain(tmp_path):
 
     await discovery.parse_inventory_response(ALL_FF_INVENTORY_FRAME)
 
-    assert discovery._pc_link_inventory_terminator_seen is False
     assert coord.nikobus_command.drain_queue.call_count == 0
 
 
 @pytest.mark.asyncio
-async def test_terminator_flag_resets_between_scans(tmp_path):
-    """A subsequent inventory enumeration must start fresh — both
-    the terminator flag and the ``data_seen`` gate are cleared by
-    ``reset_state``."""
+async def test_drain_queue_never_called_from_inventory_path(tmp_path):
+    """Belt-and-braces: across a realistic 20-frame inventory pattern
+    (leading FF, real records, gap, more records, trailing FF), the
+    drain_queue method is never invoked from the inventory parser."""
 
     coord = _make_coordinator()
     discovery = _make_discovery(coord, tmp_path)
     discovery.discovery_stage = "inventory_addresses"
 
-    # First scan: data + terminator.
-    await discovery.parse_inventory_response(REAL_REGISTRY_FRAME)
-    await discovery.parse_inventory_response(ALL_FF_INVENTORY_FRAME)
-    assert discovery._pc_link_inventory_terminator_seen is True
-    assert discovery._pc_link_inventory_data_seen is True
+    # Leading flash.
+    for _ in range(3):
+        await discovery.parse_inventory_response(ALL_FF_INVENTORY_FRAME)
+    # First batch of records.
+    for _ in range(5):
+        await discovery.parse_inventory_response(REAL_REGISTRY_FRAME)
+    # Mid-project gap.
+    for _ in range(2):
+        await discovery.parse_inventory_response(ALL_FF_INVENTORY_FRAME)
+    # Second batch of records.
+    for _ in range(5):
+        await discovery.parse_inventory_response(REAL_REGISTRY_FRAME_C9A5)
+    # Trailing FF (rest of A0..FF unprogrammed).
+    for _ in range(5):
+        await discovery.parse_inventory_response(ALL_FF_INVENTORY_FRAME)
 
-    discovery.reset_state(update_flags=False)
-    assert discovery._pc_link_inventory_terminator_seen is False
-    assert discovery._pc_link_inventory_data_seen is False
-
-    # Second scan: data + terminator again. Drain count should
-    # increment.
-    discovery.discovery_stage = "inventory_addresses"
-    await discovery.parse_inventory_response(REAL_REGISTRY_FRAME)
-    await discovery.parse_inventory_response(ALL_FF_INVENTORY_FRAME)
-    assert discovery._pc_link_inventory_terminator_seen is True
-    assert coord.nikobus_command.drain_queue.call_count == 2
-
-
-@pytest.mark.asyncio
-async def test_drain_call_is_safe_when_command_lacks_drain_queue(tmp_path):
-    """Defensive: if ``coordinator.nikobus_command`` doesn't expose
-    ``drain_queue`` (older harness, test stub), the terminator path
-    must still set the flag without raising."""
-
-    coord = _make_coordinator()
-    # Simulate a command object without drain_queue.
-    del coord.nikobus_command.drain_queue
-    discovery = _make_discovery(coord, tmp_path)
-    discovery.discovery_stage = "inventory_addresses"
-
-    # Establish data_seen state first.
-    await discovery.parse_inventory_response(REAL_REGISTRY_FRAME)
-    # Should not raise.
-    await discovery.parse_inventory_response(ALL_FF_INVENTORY_FRAME)
-
-    assert discovery._pc_link_inventory_terminator_seen is True
+    assert coord.nikobus_command.drain_queue.call_count == 0
+    # Both records on either side of the gap landed (0E6C from
+    # REAL_REGISTRY_FRAME, C9A5 from REAL_REGISTRY_FRAME_C9A5).
+    assert {"0E6C", "C9A5"}.issubset(set(discovery.discovered_devices.keys()))
 
 
 @pytest.mark.asyncio
-async def test_queue_loop_short_circuits_after_terminator(tmp_path):
-    """The for-loop in ``_run_inventory_identity_queries`` checks the
-    terminator flag between iterations. If a terminator response
-    arrives during queueing (event-loop yield in queue_command), the
-    loop bails out without queueing the remaining registers."""
+async def test_inventory_loop_queues_full_register_range(tmp_path):
+    """``_run_inventory_identity_queries`` queues ALL 96 registers
+    (A0..FF) regardless of any all-FF responses arriving during
+    queueing. The pre-0.5.17 short-circuit is gone."""
 
     queued_regs: list[int] = []
 
     async def fake_queue_command(cmd):
-        # Extract the register byte from the command:
-        # ``$1410 <bus_addr> <reg> 04 <crc>`` — register is at
-        # chars 9..11 of the command string.
         try:
             reg = int(cmd[9:11], 16)
         except ValueError:
             return
         queued_regs.append(reg)
-        # After the third register, simulate a terminator response
-        # that flips the flag.
-        if len(queued_regs) == 3:
-            discovery._pc_link_inventory_terminator_seen = True
 
     coord = _make_coordinator()
     coord.nikobus_command.queue_command = fake_queue_command
@@ -292,6 +236,7 @@ async def test_queue_loop_short_circuits_after_terminator(tmp_path):
 
     await discovery._run_inventory_identity_queries({"86F5"})
 
-    # Loop should have stopped after 3 — not queued all 96.
-    assert len(queued_regs) == 3
-    assert queued_regs == [0xA0, 0xA1, 0xA2]
+    # Full sweep: 96 registers from 0xA0 to 0xFF inclusive.
+    assert len(queued_regs) == 96
+    assert queued_regs[0] == 0xA0
+    assert queued_regs[-1] == 0xFF
