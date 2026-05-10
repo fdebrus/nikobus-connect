@@ -1,5 +1,62 @@
 # Changelog
 
+## 0.5.19
+
+### Added
+
+- **``NikobusDiscovery.detect_stale_inventory()`` retry support.**
+  Two new keyword arguments:
+
+  - ``max_attempts: int = 3`` — number of probe attempts per module
+    before classifying as absent. Default of 3 (up from the implicit
+    1 in 0.5.18) makes the new retry behaviour the default.
+  - ``retry_delay: float = 0.5`` — sleep between attempts for the
+    same module, in seconds. Skipped after the final attempt. Set
+    to ``0`` for back-to-back retries (useful in tests).
+
+  Field report from the Nikobus-HA side (2026-05-10 IKIKN install):
+  with ``max_attempts=1`` and ``timeout=2.0`` (the 0.5.18 contract)
+  a real ``switch_module`` at ``8110`` false-negatived because its
+  ``$1012`` ACK landed at 2.0-3.0 s under post-discovery bus
+  congestion. With three attempts at 2 s each, ``8110`` lands as
+  ``present`` on attempt 2.
+
+  Worst-case wall-clock per probe with the new defaults:
+  ``max_attempts × timeout + (max_attempts - 1) × retry_delay``
+  = ``3 × 2.0 + 2 × 0.5`` = **7 s per module**. An 8-module probe
+  with all attempts timing out completes in ~59 s — acceptable for
+  a manual discovery action.
+
+  Callers wanting the pre-0.5.19 single-attempt contract can pass
+  ``max_attempts=1``.
+
+### Tests
+
+- ``test_detect_stale_inventory_retries_slow_module_to_present`` —
+  IKIKN-fixture pin: a module whose ACK lands on attempt 2 must
+  classify as ``present``. Asserts ``call_counts["8110"] == 2`` so
+  the retry path is exercised exactly as designed.
+- ``test_detect_stale_inventory_max_attempts_one_preserves_pre_0_5_19_behaviour`` —
+  pins the opt-out at ``max_attempts=1``: each address probed
+  exactly once.
+- ``test_detect_stale_inventory_retry_delay_zero_skips_sleep`` —
+  pins that ``retry_delay=0`` skips the inter-attempt sleep.
+  Useful for tests that need fast absent-classification.
+- Renamed ``test_detect_stale_inventory_default_timeout_is_two_seconds``
+  to ``test_detect_stale_inventory_defaults_pinned`` and extended
+  to cover all three keyword defaults via ``inspect.signature``.
+
+### Notes for Nikobus-HA
+
+The IKIKN field report also surfaced the broader pattern that
+post-discovery probing alone is fragile under bus congestion. The
+HA side has already responded with a combined-predicate eviction
+(Nikobus-HA #328): a module is evicted only if it BOTH fails the
+probe AND was not in the current inventory sweep. With this PR's
+retry support, ``detect_stale_inventory`` becomes more reliable as
+a single signal again, but the combined-predicate stays the
+defence-in-depth.
+
 ## 0.5.18
 
 ### Changed
