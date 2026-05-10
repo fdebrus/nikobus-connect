@@ -1205,6 +1205,8 @@ class NikobusDiscovery:
         self,
         *,
         timeout: float = 2.0,
+        max_attempts: int = 3,
+        retry_delay: float = 0.5,
     ) -> dict[str, list[str]]:
         """Cross-check Module-category entries against bus presence.
 
@@ -1219,8 +1221,9 @@ class NikobusDiscovery:
 
         For each output-bearing module address in
         ``coordinator.dict_module_data``, send a ``$1012<addr>``
-        status query. Modules that reply within ``timeout`` are
-        present; modules that don't are stale.
+        status query. A module that ACKs within ``timeout`` on any
+        of ``max_attempts`` tries is classified ``present``; one
+        that fails every attempt is classified ``absent``.
 
         Buttons aren't probed directly (they only emit on press), but
         when a button's ``linked_modules`` block points only at stale
@@ -1234,25 +1237,37 @@ class NikobusDiscovery:
         library doesn't mutate the persisted stores; the caller does.
 
         Args:
-            timeout: Per-probe deadline in seconds. Defaults to 2.0
+            timeout: Per-attempt deadline in seconds. Defaults to 2.0
                 — bumped from 0.6 in 0.5.18 after fdebrus's install
-                reported false negatives (3 of 6 output modules
-                misclassified as absent on a fresh post-discovery
-                probe). Root cause: ``get_output_state`` itself has
-                a 15 s inner ACK timeout × 3 retries; on a busy bus
-                (queue not drained, modules momentarily serving
-                button presses) a present module can take 1-2 s to
-                ACK. 0.6 s raced the queue and falsely classified
-                present modules as absent. 2.0 s absorbs queue-drain
-                latency and module busy-states; an 8-module probe
-                completes in ~16 s worst-case, acceptable for a
-                manual discovery action.
+                reported false negatives. Root cause: ``get_output_state``
+                itself has a 15 s inner ACK timeout × 3 retries; on
+                a busy bus (queue not drained, modules momentarily
+                serving button presses) a present module can take
+                1-3 s to ACK. 2.0 s per attempt absorbs queue-drain
+                latency and module busy-states.
+            max_attempts: Number of probe attempts per module before
+                classifying as absent. Defaults to 3 — added in
+                0.5.19 after the Nikobus-HA field report on the IKIKN
+                install (2026-05-10): with ``max_attempts=1`` and
+                ``timeout=2.0`` a real switch module at ``8110``
+                false-negatived because its ACK landed at 2.0-3.0 s
+                under post-discovery bus congestion. Three attempts
+                give slow modules multiple chances against transient
+                congestion while keeping a bounded budget — an
+                8-module probe with all timing out completes in
+                ~59 s worst-case (8 × (3×2.0 + 2×0.5)), acceptable
+                for a manual discovery action.
+            retry_delay: Sleep between attempts for the same module,
+                in seconds. Defaults to 0.5. Skipped after the final
+                attempt. Set to 0 to retry immediately back-to-back
+                (useful for tests).
 
         Returns:
             Dict with four lists, all sorted, addresses upper-case:
               - ``checked``: every address probed
-              - ``present_modules``: probes that ACK'd
-              - ``absent_modules``: probes that timed out
+              - ``present_modules``: probes that ACK'd within
+                ``max_attempts``
+              - ``absent_modules``: probes that failed every attempt
               - ``orphaned_buttons``: buttons whose entire
                 ``linked_modules`` set sits inside ``absent_modules``
         """
@@ -1294,33 +1309,60 @@ class NikobusDiscovery:
         present: list[str] = []
         absent: list[str] = []
 
+        # Per-attempt budget × ``max_attempts`` retry policy.
+        # Field report from the Nikobus-HA side (2026-05-10 IKIKN
+        # install): with ``max_attempts=1`` and ``timeout=2.0`` a
+        # real switch_module at 8110 false-negatived because its
+        # $1012 ACK landed at 2.0-3.0 s under post-discovery bus
+        # congestion. 3 attempts × 2 s + 2 × 0.5 s inter-attempt
+        # sleep = ~7 s worst-case per module, giving slow modules
+        # multiple chances on a busy bus while still keeping a
+        # bounded total budget on a healthy install.
+        attempts = max(1, int(max_attempts))
+        delay = max(0.0, float(retry_delay))
+
         for addr in addresses:
-            try:
-                await asyncio.wait_for(
-                    nikobus_command.get_output_state(addr, group=1),
-                    timeout=timeout,
-                )
-            except asyncio.CancelledError:
-                raise
-            except asyncio.TimeoutError:
+            classified_present = False
+            last_reason = "timeout"
+            for attempt in range(1, attempts + 1):
+                try:
+                    await asyncio.wait_for(
+                        nikobus_command.get_output_state(addr, group=1),
+                        timeout=timeout,
+                    )
+                except asyncio.CancelledError:
+                    raise
+                except asyncio.TimeoutError:
+                    last_reason = "timeout"
+                except Exception as exc:  # pragma: no cover - defensive
+                    last_reason = type(exc).__name__
+                else:
+                    _LOGGER.debug(
+                        "Bus presence probe | addr=%s status=present "
+                        "attempt=%d/%d",
+                        addr,
+                        attempt,
+                        attempts,
+                    )
+                    present.append(addr)
+                    classified_present = True
+                    break
+
+                # Failed this attempt. If retries remaining, sleep
+                # and try again; otherwise fall through and mark
+                # absent below.
+                if attempt < attempts and delay > 0:
+                    await asyncio.sleep(delay)
+
+            if not classified_present:
                 _LOGGER.info(
-                    "Bus presence probe | addr=%s status=absent reason=timeout",
+                    "Bus presence probe | addr=%s status=absent reason=%s "
+                    "attempts=%d",
                     addr,
+                    last_reason,
+                    attempts,
                 )
                 absent.append(addr)
-                continue
-            except Exception as exc:  # pragma: no cover - defensive
-                _LOGGER.info(
-                    "Bus presence probe | addr=%s status=absent reason=%s",
-                    addr,
-                    type(exc).__name__,
-                )
-                absent.append(addr)
-                continue
-            _LOGGER.debug(
-                "Bus presence probe | addr=%s status=present", addr
-            )
-            present.append(addr)
 
         orphaned: list[str] = []
         if absent and self._button_data is not None:
