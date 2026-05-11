@@ -474,12 +474,50 @@ def add_to_command_mapping(command_mapping, decoded_command, module_address, ir_
         outputs.append(output_definition)
 
 
-async def _notify_discovery_finished(discovery) -> None:
-    """Call the discovery finished callback when available."""
+async def _notify_discovery_finished(
+    discovery,
+    *,
+    discovered_devices: dict | None = None,
+    inventory_query_type=None,
+) -> None:
+    """Call the discovery finished callback when available.
+
+    0.5.20: ``discovered_devices`` and ``inventory_query_type`` are
+    passed as keyword arguments so consumers don't have to read
+    mutable instance state (which the library may have cleared
+    before the callback fired in 0.5.19 and earlier — see
+    Nikobus-HA #319).
+
+    Backward-compat: if the consumer's callback predates 0.5.20 and
+    has a no-arg signature (``async def cb()``), it's called with
+    no args. Callbacks that accept ``**kwargs`` or explicitly name
+    the new parameters receive them.
+    """
 
     callback = getattr(discovery, "on_discovery_finished", None)
-    if callback:
+    if not callback:
+        return
+
+    try:
+        sig = inspect.signature(callback)
+    except (TypeError, ValueError):
+        # Some callables (built-ins, partials with quirks) can't be
+        # introspected. Fall back to no-arg call.
         await callback()
+        return
+
+    params = sig.parameters
+    accepts_var_keyword = any(
+        p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values()
+    )
+
+    kwargs: dict = {}
+    if accepts_var_keyword or "discovered_devices" in params:
+        kwargs["discovered_devices"] = discovered_devices
+    if accepts_var_keyword or "inventory_query_type" in params:
+        kwargs["inventory_query_type"] = inventory_query_type
+
+    await callback(**kwargs)
 
 
 def _is_inventory_trailer(message: str) -> bool:
@@ -1169,8 +1207,44 @@ class NikobusDiscovery:
         self._cancel_inventory_timeout()
         _LOGGER.info("Discovery finished")
         await self._emit_progress(PHASE_FINALIZING)
-        self.reset_state()
-        await _notify_discovery_finished(self)
+
+        # Capture state for the callback's kwargs (Bug 1 fix per
+        # Nikobus-HA #319). The consumer's callback runs in the same
+        # async flow and may re-enter the library (e.g., to call
+        # ``detect_stale_inventory``); we don't want it racing with
+        # us clearing instance state.
+        captured_devices = dict(self.discovered_devices)
+        captured_query_type = getattr(
+            self._coordinator, "inventory_query_type", None
+        )
+
+        # Split reset: flip the "discovery in progress" flags BEFORE
+        # the callback so consumer re-entry into the library is
+        # unguarded. Per fdebrus's design note: the integration's
+        # post-discovery reconciliation calls back into
+        # ``detect_stale_inventory`` from within this callback, and
+        # ``discovery_running=True`` would trip any "already running"
+        # guard the consumer adds.
+        self._coordinator.discovery_running = False
+        self._coordinator.discovery_module = False
+        self._coordinator.discovery_module_address = None
+
+        try:
+            await _notify_discovery_finished(
+                self,
+                discovered_devices=captured_devices,
+                inventory_query_type=captured_query_type,
+            )
+        finally:
+            # Clear instance state AFTER the callback returns. By
+            # this point the consumer has either snapshotted what it
+            # needed (via the kwargs) or completed any synchronous
+            # work it wanted to do.
+            self.discovered_devices = {}
+            self._coordinator.inventory_query_type = None
+            # Internal scan state (payload buffer, register queue,
+            # etc.) — flags already flipped above, so don't re-flip.
+            self.reset_state(update_flags=False)
 
     async def start_inventory_discovery(self):
         self.reset_state(update_flags=False)
@@ -1207,6 +1281,8 @@ class NikobusDiscovery:
         timeout: float = 2.0,
         max_attempts: int = 3,
         retry_delay: float = 0.5,
+        outer_attempts: int = 1,
+        outer_delay: float = 0.0,
     ) -> dict[str, list[str]]:
         """Cross-check Module-category entries against bus presence.
 
@@ -1261,6 +1337,30 @@ class NikobusDiscovery:
                 in seconds. Defaults to 0.5. Skipped after the final
                 attempt. Set to 0 to retry immediately back-to-back
                 (useful for tests).
+            outer_attempts: Number of full-sweep passes over all
+                yet-unclassified modules. Defaults to 1 (no outer
+                loop — preserves pre-0.5.20 behaviour). Each outer
+                pass re-runs the inner ``max_attempts`` loop for
+                every module not yet classified ``present``; modules
+                that ACK'd on an earlier pass are skipped. Use this
+                to add a bus-quiesce window between probe rounds:
+                set ``outer_attempts=2, outer_delay=3.0`` to retry
+                slow modules after the bus settles. Added in 0.5.20.
+            outer_delay: Sleep between outer passes, in seconds.
+                Defaults to 0.0. Skipped after the final pass. Use
+                in tandem with ``outer_attempts`` to let bus
+                contention clear between probe rounds.
+
+        Bug-2 note (Nikobus-HA #319, 0.5.20): the inner loop calls
+        ``get_output_state(addr, group=1, timeout=timeout)`` directly
+        rather than wrapping it in ``asyncio.wait_for``. The latter
+        composed badly with the command pipeline's dedup mechanism:
+        if a slow probe ahead in the queue blocked our wire send,
+        the outer timeout cancelled the future but the stale command
+        stayed queued with its dedup key set, suppressing any retry.
+        With the timeout pushed into ``get_output_state`` itself, the
+        dedup key is cleared on timeout and retries actually reach
+        the wire.
 
         Returns:
             Dict with four lists, all sorted, addresses upper-case:
@@ -1306,63 +1406,80 @@ class NikobusDiscovery:
 
         addresses = sorted(set(addresses))
 
-        present: list[str] = []
-        absent: list[str] = []
+        present_set: set[str] = set()
+        absent_last_reason: dict[str, str] = {}
 
-        # Per-attempt budget × ``max_attempts`` retry policy.
-        # Field report from the Nikobus-HA side (2026-05-10 IKIKN
-        # install): with ``max_attempts=1`` and ``timeout=2.0`` a
-        # real switch_module at 8110 false-negatived because its
-        # $1012 ACK landed at 2.0-3.0 s under post-discovery bus
-        # congestion. 3 attempts × 2 s + 2 × 0.5 s inter-attempt
-        # sleep = ~7 s worst-case per module, giving slow modules
-        # multiple chances on a busy bus while still keeping a
-        # bounded total budget on a healthy install.
         attempts = max(1, int(max_attempts))
         delay = max(0.0, float(retry_delay))
+        outer_passes = max(1, int(outer_attempts))
+        outer_pause = max(0.0, float(outer_delay))
 
+        # Outer loop: re-probe modules that haven't yet ACK'd. Modules
+        # in ``present_set`` are skipped on subsequent passes. Default
+        # ``outer_attempts=1`` collapses this to a single pass and
+        # matches pre-0.5.20 behaviour.
+        for outer in range(1, outer_passes + 1):
+            remaining = [a for a in addresses if a not in present_set]
+            if not remaining:
+                break
+
+            for addr in remaining:
+                for attempt in range(1, attempts + 1):
+                    try:
+                        # Bug-2 fix: pass timeout directly to
+                        # get_output_state instead of wrapping in
+                        # asyncio.wait_for. See docstring "Bug-2 note".
+                        await nikobus_command.get_output_state(
+                            addr, group=1, timeout=timeout
+                        )
+                    except asyncio.CancelledError:
+                        raise
+                    except asyncio.TimeoutError:
+                        absent_last_reason[addr] = "timeout"
+                    except Exception as exc:  # pragma: no cover - defensive
+                        absent_last_reason[addr] = type(exc).__name__
+                    else:
+                        _LOGGER.debug(
+                            "Bus presence probe | addr=%s status=present "
+                            "outer=%d/%d attempt=%d/%d",
+                            addr,
+                            outer,
+                            outer_passes,
+                            attempt,
+                            attempts,
+                        )
+                        present_set.add(addr)
+                        absent_last_reason.pop(addr, None)
+                        break
+
+                    # Failed this inner attempt. If retries remaining,
+                    # sleep and try again; otherwise fall through.
+                    if attempt < attempts and delay > 0:
+                        await asyncio.sleep(delay)
+
+            # Pause before next outer pass (only if more passes
+            # remain AND at least one module is still unclassified).
+            if outer < outer_passes and outer_pause > 0:
+                still_remaining = [a for a in addresses if a not in present_set]
+                if still_remaining:
+                    await asyncio.sleep(outer_pause)
+
+        # Final classification.
+        present: list[str] = sorted(present_set)
+        absent: list[str] = []
         for addr in addresses:
-            classified_present = False
-            last_reason = "timeout"
-            for attempt in range(1, attempts + 1):
-                try:
-                    await asyncio.wait_for(
-                        nikobus_command.get_output_state(addr, group=1),
-                        timeout=timeout,
-                    )
-                except asyncio.CancelledError:
-                    raise
-                except asyncio.TimeoutError:
-                    last_reason = "timeout"
-                except Exception as exc:  # pragma: no cover - defensive
-                    last_reason = type(exc).__name__
-                else:
-                    _LOGGER.debug(
-                        "Bus presence probe | addr=%s status=present "
-                        "attempt=%d/%d",
-                        addr,
-                        attempt,
-                        attempts,
-                    )
-                    present.append(addr)
-                    classified_present = True
-                    break
-
-                # Failed this attempt. If retries remaining, sleep
-                # and try again; otherwise fall through and mark
-                # absent below.
-                if attempt < attempts and delay > 0:
-                    await asyncio.sleep(delay)
-
-            if not classified_present:
-                _LOGGER.info(
-                    "Bus presence probe | addr=%s status=absent reason=%s "
-                    "attempts=%d",
-                    addr,
-                    last_reason,
-                    attempts,
-                )
-                absent.append(addr)
+            if addr in present_set:
+                continue
+            reason = absent_last_reason.get(addr, "timeout")
+            _LOGGER.info(
+                "Bus presence probe | addr=%s status=absent reason=%s "
+                "outer_passes=%d inner_attempts=%d",
+                addr,
+                reason,
+                outer_passes,
+                attempts,
+            )
+            absent.append(addr)
 
         orphaned: list[str] = []
         if absent and self._button_data is not None:

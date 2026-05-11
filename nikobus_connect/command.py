@@ -80,6 +80,27 @@ class NikobusCommandHandler:
                     command_item.get("completion_handler")
                 )
 
+                # Bug-2 fix (0.5.20): if the caller's future was
+                # cancelled before processing (e.g., its outer
+                # deadline fired while we were blocked behind a
+                # slow probe ahead in the queue), skip the wire
+                # send entirely. ``get_output_state``'s except
+                # handler has already cleared the dedup key, so a
+                # retry that re-queued is now in the queue and
+                # will be processed in due course.
+                if future is not None and future.cancelled():
+                    gid_skip = command[3:5] if len(command) >= 5 else ""
+                    if gid_skip in ("12", "17") and address:
+                        self._queued_get_keys.discard(
+                            f"{address.upper()}_{'1' if gid_skip == '12' else '2'}"
+                        )
+                    _LOGGER.debug(
+                        "Skipping stale command %s — caller future cancelled",
+                        command,
+                    )
+                    self._command_queue.task_done()
+                    continue
+
                 _LOGGER.debug("Processing command: %s with address: %s", command, address)
 
                 gid = command[3:5] if len(command) >= 5 else ""
@@ -134,8 +155,38 @@ class NikobusCommandHandler:
         start = 0 if group == 1 else 6
         return bytearray(state[start:start + 6])
 
-    async def get_output_state(self, address: str, group: int) -> str:
-        """Get the output state of a module."""
+    async def get_output_state(
+        self,
+        address: str,
+        group: int,
+        *,
+        timeout: float | None = None,
+    ) -> str:
+        """Get the output state of a module.
+
+        Args:
+            address: Module bus address (4-char hex).
+            group: 1 for outputs 1-6, 2 for outputs 7-12.
+            timeout: Override the default ``COMMAND_ACK_WAIT_TIMEOUT``
+                ack-wait deadline. Defaults to ``None`` → use the
+                library constant (15 s). Callers that want a tighter
+                deadline (e.g. ``detect_stale_inventory`` with
+                ``timeout=2.0``) should set this explicitly rather
+                than wrapping the call in ``asyncio.wait_for``.
+
+        Why ``timeout`` parameter instead of caller-side
+        ``asyncio.wait_for``? Because the queue dedup
+        (``_queued_get_keys``) doesn't know about caller-side
+        cancellation. If the caller wraps and times out, the future
+        is cancelled but the dedup key stays in the set until the
+        original command is popped — which can be blocked behind a
+        slow probe ahead in the queue. A retry from the caller would
+        then be suppressed as a duplicate, even though no wire send
+        ever happened. See Nikobus-HA #319 for the IKIKN trace that
+        surfaced this. By accepting ``timeout`` here, we can clear
+        the dedup key in our own ``except`` block so the next
+        ``get_output_state`` for the same address re-queues cleanly.
+        """
         _LOGGER.debug("Getting output state - Address: %s, Group: %s", address, group)
         command_code = 0x12 if int(group) == 1 else 0x17
         command = make_pc_link_command(command_code, address)
@@ -143,12 +194,25 @@ class NikobusCommandHandler:
         future = loop.create_future()
         key = f"{address.upper()}_{group}"
         self._pending_get_futures[key] = future
+        effective_timeout = (
+            timeout if timeout is not None else COMMAND_ACK_WAIT_TIMEOUT
+        )
+        # Dedup key used by ``queue_command`` — mirror the layout
+        # ('_1' for group 1, '_2' for group 2). Tracked locally so
+        # we can clear it on timeout/cancel and let the next call
+        # re-queue without being suppressed.
+        dedup_key = f"{address.upper()}_{'1' if int(group) == 1 else '2'}"
         try:
             await self.queue_command(command, address, future=future)
-            return await asyncio.wait_for(future, timeout=COMMAND_ACK_WAIT_TIMEOUT)
+            return await asyncio.wait_for(future, timeout=effective_timeout)
         except (asyncio.CancelledError, asyncio.TimeoutError):
             if not future.done():
                 future.cancel()
+            # Bug-2 fix: clear dedup so retries can re-queue. The
+            # stale command (if any) still sits in the queue but
+            # ``_process_commands`` will discard it on pop via the
+            # ``future.cancelled()`` check.
+            self._queued_get_keys.discard(dedup_key)
             raise
         finally:
             self._pending_get_futures.pop(key, None)

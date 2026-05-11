@@ -1,5 +1,142 @@
 # Changelog
 
+## 0.5.20
+
+Two bug fixes from fdebrus's Nikobus-HA #319 forensic on the IKIKN
+install (2026-05-10 logs). Both shipped together because they share
+a single field report and the Bug-2 fix unblocks dropping HA-side
+workarounds for Bug 1.
+
+### Fixed
+
+#### Bug 1: ``discovered_devices`` / ``inventory_query_type`` cleared before ``on_discovery_finished`` fires
+
+Pre-0.5.20: ``_complete_discovery_run`` called ``reset_state()``
+**before** ``_notify_discovery_finished``. ``reset_state(update_flags=True)``
+sets ``coordinator.inventory_query_type = None``, so by callback
+entry the field was already None. Consumers couldn't snapshot it
+even at the top of the callback (Nikobus-HA #329 / #331 confirmed
+this with explicit early snapshots).
+
+**Fix** (per fdebrus's design note):
+
+1. **Split the reset.** Discovery-in-progress flags
+   (``discovery_running``, ``discovery_module``,
+   ``discovery_module_address``) are flipped to ``False`` /
+   ``None`` **before** the callback. This lets the consumer
+   re-enter the library inside the callback (e.g. to ``await
+   detect_stale_inventory()``) without tripping any "discovery
+   already running" guard.
+2. **Pass state as kwargs.** ``on_discovery_finished`` now
+   receives:
+   ```python
+   async def on_discovery_finished(
+       *,
+       discovered_devices: dict,
+       inventory_query_type: InventoryQueryType | None,
+   ):
+       ...
+   ```
+   Consumers don't need to read mutable instance state at all.
+3. **Clear instance fields after** the callback returns. By that
+   point the consumer has either snapshotted what it needed (via
+   the kwargs) or completed any synchronous work.
+
+**Backward compat**: pre-0.5.20 callbacks with no-arg signatures
+(``async def cb()``) are still supported. ``_notify_discovery_finished``
+inspects the callback signature and calls accordingly:
+  - explicit ``discovered_devices`` / ``inventory_query_type``
+    parameters → passed by keyword
+  - ``**kwargs`` → both passed
+  - no parameters → called with no args (legacy path)
+
+#### Bug 2: ``detect_stale_inventory`` retries suppressed by queue dedup
+
+Pre-0.5.20: ``detect_stale_inventory`` wrapped ``get_output_state``
+in ``asyncio.wait_for(timeout=2.0)``. The IKIKN trace showed:
+
+```
+T=0    detect_stale_inventory → get_output_state("1CEC", group=1)
+       → creates F1, queue_command adds "1CEC_1" to dedup set,
+         command queued behind a slow 3D28 probe
+       → wait_for(F1, timeout=2.0)
+T=2    outer timeout fires, F1 cancelled
+       → BUT dedup key "1CEC_1" still in set (cmd never popped)
+T=2.5  retry → get_output_state again
+       → creates F2, queue_command sees dedup key → SUPPRESS
+       → F2 never resolves → 1CEC false-negatived as absent
+T=15+  3D28 finally finishes, 1CEC popped, wire send happens,
+       result lands on cancelled future → no-op
+```
+
+**Fix** — three coordinated changes:
+
+1. **``get_output_state`` accepts a ``timeout`` keyword argument**
+   (defaults to ``None`` → use library
+   ``COMMAND_ACK_WAIT_TIMEOUT=15 s``). Callers should pass an
+   explicit timeout rather than wrapping in ``asyncio.wait_for``.
+   In the function's ``except (Cancelled, Timeout)`` branch the
+   dedup key is now also discarded — so the next call for the
+   same address re-queues cleanly instead of being suppressed.
+
+2. **``_process_commands`` skips cancelled futures** on pop. If
+   the caller's future was cancelled before the processor got to
+   the command (e.g. blocked behind a slow probe), the wire send
+   is skipped and the dedup key cleared. Avoids wasted bus
+   traffic and resolves the corner where a stale command would
+   suppress an in-flight retry.
+
+3. **``detect_stale_inventory`` drops the outer
+   ``asyncio.wait_for``** and passes ``timeout`` directly to
+   ``get_output_state``. The retries inside the inner-attempt
+   loop now actually reach the wire.
+
+After this, ``attempts=N`` accounting is accurate: each attempt
+corresponds to exactly one queued+sent (or cancelled-before-send)
+command.
+
+### Added
+
+- **``outer_attempts`` and ``outer_delay`` kwargs on
+  ``detect_stale_inventory``.** Default ``outer_attempts=1``,
+  ``outer_delay=0.0`` preserve pre-0.5.20 single-pass behaviour.
+  Use ``outer_attempts=2, outer_delay=3.0`` (recommended for the
+  Nikobus-HA integration) to add a bus-quiesce window between
+  probe rounds. Each outer pass skips modules already classified
+  ``present``. This lets the HA side drop the outer retry loop
+  from PR #329 once 0.5.20 lands.
+
+### Tests
+
+- ``test_complete_discovery_run_callback_signature_compat`` — pins
+  signature detection: no-arg callbacks, ``**kwargs`` callbacks,
+  and explicit-param callbacks all dispatch correctly.
+- ``tests/test_command_dedup_race.py`` (new file, 3 tests) —
+  Bug-2 fix pins: ``get_output_state`` accepts ``timeout`` kwarg,
+  clears dedup on timeout, and ``_process_commands`` skips
+  cancelled futures.
+- ``test_detect_stale_inventory_outer_loop_recovers_module_after_quiesce``
+  — outer-loop fixture pin: a module that fails inner-attempt
+  loop on pass 1 but ACKs on pass 2 must classify as ``present``.
+- ``test_detect_stale_inventory_outer_loop_skips_already_present`` —
+  classified-present modules not re-probed on subsequent passes.
+- ``test_detect_stale_inventory_outer_attempts_default_matches_pre_0_5_20``
+  — backward-compat pin: ``outer_attempts=1`` makes wire-send
+  count identical to 0.5.19.
+- Extended ``test_detect_stale_inventory_defaults_pinned`` to
+  cover all five keyword defaults.
+- Test mocks updated to accept ``timeout`` kwarg
+  (``get_output_state(addr, group, *, timeout=None)``).
+
+### Notes
+
+- The ``discovery_running`` flag now transitions ``True → False``
+  **before** the callback fires (was: after). Per fdebrus's design
+  note: the integration's post-discovery reconciliation runs inside
+  the callback and would otherwise trip a "discovery already
+  running" guard.
+- Total tests: 275 passing.
+
 ## 0.5.19
 
 ### Added
