@@ -1,5 +1,75 @@
 # Changelog
 
+## 0.5.21
+
+Simplification pass on `detect_stale_inventory` after fdebrus's
+2026-05-12 IKIKN log proved the outer retry layer was actively
+harmful. The command pipeline already has a 3-attempt retry budget
+in `_wait_for_ack_and_answer`; layering another retry on top of it
+caused real modules to be starved when an absent module hogged the
+queue.
+
+### Removed
+
+- **`detect_stale_inventory` `timeout` kwarg** — no longer needed.
+  The call no longer wraps `get_output_state` in
+  `asyncio.wait_for`. Each probe runs to the command pipeline's
+  natural conclusion (`MAX_ATTEMPTS=3` × per-attempt timeout).
+- **`detect_stale_inventory` `max_attempts` kwarg** — the per-probe
+  retry budget is now the command pipeline's `MAX_ATTEMPTS=3`.
+  Adding more layers on top duplicated work and caused starvation.
+- **`detect_stale_inventory` `retry_delay` kwarg** — only useful
+  paired with the removed inner retry loop.
+- **`get_output_state` `timeout` kwarg** — added in 0.5.20 to work
+  around the dedup race, no longer needed without an outer
+  `wait_for` racing the queue.
+
+### Changed
+
+- **Probes run serially in queue order, no caller-side timeout.**
+  Each call to `get_output_state` waits the command pipeline's
+  full retry budget (~15 s worst case for an absent module). A
+  slow absent module ahead of a real module in the probe order
+  delays subsequent probes — but **does not starve them**, which
+  was the Nikobus-HA #319 IKIKN bug. The previous (0.5.18-0.5.20)
+  outer wrap raced the dedup mechanism: when the outer 2-s cap
+  fired, the still-queued command's dedup key blocked retries,
+  and the real module's wire send never happened.
+
+### Kept
+
+- **`outer_attempts` and `outer_delay` kwargs** (defaults 1, 0.0)
+  — opt-in second sweep with bus-quiesce delay between passes,
+  useful on installs where transient bus jams cause a real
+  module's first pass to fail and a second pass after the bus
+  settles to succeed.
+- **`get_output_state` dedup-clear-on-cancel** — still useful when
+  the calling task gets cancelled higher up (integration shutdown,
+  user cancels discovery).
+- **`_process_commands` cancelled-future skip** — still useful
+  defence against stale commands.
+
+### Wallclock budget after simplification
+
+For IKIKN's 3-module probe (1CEC fast / 3D28 absent / 8110 slow):
+- 1CEC: ~0.25 s (fast ACK)
+- 3D28: ~15 s (command pipeline's 3 attempts × 5 s)
+- 8110: ~0.5-3 s (waits behind 3D28, then ACKs on first attempt)
+
+Total: ~18 s. The previous (0.5.20) version would have spent ~17 s
+exhausting outer retries on 3D28 with the outer 2-s cap racing the
+queue, then false-negatived 8110 because its wire send never
+happened. Now 8110 lands correctly as present.
+
+### Tests
+
+- Rewrote `tests/test_stale_inventory_detection.py` for the
+  simplified API (12 tests).
+- Rewrote `tests/test_command_dedup_race.py` for cancellation-
+  not-timeout cases (3 tests).
+- New: `test_detect_stale_inventory_no_starvation_on_slow_first_module`
+  — pins the IKIKN architectural fix.
+
 ## 0.5.20
 
 Two bug fixes from fdebrus's Nikobus-HA #319 forensic on the IKIKN

@@ -7,16 +7,14 @@ slots aren't auto-zeroed, so any module / button records the new
 install doesn't overwrite stay present in PC-Link flash.
 
 ``detect_stale_inventory`` probes each output-bearing module address
-on the live bus via ``$1012<addr>`` and classifies them as present /
-absent. Buttons are flagged as orphaned when their entire
-``linked_modules`` set sits inside the absent set.
+on the live bus via ``$1012<addr>`` (through ``get_output_state``)
+and classifies them as present / absent. Buttons are flagged as
+orphaned when their entire ``linked_modules`` set sits inside the
+absent set.
 
-Tests below pin the contract against a synthetic version of the
-real-world second-hand-PC-Link install: switch module 8110 + compact
-switch 1CEC are present (the user kept the physical hardware),
-compact switch 3D28 is absent (previous owner's module), and the
-26 buttons in the 3Bxx-3Exx range whose ``linked_modules`` point only
-at 3D28 cascade-flag as orphaned.
+The probe loop relies on the command pipeline's own retry budget
+(``MAX_ATTEMPTS=3`` × ~5 s per attempt) — see 0.5.21 simplification
+note in ``detect_stale_inventory``'s docstring.
 """
 
 from __future__ import annotations
@@ -87,10 +85,16 @@ async def test_detect_stale_inventory_returns_empty_when_no_command(tmp_path):
 
 @pytest.mark.asyncio
 async def test_detect_stale_inventory_classifies_present_and_absent(tmp_path):
-    """Three switch modules, one of which times out — manifest should
-    list two present, one absent."""
+    """Three switch modules, one of which fails — manifest should
+    list two present, one absent.
 
-    async def get_output_state(addr, group, *, timeout=None):
+    Absent is simulated by raising NikobusTimeoutError-equivalent
+    (any non-CancelledError exception). The command pipeline's
+    internal retries are inside ``get_output_state``; here we mock
+    them away and treat the function's return-or-raise as the
+    classification signal."""
+
+    async def get_output_state(addr, group):
         if addr == "3D28":
             raise asyncio.TimeoutError()
         return "OK"
@@ -104,7 +108,7 @@ async def test_detect_stale_inventory_classifies_present_and_absent(tmp_path):
     coord.dict_module_data["switch_module"]["1CEC"] = {"address": "1CEC"}
     discovery = _make_discovery(coord, tmp_path)
 
-    manifest = await discovery.detect_stale_inventory(retry_delay=0)
+    manifest = await discovery.detect_stale_inventory()
 
     assert manifest["checked"] == ["1CEC", "3D28", "8110"]
     assert manifest["present_modules"] == ["1CEC", "8110"]
@@ -122,7 +126,7 @@ async def test_detect_stale_inventory_skips_non_output_module_types(tmp_path):
 
     probed: list[str] = []
 
-    async def get_output_state(addr, group, *, timeout=None):
+    async def get_output_state(addr, group):
         probed.append(addr)
         return "OK"
 
@@ -150,7 +154,7 @@ async def test_detect_stale_inventory_flags_orphaned_buttons(tmp_path):
     """Cascade case: a button whose ``linked_modules`` block points
     only at an absent module is flagged as orphaned."""
 
-    async def get_output_state(addr, group, *, timeout=None):
+    async def get_output_state(addr, group):
         if addr == "3D28":
             raise asyncio.TimeoutError()
         return "OK"
@@ -203,7 +207,7 @@ async def test_detect_stale_inventory_flags_orphaned_buttons(tmp_path):
     }
     discovery = _make_discovery(coord, tmp_path, button_data=button_data)
 
-    manifest = await discovery.detect_stale_inventory(retry_delay=0)
+    manifest = await discovery.detect_stale_inventory()
 
     assert manifest["absent_modules"] == ["3D28"]
     assert manifest["orphaned_buttons"] == ["3C522A"]
@@ -218,7 +222,7 @@ async def test_detect_stale_inventory_orphaned_address_uppercased(tmp_path):
     are returned in upper-case for consistency with the rest of the
     discovery payload."""
 
-    async def get_output_state(addr, group, *, timeout=None):
+    async def get_output_state(addr, group):
         raise asyncio.TimeoutError()
 
     coord = _make_coordinator(get_output_state=get_output_state)
@@ -238,7 +242,7 @@ async def test_detect_stale_inventory_orphaned_address_uppercased(tmp_path):
     }
     discovery = _make_discovery(coord, tmp_path, button_data=button_data)
 
-    manifest = await discovery.detect_stale_inventory(retry_delay=0)
+    manifest = await discovery.detect_stale_inventory()
 
     assert manifest["absent_modules"] == ["3D28"]
     assert manifest["orphaned_buttons"] == ["3C522A"]
@@ -248,7 +252,7 @@ async def test_detect_stale_inventory_orphaned_address_uppercased(tmp_path):
 async def test_detect_stale_inventory_handles_empty_dict_module_data(tmp_path):
     """No probable modules → empty manifest, but no error."""
 
-    async def get_output_state(addr, group, *, timeout=None):
+    async def get_output_state(addr, group):
         return "OK"
 
     coord = _make_coordinator(get_output_state=get_output_state)
@@ -271,7 +275,7 @@ async def test_detect_stale_inventory_propagates_cancellation(tmp_path):
     otherwise a cancelled discovery task would silently consume the
     cancellation and finish the probe loop."""
 
-    async def get_output_state(addr, group, *, timeout=None):
+    async def get_output_state(addr, group):
         raise asyncio.CancelledError()
 
     coord = _make_coordinator(get_output_state=get_output_state)
@@ -283,53 +287,58 @@ async def test_detect_stale_inventory_propagates_cancellation(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_detect_stale_inventory_passes_per_attempt_timeout(tmp_path):
-    """The ``timeout`` argument is per-attempt. ``max_attempts=1``
-    here so the test asserts a single-attempt absent without sleeping
-    between retries; the retry contract has its own dedicated test."""
+async def test_detect_stale_inventory_no_starvation_on_slow_first_module(tmp_path):
+    """0.5.21 architectural pin: probes run serially in queue order.
+    A slow / absent module ahead in the queue does NOT cause
+    subsequent modules to be skipped or false-negatived. Each
+    module is probed once per outer pass; the command pipeline's
+    own retry budget handles transient ACK delays.
 
-    async def slow_response(addr, group, *, timeout=None):
-        # Simulate a module that takes ~50 ms to ACK. Honour the
-        # caller-supplied ``timeout`` like the real
-        # ``get_output_state`` would (0.5.20 pushed the deadline
-        # inside the function — see Bug-2 note in the docstring).
-        await asyncio.wait_for(
-            asyncio.sleep(0.05), timeout=timeout if timeout is not None else 15
-        )
+    Mirrors the IKIKN scenario (Nikobus-HA #319) where pre-0.5.21
+    code wrapped each probe in ``asyncio.wait_for(timeout=2.0)``,
+    racing the command pipeline's 3-attempt × 5 s = 15 s natural
+    budget. Real module 8110 was starved while 3D28 (absent)
+    hogged the processor."""
+
+    call_order: list[str] = []
+
+    async def get_output_state(addr, group):
+        call_order.append(addr)
+        if addr == "3D28":
+            # Residue — simulates the command pipeline exhausting
+            # its 3 inner attempts.
+            raise asyncio.TimeoutError()
         return "OK"
 
-    coord = _make_coordinator(get_output_state=slow_response)
-    coord.dict_module_data = {"switch_module": {"8110": {}}}
+    coord = _make_coordinator(get_output_state=get_output_state)
+    coord.dict_module_data = {
+        "switch_module": {
+            "1CEC": {"address": "1CEC"},
+            "3D28": {"address": "3D28"},
+            "8110": {"address": "8110"},
+        },
+    }
     discovery = _make_discovery(coord, tmp_path)
 
-    # Tight timeout → absent.
-    manifest_tight = await discovery.detect_stale_inventory(
-        timeout=0.001, max_attempts=1
-    )
-    assert manifest_tight["absent_modules"] == ["8110"]
+    manifest = await discovery.detect_stale_inventory()
 
-    # Generous timeout → present.
-    manifest_loose = await discovery.detect_stale_inventory(
-        timeout=1.0, max_attempts=1
-    )
-    assert manifest_loose["present_modules"] == ["8110"]
+    # Every module probed exactly once — no false-positives from
+    # starvation, no false-negatives from racing the queue.
+    assert call_order == ["1CEC", "3D28", "8110"]
+    assert manifest["present_modules"] == ["1CEC", "8110"]
+    assert manifest["absent_modules"] == ["3D28"]
 
 
 @pytest.mark.asyncio
 async def test_detect_stale_inventory_real_world_secondhand_install(tmp_path):
     """Pin the manifest against the second-hand-PC-Link install
-    captured in user log (https://github.com/user-attachments/files/
-    27457361/log-2.txt). The user's current install has switch
-    module 8110 + compact switch 1CEC; the previous owner's module
-    3D28 is in the dump but doesn't respond on the bus.
+    captured in user log (Nikobus-HA #319). Current install has
+    switch module 8110 + compact switch 1CEC; previous owner's
+    module 3D28 is in the dump but doesn't respond on the bus.
 
-    This is the canonical use case: the manifest should list
-    [8110, 1CEC] as present, [3D28] as absent. Even without
-    populated ``linked_modules`` data on the buttons, the absent-
-    module classification alone is enough for the caller to start
-    cleanup."""
+    Manifest must list [8110, 1CEC] as present, [3D28] as absent."""
 
-    async def get_output_state(addr, group, *, timeout=None):
+    async def get_output_state(addr, group):
         if addr == "3D28":
             raise asyncio.TimeoutError()
         return "OK"
@@ -344,31 +353,20 @@ async def test_detect_stale_inventory_real_world_secondhand_install(tmp_path):
     }
     discovery = _make_discovery(coord, tmp_path)
 
-    manifest = await discovery.detect_stale_inventory(timeout=0.5, retry_delay=0)
+    manifest = await discovery.detect_stale_inventory()
 
     assert manifest["checked"] == ["1CEC", "3D28", "8110"]
     assert manifest["present_modules"] == ["1CEC", "8110"]
     assert manifest["absent_modules"] == ["3D28"]
 
 
-def test_detect_stale_inventory_defaults_pinned():
-    """Pin the five keyword defaults so future regressions fail fast.
+def test_detect_stale_inventory_signature():
+    """Pin the public signature.
 
-    History of changes:
-      - 0.5.16: shipped with timeout=0.6, no retries
-      - 0.5.17: terminator removed (orthogonal but related)
-      - 0.5.18: timeout 0.6 -> 2.0 (fdebrus install report)
-      - 0.5.19: max_attempts/retry_delay added; defaults
-                max_attempts=3, retry_delay=0.5 after IKIKN field
-                report (a real switch_module at 8110 ACKed in
-                2.0-3.0 s under post-discovery bus congestion and
-                false-negatived at max_attempts=1).
-      - 0.5.20: outer_attempts/outer_delay added; defaults
-                outer_attempts=1, outer_delay=0.0 to preserve
-                pre-0.5.20 single-pass behaviour. Bug-2 fix
-                (Nikobus-HA #319 IKIKN trace) made retries actually
-                reach the wire; consumers can now opt into outer
-                passes to give bus-quiesce time between rounds.
+    0.5.21 simplified the API: removed ``timeout``, ``max_attempts``,
+    ``retry_delay`` (the command pipeline's MAX_ATTEMPTS=3 × per-attempt
+    timeout IS the retry budget). Kept ``outer_attempts`` /
+    ``outer_delay`` for opt-in bus-quiesce passes.
     """
 
     import inspect
@@ -376,149 +374,36 @@ def test_detect_stale_inventory_defaults_pinned():
     from nikobus_connect.discovery.discovery import NikobusDiscovery
 
     sig = inspect.signature(NikobusDiscovery.detect_stale_inventory)
-    assert sig.parameters["timeout"].default == 2.0
-    assert sig.parameters["max_attempts"].default == 3
-    assert sig.parameters["retry_delay"].default == 0.5
-    assert sig.parameters["outer_attempts"].default == 1
-    assert sig.parameters["outer_delay"].default == 0.0
+    params = sig.parameters
+
+    # New surface:
+    assert params["outer_attempts"].default == 1
+    assert params["outer_delay"].default == 0.0
+    # Removed surface (0.5.21):
+    assert "timeout" not in params
+    assert "max_attempts" not in params
+    assert "retry_delay" not in params
 
 
 @pytest.mark.asyncio
-async def test_detect_stale_inventory_retries_slow_module_to_present(tmp_path):
-    """IKIKN-fixture pin: a real module whose ACK lands on attempt 2
-    must classify as present, not absent.
+async def test_detect_stale_inventory_outer_loop_recovers_after_quiesce(tmp_path):
+    """``outer_attempts > 1`` re-probes any module not yet
+    classified ``present``. Modules already classified ``present``
+    are skipped on subsequent passes to save wire traffic."""
 
-    Mirrors the 2026-05-10 Nikobus-HA field report: switch module
-    8110 (real, physically wired) ACKs in 2.0-3.0 s under bus
-    congestion immediately post-discovery. With ``max_attempts=1``
-    and ``timeout=2.0`` the probe false-negatived. With three
-    attempts at 2 s each, 8110 lands as ``present`` on attempt 2.
-    """
-
+    pass_seen: dict[str, int] = {"n": 0}
     call_counts: dict[str, int] = {}
 
-    async def get_output_state(addr, group, *, timeout=None):
-        n = call_counts.get(addr, 0) + 1
-        call_counts[addr] = n
-        if addr == "8110":
-            # Slow real module — first attempt times out, second
-            # succeeds.
-            if n == 1:
-                raise asyncio.TimeoutError()
-            return "OK"
+    async def get_output_state(addr, group):
+        call_counts[addr] = call_counts.get(addr, 0) + 1
         if addr == "1CEC":
             return "OK"
         if addr == "3D28":
-            # Residue — never ACKs.
             raise asyncio.TimeoutError()
-        return "OK"
-
-    coord = _make_coordinator(get_output_state=get_output_state)
-    coord.dict_module_data = {
-        "switch_module": {
-            "8110": {"address": "8110"},
-            "1CEC": {"address": "1CEC"},
-            "3D28": {"address": "3D28"},
-        },
-    }
-    discovery = _make_discovery(coord, tmp_path)
-
-    manifest = await discovery.detect_stale_inventory(
-        max_attempts=3, retry_delay=0
-    )
-
-    assert manifest["present_modules"] == ["1CEC", "8110"]
-    assert manifest["absent_modules"] == ["3D28"]
-    # 8110 took 2 attempts.
-    assert call_counts["8110"] == 2
-    # 3D28 exhausted all 3 attempts.
-    assert call_counts["3D28"] == 3
-    # 1CEC succeeded on first try.
-    assert call_counts["1CEC"] == 1
-
-
-@pytest.mark.asyncio
-async def test_detect_stale_inventory_max_attempts_one_preserves_pre_0_5_19_behaviour(
-    tmp_path,
-):
-    """``max_attempts=1`` opts out of retries — single probe, single
-    classification. Same contract as 0.5.18."""
-
-    calls: list[str] = []
-
-    async def get_output_state(addr, group, *, timeout=None):
-        calls.append(addr)
-        if addr == "3D28":
-            raise asyncio.TimeoutError()
-        return "OK"
-
-    coord = _make_coordinator(get_output_state=get_output_state)
-    coord.dict_module_data = {
-        "switch_module": {"8110": {}, "3D28": {}},
-    }
-    discovery = _make_discovery(coord, tmp_path)
-
-    await discovery.detect_stale_inventory(max_attempts=1, retry_delay=0)
-
-    # Each address probed exactly once.
-    assert calls.count("8110") == 1
-    assert calls.count("3D28") == 1
-
-
-@pytest.mark.asyncio
-async def test_detect_stale_inventory_retry_delay_zero_skips_sleep(tmp_path):
-    """``retry_delay=0`` removes the inter-attempt sleep, useful for
-    test fixtures that don't want to wait. Attempts still happen in
-    sequence, just back-to-back."""
-
-    calls: list[str] = []
-
-    async def get_output_state(addr, group, *, timeout=None):
-        calls.append(addr)
-        raise asyncio.TimeoutError()
-
-    coord = _make_coordinator(get_output_state=get_output_state)
-    coord.dict_module_data = {"switch_module": {"3D28": {}}}
-    discovery = _make_discovery(coord, tmp_path)
-
-    import time
-
-    start = time.monotonic()
-    manifest = await discovery.detect_stale_inventory(
-        timeout=0.001, max_attempts=3, retry_delay=0
-    )
-    elapsed = time.monotonic() - start
-
-    assert manifest["absent_modules"] == ["3D28"]
-    assert calls.count("3D28") == 3
-    # 3 attempts × 0.001 s timeout + 0 s sleep = much less than 1 s.
-    assert elapsed < 0.5
-
-
-@pytest.mark.asyncio
-async def test_detect_stale_inventory_outer_loop_recovers_module_after_quiesce(tmp_path):
-    """0.5.20 outer-loop pin: a module that fails all inner attempts
-    on pass 1 but ACKs on pass 2 (e.g. bus quiesced between passes)
-    must classify as ``present``.
-
-    Models the IKIKN scenario: bus saturated with post-discovery
-    traffic during pass 1, then quiet for pass 2. Without an outer
-    loop the module would be marked absent. With
-    ``outer_attempts=2`` and ``outer_delay`` (zero here for test
-    speed; consumers use 3.0s in production) the module recovers.
-    """
-
-    outer_pass_count = {"n": 0}
-
-    async def get_output_state(addr, group, *, timeout=None):
-        if addr == "1CEC":
-            return "OK"  # always fast
-        if addr == "3D28":
-            raise asyncio.TimeoutError()  # residue, never ACKs
         if addr == "8110":
-            # Real but slow under load: fails all inner attempts on
-            # outer pass 1, ACKs immediately on outer pass 2.
-            if outer_pass_count["n"] == 0:
+            # Real but slow under load — fails on pass 1, ACKs on
+            # pass 2 (after the bus quiesces during outer_delay).
+            if pass_seen["n"] == 0:
                 raise asyncio.TimeoutError()
             return "OK"
         return "OK"
@@ -533,159 +418,51 @@ async def test_detect_stale_inventory_outer_loop_recovers_module_after_quiesce(t
     }
     discovery = _make_discovery(coord, tmp_path)
 
-    # Patch asyncio.sleep so we can observe the outer pause without
-    # actually sleeping, and use it to flip outer_pass_count.
     real_sleep = asyncio.sleep
 
     async def fake_sleep(delay):
+        # Treat any non-trivial sleep as the outer-pass bus-quiesce
+        # signal — flip the simulated bus state to "quiet".
         if delay >= 0.1:
-            # This is the outer pause — simulate bus quiescing.
-            outer_pass_count["n"] = 1
+            pass_seen["n"] = 1
         await real_sleep(0)
 
     import unittest.mock as mock
 
     with mock.patch("asyncio.sleep", new=fake_sleep):
         manifest = await discovery.detect_stale_inventory(
-            outer_attempts=2, outer_delay=0.5, retry_delay=0
+            outer_attempts=2, outer_delay=0.5
         )
 
     assert "1CEC" in manifest["present_modules"]
     assert "8110" in manifest["present_modules"]  # recovered on pass 2
     assert manifest["absent_modules"] == ["3D28"]
-
-
-@pytest.mark.asyncio
-async def test_detect_stale_inventory_outer_loop_skips_already_present(tmp_path):
-    """Modules classified ``present`` on an earlier outer pass are
-    not re-probed on subsequent passes. Saves wire traffic and
-    keeps the wallclock budget bounded."""
-
-    call_counts: dict[str, int] = {}
-
-    async def get_output_state(addr, group, *, timeout=None):
-        n = call_counts.get(addr, 0) + 1
-        call_counts[addr] = n
-        if addr == "1CEC":
-            return "OK"  # always ACK on first try
-        if addr == "3D28":
-            raise asyncio.TimeoutError()  # never ACK
-        return "OK"
-
-    coord = _make_coordinator(get_output_state=get_output_state)
-    coord.dict_module_data = {
-        "switch_module": {"1CEC": {}, "3D28": {}},
-    }
-    discovery = _make_discovery(coord, tmp_path)
-
-    await discovery.detect_stale_inventory(
-        outer_attempts=3, outer_delay=0, max_attempts=1, retry_delay=0
-    )
-
-    # 1CEC ACK'd on pass 1, never re-probed.
+    # 1CEC ACK'd on pass 1, not re-probed.
     assert call_counts["1CEC"] == 1
-    # 3D28 probed every pass (3 outer × 1 inner = 3 calls).
-    assert call_counts["3D28"] == 3
+    # 3D28 probed each pass.
+    assert call_counts["3D28"] == 2
+    # 8110 probed both passes (failed pass 1, ACK pass 2).
+    assert call_counts["8110"] == 2
 
 
 @pytest.mark.asyncio
-async def test_detect_stale_inventory_outer_attempts_default_matches_pre_0_5_20(tmp_path):
-    """Backward-compat pin: with default ``outer_attempts=1`` the
-    probe runs exactly one full pass. Same wire-send count as 0.5.19."""
+async def test_detect_stale_inventory_outer_default_is_single_pass(tmp_path):
+    """Default ``outer_attempts=1, outer_delay=0.0`` runs exactly
+    one full sweep — same wire-send count as a hand-rolled
+    ``for addr in modules: await get_output_state(...)`` loop."""
 
     call_counts: dict[str, int] = {}
 
-    async def get_output_state(addr, group, *, timeout=None):
+    async def get_output_state(addr, group):
         call_counts[addr] = call_counts.get(addr, 0) + 1
         raise asyncio.TimeoutError()
 
     coord = _make_coordinator(get_output_state=get_output_state)
-    coord.dict_module_data = {"switch_module": {"3D28": {}}}
+    coord.dict_module_data = {
+        "switch_module": {"A": {}, "B": {}, "C": {}},
+    }
     discovery = _make_discovery(coord, tmp_path)
 
-    await discovery.detect_stale_inventory(retry_delay=0)
+    await discovery.detect_stale_inventory()
 
-    # Default outer_attempts=1 × default max_attempts=3 = 3 calls.
-    assert call_counts["3D28"] == 3
-
-
-def test_complete_discovery_run_callback_signature_compat():
-    """Pin the backward-compat callback signature detection.
-
-    Pre-0.5.20: ``on_discovery_finished`` was no-arg.
-    0.5.20+:    ``on_discovery_finished(discovered_devices, inventory_query_type)``
-                or accepts ``**kwargs``.
-
-    The library inspects the callback signature and calls
-    accordingly — old no-arg callbacks still work.
-    """
-
-    import asyncio
-    import inspect
-
-    from nikobus_connect.discovery.discovery import _notify_discovery_finished
-
-    # Stand-in for the discovery object — only on_discovery_finished
-    # is accessed.
-    class _DummyDiscovery:
-        pass
-
-    received: dict = {}
-
-    async def new_style_cb(*, discovered_devices, inventory_query_type):
-        received["devices"] = discovered_devices
-        received["query_type"] = inventory_query_type
-
-    discovery_new = _DummyDiscovery()
-    discovery_new.on_discovery_finished = new_style_cb
-
-    asyncio.run(
-        _notify_discovery_finished(
-            discovery_new,
-            discovered_devices={"8110": {}},
-            inventory_query_type="PC_LINK",
-        )
-    )
-    assert received == {
-        "devices": {"8110": {}},
-        "query_type": "PC_LINK",
-    }
-
-    # Old no-arg callback — must still be invoked.
-    old_called = {"n": 0}
-
-    async def old_style_cb():
-        old_called["n"] += 1
-
-    discovery_old = _DummyDiscovery()
-    discovery_old.on_discovery_finished = old_style_cb
-
-    asyncio.run(
-        _notify_discovery_finished(
-            discovery_old,
-            discovered_devices={"x": 1},
-            inventory_query_type="PC_LINK",
-        )
-    )
-    assert old_called["n"] == 1
-
-    # **kwargs callback — receives both.
-    kwargs_received: dict = {}
-
-    async def kwargs_style_cb(**kwargs):
-        kwargs_received.update(kwargs)
-
-    discovery_kwargs = _DummyDiscovery()
-    discovery_kwargs.on_discovery_finished = kwargs_style_cb
-
-    asyncio.run(
-        _notify_discovery_finished(
-            discovery_kwargs,
-            discovered_devices={"y": 2},
-            inventory_query_type="MODULE",
-        )
-    )
-    assert kwargs_received == {
-        "discovered_devices": {"y": 2},
-        "inventory_query_type": "MODULE",
-    }
+    assert call_counts == {"A": 1, "B": 1, "C": 1}

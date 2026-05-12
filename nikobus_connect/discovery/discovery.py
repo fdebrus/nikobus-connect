@@ -1278,9 +1278,6 @@ class NikobusDiscovery:
     async def detect_stale_inventory(
         self,
         *,
-        timeout: float = 2.0,
-        max_attempts: int = 3,
-        retry_delay: float = 0.5,
         outer_attempts: int = 1,
         outer_delay: float = 0.0,
     ) -> dict[str, list[str]]:
@@ -1296,10 +1293,20 @@ class NikobusDiscovery:
         device actually respond on the bus?"
 
         For each output-bearing module address in
-        ``coordinator.dict_module_data``, send a ``$1012<addr>``
-        status query. A module that ACKs within ``timeout`` on any
-        of ``max_attempts`` tries is classified ``present``; one
-        that fails every attempt is classified ``absent``.
+        ``coordinator.dict_module_data``, call ``get_output_state``,
+        which is the standard ``$1012<addr>`` query. That call's
+        internal retry policy (``MAX_ATTEMPTS=3`` with 5 s per
+        attempt) IS the per-module retry budget — present modules
+        get up to 3 wire attempts to ACK, absent modules consume
+        ~15 s of processor time before classifying as absent.
+
+        Probes run **serially** in queue order. A module slow to ACK
+        does not starve subsequent probes (Bug 2 / Nikobus-HA #319
+        regression: prior versions wrapped each probe in
+        ``asyncio.wait_for`` with a 2 s outer cap, racing the queue's
+        natural retry budget and false-negativing real modules whose
+        first wire attempt got blocked behind an absent-module's
+        15 s inner retry loop).
 
         Buttons aren't probed directly (they only emit on press), but
         when a button's ``linked_modules`` block points only at stale
@@ -1313,61 +1320,28 @@ class NikobusDiscovery:
         library doesn't mutate the persisted stores; the caller does.
 
         Args:
-            timeout: Per-attempt deadline in seconds. Defaults to 2.0
-                — bumped from 0.6 in 0.5.18 after fdebrus's install
-                reported false negatives. Root cause: ``get_output_state``
-                itself has a 15 s inner ACK timeout × 3 retries; on
-                a busy bus (queue not drained, modules momentarily
-                serving button presses) a present module can take
-                1-3 s to ACK. 2.0 s per attempt absorbs queue-drain
-                latency and module busy-states.
-            max_attempts: Number of probe attempts per module before
-                classifying as absent. Defaults to 3 — added in
-                0.5.19 after the Nikobus-HA field report on the IKIKN
-                install (2026-05-10): with ``max_attempts=1`` and
-                ``timeout=2.0`` a real switch module at ``8110``
-                false-negatived because its ACK landed at 2.0-3.0 s
-                under post-discovery bus congestion. Three attempts
-                give slow modules multiple chances against transient
-                congestion while keeping a bounded budget — an
-                8-module probe with all timing out completes in
-                ~59 s worst-case (8 × (3×2.0 + 2×0.5)), acceptable
-                for a manual discovery action.
-            retry_delay: Sleep between attempts for the same module,
-                in seconds. Defaults to 0.5. Skipped after the final
-                attempt. Set to 0 to retry immediately back-to-back
-                (useful for tests).
             outer_attempts: Number of full-sweep passes over all
-                yet-unclassified modules. Defaults to 1 (no outer
-                loop — preserves pre-0.5.20 behaviour). Each outer
-                pass re-runs the inner ``max_attempts`` loop for
-                every module not yet classified ``present``; modules
-                that ACK'd on an earlier pass are skipped. Use this
-                to add a bus-quiesce window between probe rounds:
-                set ``outer_attempts=2, outer_delay=3.0`` to retry
-                slow modules after the bus settles. Added in 0.5.20.
+                yet-unclassified modules. Defaults to 1 (single
+                pass — the command layer's own retry budget is
+                usually enough). Each outer pass re-probes every
+                module not yet classified ``present``; modules
+                that ACK'd on an earlier pass are skipped. Set to 2
+                or more to give modules an extra chance after the
+                bus has had a chance to quiesce — useful on heavily
+                loaded installs where a transient bus jam can cause
+                all 3 inner wire attempts to land in the same busy
+                window.
             outer_delay: Sleep between outer passes, in seconds.
                 Defaults to 0.0. Skipped after the final pass. Use
                 in tandem with ``outer_attempts`` to let bus
-                contention clear between probe rounds.
-
-        Bug-2 note (Nikobus-HA #319, 0.5.20): the inner loop calls
-        ``get_output_state(addr, group=1, timeout=timeout)`` directly
-        rather than wrapping it in ``asyncio.wait_for``. The latter
-        composed badly with the command pipeline's dedup mechanism:
-        if a slow probe ahead in the queue blocked our wire send,
-        the outer timeout cancelled the future but the stale command
-        stayed queued with its dedup key set, suppressing any retry.
-        With the timeout pushed into ``get_output_state`` itself, the
-        dedup key is cleared on timeout and retries actually reach
-        the wire.
+                contention clear between probe rounds — e.g.
+                ``outer_attempts=2, outer_delay=3.0``.
 
         Returns:
             Dict with four lists, all sorted, addresses upper-case:
               - ``checked``: every address probed
-              - ``present_modules``: probes that ACK'd within
-                ``max_attempts``
-              - ``absent_modules``: probes that failed every attempt
+              - ``present_modules``: probes that ACK'd
+              - ``absent_modules``: probes that failed
               - ``orphaned_buttons``: buttons whose entire
                 ``linked_modules`` set sits inside ``absent_modules``
         """
@@ -1409,62 +1383,46 @@ class NikobusDiscovery:
         present_set: set[str] = set()
         absent_last_reason: dict[str, str] = {}
 
-        attempts = max(1, int(max_attempts))
-        delay = max(0.0, float(retry_delay))
         outer_passes = max(1, int(outer_attempts))
         outer_pause = max(0.0, float(outer_delay))
 
-        # Outer loop: re-probe modules that haven't yet ACK'd. Modules
-        # in ``present_set`` are skipped on subsequent passes. Default
-        # ``outer_attempts=1`` collapses this to a single pass and
-        # matches pre-0.5.20 behaviour.
         for outer in range(1, outer_passes + 1):
             remaining = [a for a in addresses if a not in present_set]
             if not remaining:
                 break
 
             for addr in remaining:
-                for attempt in range(1, attempts + 1):
-                    try:
-                        # Bug-2 fix: pass timeout directly to
-                        # get_output_state instead of wrapping in
-                        # asyncio.wait_for. See docstring "Bug-2 note".
-                        await nikobus_command.get_output_state(
-                            addr, group=1, timeout=timeout
-                        )
-                    except asyncio.CancelledError:
-                        raise
-                    except asyncio.TimeoutError:
-                        absent_last_reason[addr] = "timeout"
-                    except Exception as exc:  # pragma: no cover - defensive
-                        absent_last_reason[addr] = type(exc).__name__
-                    else:
-                        _LOGGER.debug(
-                            "Bus presence probe | addr=%s status=present "
-                            "outer=%d/%d attempt=%d/%d",
-                            addr,
-                            outer,
-                            outer_passes,
-                            attempt,
-                            attempts,
-                        )
-                        present_set.add(addr)
-                        absent_last_reason.pop(addr, None)
-                        break
+                # No outer ``asyncio.wait_for`` here — see docstring.
+                # ``get_output_state`` waits the command layer's own
+                # natural retry budget (MAX_ATTEMPTS × per-attempt
+                # timeout) then either returns or raises. The queue
+                # is held for the full duration of each probe so
+                # commands don't race each other into stale-future
+                # territory.
+                try:
+                    await nikobus_command.get_output_state(addr, group=1)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    absent_last_reason[addr] = type(exc).__name__
+                else:
+                    _LOGGER.debug(
+                        "Bus presence probe | addr=%s status=present "
+                        "outer=%d/%d",
+                        addr,
+                        outer,
+                        outer_passes,
+                    )
+                    present_set.add(addr)
+                    absent_last_reason.pop(addr, None)
 
-                    # Failed this inner attempt. If retries remaining,
-                    # sleep and try again; otherwise fall through.
-                    if attempt < attempts and delay > 0:
-                        await asyncio.sleep(delay)
-
-            # Pause before next outer pass (only if more passes
+            # Pause before the next outer pass (only if more passes
             # remain AND at least one module is still unclassified).
             if outer < outer_passes and outer_pause > 0:
                 still_remaining = [a for a in addresses if a not in present_set]
                 if still_remaining:
                     await asyncio.sleep(outer_pause)
 
-        # Final classification.
         present: list[str] = sorted(present_set)
         absent: list[str] = []
         for addr in addresses:
@@ -1473,11 +1431,10 @@ class NikobusDiscovery:
             reason = absent_last_reason.get(addr, "timeout")
             _LOGGER.info(
                 "Bus presence probe | addr=%s status=absent reason=%s "
-                "outer_passes=%d inner_attempts=%d",
+                "outer_passes=%d",
                 addr,
                 reason,
                 outer_passes,
-                attempts,
             )
             absent.append(addr)
 
