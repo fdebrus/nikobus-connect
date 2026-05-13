@@ -287,8 +287,19 @@ def _decode_and_log(
             # Function-level path — log only, no command emission.
             return commands
 
+        # 0.5.22: label each emitted record with its scan source.
+        # PC-Link and PC-Logic share this code path; ``module_type``
+        # tells us which registry we read from. Downstream consumers
+        # (HA-side reconciliation) use this to distinguish current
+        # programming (from output modules' own tables) from
+        # potentially-stale PC-Link / PC-Logic registry records.
+        source_label = (
+            "pc_link_registry" if module_type == "pc_link"
+            else "pc_logic_registry" if module_type == "pc_logic"
+            else None
+        )
         metadata = link_record_to_decoded_metadata(
-            record, registry, coordinator
+            record, registry, coordinator, record_source=source_label
         )
         if metadata is None:
             log.debug(

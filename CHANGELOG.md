@@ -1,5 +1,114 @@
 # Changelog
 
+## 0.5.22
+
+Surfaces decoder scan-source provenance so HA-side reconciliation
+can distinguish current programming (output-module link tables)
+from potentially-stale PC-Link / PC-Logic registry records.
+
+Motivated by fdebrus's Nikobus-HA #319 IKIKN forensic:
+
+> 17 valid buttons → 23 records, all 6 bytes, all M05 (Impulse)
+> 25 phantom buttons → 26 records, all 16 bytes, mixed modes
+> Zero overlap between the two record sets.
+
+The 25 phantom buttons are previous-owner residue. Their records
+live only in PC-Link's registry (the previous owner used Niko's PC
+software). The current owner reprogrammed via DIN-button learn-mode
+which writes only to output modules' own tables, leaving PC-Link's
+registry untouched. The library decoded both sources and merged
+them into ``nikobus_button`` indistinguishably, so the HA side
+classified all 25 as ``active``.
+
+### Added
+
+- **``record_source`` field on every entry in
+  ``linked_modules[].outputs[]``.** Labels the decoder scan source:
+
+  | Value | Source path | Reliability |
+  |-------|-------------|-------------|
+  | ``"output_module_table"`` | Switch / dimmer / roller module's own link table | Current programming, authoritative |
+  | ``"pc_link_registry"`` | PC-Link's register memory (16-byte records) | May be stale residue |
+  | ``"pc_logic_registry"`` | PC-Logic's register memory (16-byte records) | May be stale residue |
+
+  Absent from legacy data (pre-0.5.22 stores) — HA-side treats
+  absence as "source unknown" rather than guessing.
+
+- **Module decoder annotations**:
+  - ``switch_decoder.decode`` → ``"output_module_table"``
+  - ``dimmer_decoder.decode`` → ``"output_module_table"``
+  - ``shutter_decoder.decode`` → ``"output_module_table"``
+  - ``pc_record_parser.link_record_to_decoded_metadata`` accepts a
+    new keyword-only ``record_source`` parameter; defaults to
+    ``None`` so legacy callers are unaffected.
+  - ``pc_link_decoder._decode_and_log`` derives the label from
+    ``module_type``: ``"pc_link_registry"`` for ``pc_link``,
+    ``"pc_logic_registry"`` for ``pc_logic``.
+
+### Changed
+
+- **``add_to_command_mapping``** copies ``record_source`` from the
+  decoded metadata into the ``output_definition`` it constructs.
+- **``merge_linked_modules``** writes ``record_source`` into the
+  per-output entry stored under
+  ``button["operation_points"][key]["linked_modules"][i]["outputs"][j]``.
+  Field is omitted from the stored entry when the source is
+  unknown (None) — keeps the schema clean for legacy data.
+
+### Recommended HA-side filter
+
+The HA reconciliation pass adds one rule:
+
+```python
+def output_is_registry(output: dict) -> bool:
+    return output.get("record_source") in {
+        "pc_link_registry",
+        "pc_logic_registry",
+    }
+
+# After the existing classification:
+if all_outputs_are_registry(button):
+    button["status"] = "legacy_orphan"   # or new bucket "legacy_registry_only"
+```
+
+Buttons with at least one ``output_module_table`` source stay
+``active``. Buttons with only registry sources → residue bucket.
+
+For IKIKN's install after this lands:
+- 14 valid + active (unchanged)
+- 3 valid + legacy_undecoded (unchanged)
+- 25 phantom + ``legacy_orphan`` ← was ``active`` (the bug fix)
+- 9 phantom + legacy_undecoded (unchanged)
+
+### Tests
+
+- ``tests/test_record_source_provenance.py`` (new file, 8 tests):
+  - Output-module decoders emit ``"output_module_table"``
+    (3 tests: switch, dimmer, shutter).
+  - ``link_record_to_decoded_metadata`` emits the supplied label
+    (2 tests: ``pc_link_registry``, ``pc_logic_registry``).
+  - Backward-compat: omitting ``record_source`` keeps the field
+    out of the metadata (1 test).
+  - End-to-end: ``record_source`` survives through
+    ``merge_linked_modules`` into the persisted store
+    (1 test).
+  - Legacy data: missing ``record_source`` on decoded command →
+    field absent (not None) in stored entry (1 test).
+
+- Full suite: 278/278 pass.
+
+### Backward compatibility
+
+- Schema is purely additive — existing readers that ignore the new
+  field keep working unchanged.
+- ``link_record_to_decoded_metadata``'s new ``record_source``
+  parameter is keyword-only with default ``None`` — no positional-arg
+  callers are affected.
+- HA-side migration: optional. Without the new filter rule, the
+  field is harmless but doesn't fix IKIKN's residue. With the
+  filter rule, the 25 phantom-active buttons re-bucket to
+  legacy_orphan and disappear from the active button view.
+
 ## 0.5.21
 
 Simplification pass on `detect_stale_inventory` after fdebrus's

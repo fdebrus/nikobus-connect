@@ -998,6 +998,7 @@ def merge_linked_modules(button_data, command_mapping):
             button_address = output.get("button_address")
             ir_button_address = output.get("ir_button_address")
             ir_code = output.get("ir_code") or ir_code_from_key
+            record_source = output.get("record_source")
 
             matching_block = next(
                 (
@@ -1031,6 +1032,16 @@ def merge_linked_modules(button_data, command_mapping):
                 output_entry["ir_button_address"] = ir_button_address
             if ir_code:
                 output_entry["ir_code"] = ir_code
+            # 0.5.22: surface the scan-source provenance to HA-side
+            # reconciliation. ``output_module_table`` = read from a
+            # switch / dimmer / roller's own link table (current,
+            # reliable). ``pc_link_registry`` / ``pc_logic_registry``
+            # = read from PC-Link or PC-Logic register memory (may be
+            # stale residue from a previous install). HA filters
+            # buttons whose outputs are exclusively registry-sourced
+            # into a residue bucket. See Nikobus-HA #319.
+            if record_source:
+                output_entry["record_source"] = record_source
 
             dedupe_key = (
                 output_entry.get("channel"),

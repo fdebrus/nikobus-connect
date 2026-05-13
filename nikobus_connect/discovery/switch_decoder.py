@@ -129,6 +129,14 @@ def decode(payload_hex: str, raw_bytes: list[str], context) -> dict[str, Any] | 
         "T1": t1_val,
         "T2": t2_val,
         "M": SWITCH_MODE_MAPPING.get(mode_raw),
+        # 0.5.22: record source provenance. Switch / dimmer / roller
+        # decoders read each module's own link table directly. That's
+        # the most reliable source — records here reflect the
+        # programming currently active on that module (whether set
+        # via PC software or via DIN-button learn-mode). HA-side
+        # reconciliation uses this label to distinguish current
+        # programming from PC-Link / PC-Logic registry residue.
+        "record_source": "output_module_table",
     }
 
     _LOGGER.debug(

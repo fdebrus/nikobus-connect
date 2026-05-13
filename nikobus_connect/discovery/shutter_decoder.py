@@ -120,6 +120,10 @@ def decode(payload_hex: str, raw_bytes: list[str], context) -> dict[str, Any] | 
         "T1": t1_val,
         "T2": t2_val,
         "M": ROLLER_MODE_MAPPING.get(mode_raw),
+        # 0.5.22: see ``switch_decoder.decode`` for the source-label
+        # rationale. Roller reads its own link table directly →
+        # ``output_module_table``.
+        "record_source": "output_module_table",
     }
 
     _LOGGER.debug(
