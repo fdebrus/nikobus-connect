@@ -445,6 +445,17 @@ def add_to_command_mapping(command_mapping, decoded_command, module_address, ir_
 
         # IR channel label (e.g. "17A", "30B") derived from slot address + key.
         "ir_code": ir_channel or ir_btn_slot or ir_push_slot,
+
+        # 0.5.22: scan-source provenance. ``output_module_table`` for
+        # records read from a switch / dimmer / roller's own link
+        # table (current programming). ``pc_link_registry`` or
+        # ``pc_logic_registry`` for records read from PC-Link or
+        # PC-Logic register memory (may be stale residue from a
+        # previous install, or scene-only programming the output
+        # modules don't carry). HA-side reconciliation filters on
+        # this to avoid treating residue as active programming.
+        # See Nikobus-HA #319 for the IKIKN forensic.
+        "record_source": decoded_command.get("record_source"),
     }
 
     dedupe_key = (

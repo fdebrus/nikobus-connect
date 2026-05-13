@@ -510,6 +510,8 @@ def link_record_to_decoded_metadata(
     record: LinkRecord,
     registry: RegistryBuffer,
     coordinator,
+    *,
+    record_source: str | None = None,
 ) -> dict | None:
     """Translate a parsed ``LinkRecord`` into ``DecodedCommand`` metadata.
 
@@ -540,6 +542,15 @@ def link_record_to_decoded_metadata(
     the positional argument so the link lands on the resolved output
     module, not on the controller (PC-Link / PC-Logic) currently being
     scanned.
+
+    ``record_source`` (0.5.22): when supplied, copied into the
+    returned metadata under the ``"record_source"`` key. Callers
+    pass ``"pc_link_registry"`` or ``"pc_logic_registry"`` so
+    downstream (HA-side reconciliation) can distinguish records read
+    from PC-Link / PC-Logic register memory — which may be stale
+    residue from a previous install or scene-only programming — from
+    records read from an output module's own link table (which are
+    always current).
     """
 
     target = resolve_link_target(record.channel_index, registry, coordinator)
@@ -580,7 +591,7 @@ def link_record_to_decoded_metadata(
     if key_raw is None:
         return None
 
-    return {
+    metadata: dict = {
         "module_address": target_address,
         "channel": target_channel,
         "M": mode_label,
@@ -591,6 +602,9 @@ def link_record_to_decoded_metadata(
         "push_button_address": button_address,
         "key_raw": key_raw,
     }
+    if record_source:
+        metadata["record_source"] = record_source
+    return metadata
 
 
 __all__ = [
