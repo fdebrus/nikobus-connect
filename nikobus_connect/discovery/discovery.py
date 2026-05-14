@@ -15,13 +15,12 @@ from .base import (
     PHASE_INVENTORY,
     PHASE_REGISTER_SCAN,
 )
-from .dimmer_decoder import DimmerDecoder, EXPECTED_CHUNK_LEN
+from .dimmer_decoder import DimmerDecoder
 from .pc_link_decoder import PcLinkDecoder
 from .pc_logic_decoder import PcLogicDecoder
 from .shutter_decoder import ShutterDecoder
 from .switch_decoder import SwitchDecoder
 from .mapping import (
-    CHANNEL_MAPPING,
     DEVICE_TYPES,
     KEY_MAPPING,
     KEY_MAPPING_MODULE,
