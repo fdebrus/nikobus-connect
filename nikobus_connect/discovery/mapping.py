@@ -269,11 +269,24 @@ DEVICE_TYPES = {
     # against fdebrus/nikobus-connect with the device-type byte,
     # observed bus addresses, and any model number printed on the
     # physical device.
+    #
+    # Pre-Gen3 PC-Link diagnostic-echo note (0.5.24):
+    # ``0x14``, ``0x24``, ``0x34`` used to be Reserved entries here
+    # because they showed up in some users' inventory dumps. The
+    # 2026-05-15 forensic on a pre-Gen3 PC-Link (Nikobus-HA user
+    # report) confirmed these are NOT real device types — they're
+    # artifacts of the firmware's "no programming written"
+    # diagnostic-echo response, where unprogrammed registers return
+    # a sequential identity pattern ``[N, N+1, ..., N+15]``. Byte 7
+    # of that response (which our decoder reads as device-type)
+    # cycles through ``0x04, 0x14, 0x24, 0x34, ...`` per register.
+    # Only ``0x04`` is a real device type (05-342 push button), and
+    # only by coincidence. The others were echo-pattern phantoms
+    # that we'd kept as Reserved for years to silence the warning.
+    # Now removed. ``0x05`` and ``0x46`` stay Reserved pending more
+    # evidence — they may or may not be similar artifacts.
     # ------------------------------------------------------------------
     "05": {"Category": "Reserved", "Model": "Unknown", "Name": "Reserved 0x05"},
-    "14": {"Category": "Reserved", "Model": "Unknown", "Name": "Reserved 0x14"},
-    "24": {"Category": "Reserved", "Model": "Unknown", "Name": "Reserved 0x24"},
-    "34": {"Category": "Reserved", "Model": "Unknown", "Name": "Reserved 0x34"},
     "46": {"Category": "Reserved", "Model": "Unknown", "Name": "Reserved 0x46"},
     # 0x3B records appear at addresses 3CF000, 3CF010, 3CF020, ... on
     # the same install — a 16-byte stride starting at 3CF000 that's

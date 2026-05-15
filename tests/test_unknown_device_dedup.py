@@ -61,13 +61,24 @@ def _make_discovery(tmp_path) -> NikobusDiscovery:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("device_type_hex", ["05", "14", "24", "34", "3B", "46"])
+@pytest.mark.parametrize("device_type_hex", ["05", "3B", "46"])
 def test_reserved_device_types_are_catalogued(device_type_hex):
     """Types observed in the user-attachments log that remain
     unidentified carry Category=Reserved entries so the inventory
-    log line is readable. ``0x21`` was originally on this list but
-    was promoted to a real ``05-056 Push Button Interface`` entry
-    in 0.5.11 — it now lives in the Button-category section above."""
+    log line is readable.
+
+    History:
+    - ``0x21`` was originally on this list; promoted to ``05-056``
+      Push Button Interface in 0.5.11.
+    - ``0x14`` / ``0x24`` / ``0x34`` were originally on this list;
+      removed in 0.5.24 after the pre-Gen3 PC-Link forensic confirmed
+      they're firmware diagnostic-echo artifacts, not real device
+      types. Inventory frames containing them are now treated as
+      genuinely uncatalogued (which they are) — the WARNING that
+      results is correct, surfacing the malformed frame for
+      investigation rather than silently swallowing it as
+      "Reserved".
+    """
 
     entry = DEVICE_TYPES.get(device_type_hex)
     assert entry is not None, f"missing catalogue entry for 0x{device_type_hex}"
@@ -77,22 +88,43 @@ def test_reserved_device_types_are_catalogued(device_type_hex):
     assert entry.get("Name")
 
 
+@pytest.mark.parametrize("removed_type_hex", ["14", "24", "34"])
+def test_pre_gen3_echo_pattern_types_are_not_catalogued(removed_type_hex):
+    """0.5.24 regression guard.
+
+    ``0x14`` / ``0x24`` / ``0x34`` MUST NOT have catalogue entries.
+    Pre-Gen3 PC-Link firmware returns a ``[N, N+1, N+2, ..., N+15]``
+    diagnostic-echo pattern on unprogrammed registers; byte 7 of
+    that response (which our decoder reads as device-type) cycles
+    ``0x04, 0x14, 0x24, 0x34, ...`` per register. Only ``0x04`` is
+    a real device (05-342 push button). The others were
+    echo-pattern phantoms that we used to silence by adding them
+    to Reserved. The 2026-05-15 forensic confirmed this; the
+    entries are removed so future regressions (someone re-adding
+    them) trip this test.
+    """
+
+    assert removed_type_hex not in DEVICE_TYPES, (
+        f"0x{removed_type_hex} was removed from DEVICE_TYPES in 0.5.24 "
+        f"as a confirmed pre-Gen3 PC-Link diagnostic-echo artifact. "
+        f"Re-adding it would re-suppress the Unknown-device WARNING "
+        f"that surfaces the malformed frame and points users at the "
+        f"firmware-format mismatch."
+    )
+
+
 async def test_reserved_category_does_not_trigger_unknown_warning(tmp_path, caplog):
     """A type catalogued as Reserved must not log the "open an issue"
     WARNING — that's the whole point of the cataloguing step."""
 
     discovery = _make_discovery(tmp_path)
 
-    # Construct a minimal inventory frame whose device-type byte is 0x14.
-    # parse_inventory_response indexes payload_bytes[7] for the type; we
-    # build the rest with valid structure (header 3 bytes + 4 bytes
-    # padding + type at offset 7 + 4 bytes more + 3 bytes for the
-    # button-style address slice [11:14]).
     # Frame layout for parse_inventory_response: bytes [0-6] padding,
     # byte [7] device-type, bytes [8-10] padding, bytes [11-13] address
     # (Button-style 3-byte slice). Min frame length is 15 bytes; we pad
-    # to 16 for headroom.
-    payload_hex = "00" * 7 + "14" + "00" * 3 + "1A1918" + "00" * 2
+    # to 16 for headroom. Use 0x05 (still Reserved) — 0x14 used to be
+    # Reserved but was removed in 0.5.24 as an echo-pattern artifact.
+    payload_hex = "00" * 7 + "05" + "00" * 3 + "1A1918" + "00" * 2
 
     caplog.set_level(logging.WARNING, logger="nikobus_connect.discovery.discovery")
     await discovery.parse_inventory_response(payload_hex)
@@ -103,7 +135,7 @@ async def test_reserved_category_does_not_trigger_unknown_warning(tmp_path, capl
         if rec.levelno == logging.WARNING and "Unknown device detected" in rec.message
     ]
     assert unknown_warnings == [], (
-        f"Reserved type 0x14 should not trigger Unknown-device warning; "
+        f"Reserved type 0x05 should not trigger Unknown-device warning; "
         f"got {len(unknown_warnings)} warnings"
     )
 

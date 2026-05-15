@@ -1,5 +1,105 @@
 # Changelog
 
+## 0.5.24
+
+Catalogue housekeeping. Removes three Reserved entries from
+``DEVICE_TYPES`` that the 2026-05-15 pre-Gen3 PC-Link forensic
+confirmed are firmware diagnostic-echo artifacts, not real device
+types.
+
+### Removed
+
+- **``DEVICE_TYPES["14"]``** — Reserved 0x14
+- **``DEVICE_TYPES["24"]``** — Reserved 0x24
+- **``DEVICE_TYPES["34"]``** — Reserved 0x34
+
+### Why
+
+A user on a pre-Gen3 PC-Link (model 05-200, original RS232 hardware)
+ran discovery and the library fabricated a phantom button at
+``0A0908`` (type ``0x04``). The DEBUG log showed PC-Link's inventory
+response carrying this exact byte pattern across four consecutive
+register reads:
+
+```
+2E909E 000102030405060708090A0B0C0D0E0F 0A23CB
+2E909E 101112131415161718191A1B1C1D1E1F 4F720E
+2E909E 202122232425262728292A2B2C2D2E2F 808184
+2E909E 303132333435363738393A3B3C3D3E3F C5D0BA
+```
+
+Each register returns ``[N, N+1, N+2, ..., N+15]``. This is the
+firmware's "no inventory programmed" diagnostic response — a
+sequential identity placeholder that keeps the bus protocol sane
+when the flash has never been written. The same pattern was
+documented in 2026-05-04 from a different user's PC-Logic dump
+(80D9, full sweep returned this pattern across 248 of 256 reads).
+
+Our decoder reads byte 7 of each response as the device-type. With
+this echo pattern:
+
+| Register | Byte 7 | Decoded as |
+|----------|--------|------------|
+| `0xA0` | `0x04` | 05-342 Bus push button (real type, but by coincidence) |
+| `0xA1` | `0x14` | "Reserved 0x14" (echo artifact) |
+| `0xA2` | `0x24` | "Reserved 0x24" (echo artifact) |
+| `0xA3` | `0x34` | "Reserved 0x34" (echo artifact) |
+
+The Reserved entries for ``0x14`` / ``0x24`` / ``0x34`` had been
+in DEVICE_TYPES since 0.5.4 — originally added to silence the
+"Unknown device detected" warning that fired on installs with this
+exact pattern (which we now know are pre-Gen3 PC-Link diagnostic
+responses, not legitimate hardware). With the entries removed,
+the WARNING fires correctly, surfacing the malformed frame as the
+indicator it always was: not a known device type that needs
+cataloguing, but a firmware-format mismatch that needs a different
+fix path.
+
+### What stays
+
+- ``DEVICE_TYPES["05"]`` — kept. May or may not be a similar
+  artifact; insufficient evidence to remove yet.
+- ``DEVICE_TYPES["46"]`` — kept. Same reasoning.
+- ``DEVICE_TYPES["3B"]`` — kept. Explained separately as
+  PC-Logic BP-cell stride records (not a device type, but
+  intentionally catalogued to suppress the warning on installs
+  with PC-Logic 05-201).
+
+### What this does NOT fix
+
+The same user's Stage-2 module register scans (against output
+modules ``5E1D`` / ``59BC`` / ``A303`` / ``150B`` / ``5875``,
+all Gen2 ``-02`` revision) return data in an unrecognised format
+— mostly all-FF with sparse single non-FF bytes, fundamentally
+different from the Gen3-era 6-byte record format the library
+decodes. Auto-discovery of button-link records on pre-Gen3 / Gen2
+installs requires either:
+
+- A Niko PC software ``Read configuration`` trace from such an
+  install (which this user can't provide — no Windows PC), to
+  reverse-engineer the pre-Gen3 module storage layout.
+- An option in the integration to fall back to manual YAML
+  button declaration when auto-discovery yields nothing — the
+  v1 path that previously worked for this user.
+
+The next release will likely add the YAML fallback option so
+users on mixed-generation installs can configure manually
+alongside the auto-discovery path that works for Gen3 hardware.
+
+### Tests
+
+- ``test_reserved_device_types_are_catalogued`` parametrize set
+  reduced from 6 to 3 entries (only ``0x05``, ``0x3B``, ``0x46``
+  remain Reserved).
+- New: ``test_pre_gen3_echo_pattern_types_are_not_catalogued``
+  parametrized over the removed three — pins that re-adding them
+  would surface as a test failure, preventing accidental
+  regression.
+- ``test_reserved_category_does_not_trigger_unknown_warning``
+  updated to use ``0x05`` (still Reserved) instead of ``0x14``
+  (no longer Reserved).
+- 278/278 tests pass.
+
 ## 0.5.23
 
 Housekeeping pass after a codebase audit across the 0.5.0 → 0.5.22
