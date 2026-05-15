@@ -1,5 +1,40 @@
 # Changelog
 
+## 0.5.23
+
+Housekeeping pass after a codebase audit across the 0.5.0 → 0.5.22
+iteration cycle. The audit checked for dead code, unused imports,
+stale comments referencing removed features, and consolidation
+opportunities across the output-module decoders.
+
+### Removed
+
+- **Two unused imports in ``discovery.py``** —
+  ``EXPECTED_CHUNK_LEN`` (from ``dimmer_decoder``) and
+  ``CHANNEL_MAPPING`` (from ``mapping``). Leftover from earlier
+  refactor passes. No behaviour change.
+
+### Audit findings preserved as-is
+
+The audit also identified one larger opportunity that we chose
+NOT to take:
+
+- The three output-module decoders (``switch_decoder``,
+  ``dimmer_decoder``, ``shutter_decoder``) share ~60 lines of
+  near-identical validation scaffolding (all-FF guard, garbage
+  chunk guard, length check, mode-mapping lookup, button-canonical
+  gate, push-button resolution). A shared helper could DRY this
+  up, but the byte-offset differences per module type would push
+  most of the variation into the helper's parameter surface,
+  trading mechanical duplication for indirection. The three
+  decoders are stable, have been validated against multiple
+  installs, and are very straight-line readable as-is. Defer.
+
+All other audit categories (defensive ``# pragma: no cover``
+handlers, module-level constants in ``discovery.py``, test
+fixtures, stage-1/2 historical comments in the PC-Link / PC-Logic
+decoders) came back clean.
+
 ## 0.5.22
 
 Surfaces decoder scan-source provenance so HA-side reconciliation
