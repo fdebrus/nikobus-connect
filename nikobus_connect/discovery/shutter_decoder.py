@@ -10,11 +10,9 @@ from .mapping import ROLLER_MODE_MAPPING, ROLLER_TIMER_MAPPING
 from .protocol import (
     _format_channel,
     _is_all_ff,
-    _is_garbage_chunk,
     _safe_int,
     get_button_address,
     get_push_button_address,
-    is_known_button_canonical,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -33,14 +31,6 @@ def decode(payload_hex: str, raw_bytes: list[str], context) -> dict[str, Any] | 
     if _is_all_ff(payload_hex, 12):
         _LOGGER.debug(
             "Discovery skipped | type=roller module=%s reason=empty_slot payload=%s",
-            context.module_address,
-            payload_hex,
-        )
-        return None
-
-    if _is_garbage_chunk(payload_hex):
-        _LOGGER.debug(
-            "Discovery skipped | type=roller module=%s reason=garbage_chunk payload=%s",
             context.module_address,
             payload_hex,
         )
@@ -88,15 +78,6 @@ def decode(payload_hex: str, raw_bytes: list[str], context) -> dict[str, Any] | 
 
     button_address = get_button_address(payload_hex[-6:])
     coord_get_channels = getattr(context.coordinator, "get_button_channels", None)
-    if not is_known_button_canonical(button_address, coord_get_channels):
-        _LOGGER.debug(
-            "Discovery skipped | type=roller module=%s reason=unknown_button "
-            "payload=%s button_address=%s",
-            context.module_address,
-            payload_hex,
-            button_address,
-        )
-        return None
     push_button_address, normalized_button = get_push_button_address(
         key_raw,
         button_address,
