@@ -1,5 +1,90 @@
 # Changelog
 
+## 0.6.0
+
+Revert chunk decoding to the 0.8.0 (pre-rewrite) single-alignment
+walk. Drops the alternate-alignment dual-pass and the decoder-side
+``is_known_button_canonical`` / ``_is_garbage_chunk`` filters that
+were added to mop up the phantoms the dual-pass produced.
+
+### Background
+
+The 0.5.5..0.5.24 chunker ran every per-module scan against three
+alignments in parallel — primary (offset 0) plus alternates at
+stream offsets 4 and 8 — added to recover records from two real
+user captures (2026-04-30 and 2026-05-04) that appeared to live at
+non-zero offsets. The decoder gates were added to filter phantoms
+from the misaligned passes.
+
+Re-analysing the 2026-05-15 log (Gen3 user, install programmed
+via DIN-button learn mode without ever using Niko PC software)
+showed that:
+
+1. The Gen3 byte layout decodes the records on this install
+   correctly — at offset 0, with no firmware variation.
+2. The ``unknown_button`` skip-reason flood that drove the previous
+   "pre-Gen3 firmware has a different byte layout" hypothesis was
+   actually the inventory gate rejecting real records because the
+   PC-Link inventory was incomplete (the user programmed via DIN
+   buttons, so the PC-Link never wrote the buttons to its
+   ``0xA0..0xFF`` registry area).
+3. The alternate-alignment "productive offsets" finding from the
+   2026-05-04 capture appears to be byte-slop from misaligned
+   windows passing the shape checks rather than genuine firmware
+   variation.
+
+The 0.8.0 walk (``idx += expected_len``, single alignment, no
+phantom filters beyond ``_is_all_ff`` for empty slots) is the
+simpler model. Records pack contiguously from offset 0; the
+``payload_buffer`` threads partial records across frame boundaries;
+the decoders accept every chunk that passes shape checks
+(``mode`` in range, ``channel`` in range).
+
+### Changed
+
+- **``chunk_decoder.py``** — single-alignment walk only. Removed
+  ``_ALT_ALIGNMENT_SKIP_CHARS``, ``_alt_payload_buffers``, and the
+  alternate-alignment loop in ``analyze_frame_payload``.
+  ``reset_scan_buffers`` is now a no-op stub; subclasses
+  (``pc_link_decoder``, ``pc_logic_decoder``) keep their own
+  registry-clearing overrides via ``super()``.
+- **``switch_decoder.py`` / ``dimmer_decoder.py`` /
+  ``shutter_decoder.py``** — no longer call
+  ``_is_garbage_chunk`` or ``is_known_button_canonical``. Decoders
+  emit any chunk that passes ``_is_all_ff``, mode, and channel
+  checks. The helpers themselves remain in ``protocol.py`` for
+  external callers and the merge-layer 8-channel ``+1`` alias
+  consumer.
+
+### Removed
+
+- ``BaseChunkingDecoder._alt_payload_buffers`` and
+  ``_alt_first_frame_skip_pending`` state.
+- ``_ALT_ALIGNMENT_SKIP_CHARS`` module-level table.
+- Decoder-side calls to ``_is_garbage_chunk`` and
+  ``is_known_button_canonical``.
+- Four alt-alignment regression tests in
+  ``tests/test_chunk_buffering.py``.
+- Three decoder-side phantom-rejection tests in
+  ``tests/test_inventory_guard.py`` (the standalone
+  ``is_known_button_canonical`` unit tests and the
+  positive-decode tests remain).
+
+### What to expect
+
+- Installs whose modules answer at offset 0 (every Gen3 install
+  observed to date plus the 2026-04-30 install) → unchanged
+  behaviour.
+- Installs programmed via DIN-button learn mode (PC-Link inventory
+  incomplete or empty) → real button-link records now reach the
+  merge layer instead of being rejected as ``unknown_button``;
+  ~30-40 buttons per install surface where previously none did.
+- Installs whose records were reported at offset 4 / 8 → need
+  re-testing. If real records genuinely sit at those offsets on
+  that firmware (rather than being misalignment artefacts), this
+  revert regresses them. Capture from the affected install will
+  confirm or invalidate the previous finding.
+
 ## 0.5.24
 
 Catalogue housekeeping. Removes three Reserved entries from

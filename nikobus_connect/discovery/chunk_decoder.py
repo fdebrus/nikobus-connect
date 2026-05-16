@@ -1,4 +1,22 @@
-"""Chunk handling for switch and roller modules."""
+"""Chunk handling for switch, dimmer and roller modules.
+
+Pure offset-0 alignment, the 0.8.0 way: walk the buffered byte stream
+one full record at a time (``idx += expected_len``), carry any
+sub-record tail across frame boundaries via the caller-managed
+``payload_buffer``. Cross-frame splits are reassembled by the
+``payload_buffer + data_region`` concatenation in ``analyze_frame_payload``.
+
+The 0.5.5..0.5.24 lineage carried an additional "alternate alignment"
+pass per scan (skip 4, skip 8) to recover records that appeared to
+sit at non-zero stream offsets on some real-world captures. That
+path was reverted: the offsets-other-than-zero observations turned
+out to be byte-slop from misaligned windows passing the decoder's
+shape checks, not genuine firmware variation. The decoder's
+``is_known_button_canonical`` and ``_is_garbage_chunk`` filters were
+themselves added to mop up the phantoms that alternate-alignment
+produced; both are now bypassed in the decoders (the helpers remain
+in ``protocol.py`` for external callers and standalone unit tests).
+"""
 
 from __future__ import annotations
 
@@ -28,32 +46,6 @@ _CHUNK_LENGTHS = {
     "pc_logic": 32,
 }
 
-# Stream-start skips applied to alternate alignments for module types
-# whose firmware revisions place records at offsets the primary
-# (offset-0) alignment doesn't catch.
-#
-# Switch/roller (12-char chunks against 32-char register frames):
-# captures observed three distinct productive offsets across firmware
-# revisions —
-#   2026-04-30 install (4707 / 9105 / C9A5): records at offset 0
-#   2026-05-04 install pass A (29FA / B909 et al): records at offset 8
-#   2026-05-04 install pass B (B909 specifically, certain registers):
-#                                              records at offset 4
-# Rather than detect the firmware up front, we run *every* productive
-# alignment in parallel and let the decoder's ``unknown_button`` /
-# ``unknown_mode`` gates filter the alignments that produce phantoms.
-# The merge layer dedupes when multiple alignments lock onto the
-# same record. CPU cost is negligible (gates reject most chunks);
-# coverage is the union of all alignments.
-#
-# Dimmer (16-char chunks against 16-char frames): no alternate
-# alignment needed — the captured streams from every firmware
-# revision decode cleanly at offset 0.
-_ALT_ALIGNMENT_SKIP_CHARS: dict[str, tuple[int, ...]] = {
-    "switch_module": (4, 8),
-    "roller_module": (4, 8),
-}
-
 
 class BaseChunkingDecoder:
     module_type: str
@@ -63,12 +55,6 @@ class BaseChunkingDecoder:
         self.module_type = module_type
         self._module_address: str | None = None
         self._module_channel_count: int | None = None
-        skips = _ALT_ALIGNMENT_SKIP_CHARS.get(module_type, ())
-        # Per-skip running state: one buffered alignment per skip value.
-        self._alt_payload_buffers: dict[int, str] = {s: "" for s in skips}
-        self._alt_first_frame_skip_pending: dict[int, int] = {
-            s: s for s in skips
-        }
 
     def can_handle(self, module_type: str) -> bool:
         return module_type == self.module_type
@@ -80,16 +66,17 @@ class BaseChunkingDecoder:
         self._module_channel_count = module_channel_count
 
     def reset_scan_buffers(self) -> None:
-        """Clear per-scan alternate-alignment state.
+        """Hook called by the discovery loop at every scan boundary.
 
-        Discovery owns the *primary* ``_payload_buffer`` and resets
-        it itself between scans. The alternate buffers live on the
-        decoder and the discovery loop calls this at every scan
-        boundary so the alt-alignment skip-pending counters rearm.
+        The base chunker holds no per-scan state of its own — records
+        pack contiguously across frames and any partial chunk is
+        returned to the caller via the ``remainder`` field for the
+        caller to thread back as ``payload_buffer`` on the next
+        ``analyze_frame_payload`` call. Subclasses (``pc_link_decoder``,
+        ``pc_logic_decoder``) override this to clear their own
+        per-scan state (registry buffers, etc.) and chain back to
+        this no-op via ``super().reset_scan_buffers()``.
         """
-        skips = _ALT_ALIGNMENT_SKIP_CHARS.get(self.module_type, ())
-        self._alt_payload_buffers = {s: "" for s in skips}
-        self._alt_first_frame_skip_pending = {s: s for s in skips}
 
     def analyze_frame_payload(self, payload_buffer: str, payload_and_crc: str) -> dict[str, Any] | None:
         payload_and_crc = payload_and_crc.upper()
@@ -103,49 +90,18 @@ class BaseChunkingDecoder:
 
         data_region = payload_and_crc[: len(payload_and_crc) - _CRC_LEN]
         trailing_crc = payload_and_crc[len(payload_and_crc) - _CRC_LEN :]
+        combined_payload = (payload_buffer + data_region).upper()
 
         expected_len = _CHUNK_LENGTHS.get(self.module_type)
         chunks: list[str] = []
         remainder = ""
 
         if expected_len:
-            # Primary buffered alignment (the historic 0.2.1 path).
-            # Records pack contiguously across register frames starting
-            # at stream offset 0 on firmware revisions that don't
-            # prepend a response header. Also exercised by the
-            # synthetic-fragmentation tests in
-            # ``tests/test_chunk_buffering.py``.
-            combined_payload = (payload_buffer + data_region).upper()
             idx = 0
             while idx + expected_len <= len(combined_payload):
                 chunks.append(combined_payload[idx : idx + expected_len])
                 idx += expected_len
             remainder = combined_payload[idx:]
-
-            # Alternate buffered alignments, one per skip in
-            # ``_ALT_ALIGNMENT_SKIP_CHARS[module_type]``. Records on
-            # firmware revisions that prepend an N-byte response
-            # header (or place records at offset N from the stream
-            # start for some other reason) get caught at the matching
-            # alt alignment. The decoder gates filter alignments that
-            # produce phantoms on a given firmware; the merge layer
-            # dedupes when multiple alignments lock onto the same
-            # record.
-            for skip in _ALT_ALIGNMENT_SKIP_CHARS.get(self.module_type, ()):
-                alt_data = data_region
-                pending = self._alt_first_frame_skip_pending.get(skip, 0)
-                if pending > 0:
-                    drop = min(pending, len(alt_data))
-                    alt_data = alt_data[drop:]
-                    self._alt_first_frame_skip_pending[skip] = pending - drop
-                combined_alt = (
-                    self._alt_payload_buffers.get(skip, "") + alt_data
-                ).upper()
-                idx = 0
-                while idx + expected_len <= len(combined_alt):
-                    chunks.append(combined_alt[idx : idx + expected_len])
-                    idx += expected_len
-                self._alt_payload_buffers[skip] = combined_alt[idx:]
 
         return {
             "crc": trailing_crc,
