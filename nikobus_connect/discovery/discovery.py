@@ -26,7 +26,12 @@ from .mapping import (
     KEY_MAPPING_MODULE,
     get_module_type_from_device_type,
 )
-from .protocol import classify_device_type, convert_nikobus_address, reverse_hex
+from .protocol import (
+    classify_device_type,
+    convert_nikobus_address,
+    derive_pc_logic_input_physicals,
+    reverse_hex,
+)
 from ..const import (
     COMMAND_EXECUTION_DELAY,
     DEVICE_ADDRESS_INVENTORY,
@@ -1095,6 +1100,95 @@ class NikobusDiscovery:
 
         await self._complete_discovery_run(resolved_address)
 
+    # Marker string that flags a synthesized PC-Logic input in
+    # ``discovered_devices`` and in the button store's ``type`` field.
+    # HA-side display code keys off this prefix to render the
+    # device as ``LM-INPUT N`` parented under the PC-Logic module
+    # instead of using the generic wall-button category.
+    PC_LOGIC_INPUT_TYPE: str = "PC-Logic Logical Input"
+    PC_LOGIC_INPUT_MODEL: str = "05-201-LM"
+
+    def _synthesize_pc_logic_inputs(self) -> None:
+        """Add virtual-button entries for each PC-Logic module's inputs.
+
+        Iterates ``self.discovered_devices`` for ``pc_logic`` modules and,
+        for each one, computes the bus addresses its logical inputs will
+        emit (via ``derive_pc_logic_input_physicals``). Each input
+        becomes a 2-channel ``category="Button"`` entry — the standard
+        merge layer then writes it into the button store with one
+        operation point per key (1A primary, 1B 8-channel-style +1
+        alias), exactly like a wall button.
+
+        Idempotent: re-running merges into existing entries cleanly via
+        ``merge_discovered_buttons``'s upsert semantics.
+        """
+
+        new_entries: dict[str, dict] = {}
+        for module_addr, device in self.discovered_devices.items():
+            if not isinstance(device, dict):
+                continue
+            if device.get("module_type") != "pc_logic":
+                continue
+            channels_count = int(device.get("channels_count") or 0)
+            if channels_count <= 0:
+                # Catalogue should always provide 6 for 05-201; defend
+                # against a future PC-Logic variant with zero channels.
+                continue
+            try:
+                input_physicals = derive_pc_logic_input_physicals(
+                    module_addr, channels_count
+                )
+            except ValueError as err:
+                _LOGGER.warning(
+                    "Could not derive PC-Logic inputs for %s (%s); "
+                    "logical inputs will not be surfaced for this module.",
+                    module_addr,
+                    err,
+                )
+                continue
+
+            for slot_index, input_phys in enumerate(input_physicals, start=1):
+                if input_phys in self.discovered_devices:
+                    # Real button already discovered at this address —
+                    # don't shadow it. Vanishingly unlikely in practice
+                    # (the PC-Logic-derived range is firmware-reserved)
+                    # but guard anyway.
+                    _LOGGER.debug(
+                        "PC-Logic input slot %d address %s already in "
+                        "inventory — skipping synthesis",
+                        slot_index,
+                        input_phys,
+                    )
+                    continue
+                new_entries[input_phys] = {
+                    "description": self.PC_LOGIC_INPUT_TYPE,
+                    "discovered_name": self.PC_LOGIC_INPUT_TYPE,
+                    "category": "Button",
+                    "device_type": "LM",  # synthetic marker, not a real DEVICE_TYPES byte
+                    "model": self.PC_LOGIC_INPUT_MODEL,
+                    "address": input_phys,
+                    "channels": 2,
+                    "channels_count": 2,
+                    "module_type": "other_module",
+                    "discovered": True,
+                    # Provenance tag the HA-side renderer keys off to
+                    # parent the synthesized device under the
+                    # PC-Logic module (instead of the wall-buttons
+                    # category device) and to render the friendly
+                    # ``LM-INPUT N`` name.
+                    "pc_logic_parent_address": module_addr,
+                    "pc_logic_slot_index": slot_index,
+                }
+                _LOGGER.info(
+                    "Synthesized PC-Logic input | parent=%s slot=%d "
+                    "address=%s",
+                    module_addr,
+                    slot_index,
+                    input_phys,
+                )
+
+        self.discovered_devices.update(new_entries)
+
     async def _finalize_inventory_phase(self) -> None:
         """Finalize the PC-Link inventory phase."""
         self._cancel_inventory_timeout()
@@ -1113,6 +1207,17 @@ class NikobusDiscovery:
             else:
                 _LOGGER.debug("No pending inventory addresses. Moving directly to Stage 2.")
                 self.discovery_stage = "inventory_identity"
+
+        # Stage 1.6: synthesise PC-Logic logical-input "virtual buttons".
+        # PC-Logic doesn't enumerate its inputs in PC-Link's $1011
+        # inventory frames — the input bus addresses are computed by
+        # firmware from the PC-Logic's own module address (see
+        # ``derive_pc_logic_input_physicals`` in protocol.py for the
+        # formula). Add them to ``discovered_devices`` as
+        # ``category="Button"`` entries so the regular merge layer
+        # writes them into the button store as 2-channel virtual
+        # buttons, parented under the PC-Logic module.
+        self._synthesize_pc_logic_inputs()
 
         # Stage 2: inventory complete -> persist results
         _LOGGER.debug("Starting updates for module and button data.")

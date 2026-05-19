@@ -568,6 +568,14 @@ def merge_discovered_buttons(
         phys_entry["type"] = description or phys_entry.get("type") or ""
         phys_entry["model"] = model or phys_entry.get("model") or ""
         phys_entry["channels"] = num_channels or phys_entry.get("channels")
+        # Carry through PC-Logic provenance fields when present —
+        # synthesized PC-Logic logical-input entries set
+        # ``pc_logic_parent_address`` + ``pc_logic_slot_index`` so the
+        # HA-side renderer can parent the device under the PC-Logic
+        # module and label it ``LM-INPUT N``.
+        for provenance_key in ("pc_logic_parent_address", "pc_logic_slot_index"):
+            if provenance_key in device:
+                phys_entry[provenance_key] = device[provenance_key]
         # Only (re)generate the description when none exists or the stored
         # one is still the auto-generated form — never overwrite a custom
         # name a user may have set downstream.
