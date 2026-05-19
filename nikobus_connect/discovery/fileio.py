@@ -236,8 +236,19 @@ def merge_discovered_modules(module_data, discovered_devices):
         modules = {}
         module_data["nikobus_module"] = modules
 
+    # Module types whose "channels" are bus-event sources (inputs into
+    # the bus), not output loads. PC-Logic exposes 6 logical inputs that
+    # feed its programming engine; the 05-206 modular interface
+    # ("Modular interface, 6 inputs") exposes 6 wired inputs. Their
+    # placeholder descriptions read better as ``input_N`` than the
+    # generic ``output_N`` used for switch / dimmer / roller modules.
+    _INPUT_MODULE_TYPES: frozenset[str] = frozenset(
+        {"pc_logic", "interface_module"}
+    )
+
     def _default_channel(module_type: str, index: int) -> dict:
-        channel = {"description": f"not_in_use output_{index}"}
+        label = "input" if module_type in _INPUT_MODULE_TYPES else "output"
+        channel = {"description": f"not_in_use {label}_{index}"}
         if module_type == "roller_module":
             channel["operation_time_up"] = "30"
         return channel
@@ -251,15 +262,30 @@ def merge_discovered_modules(module_data, discovered_devices):
         appends defaults for any index beyond the current length. Never
         shrinks — if discovery reports fewer channels than the store
         has, extras stay (safer than dropping user data).
+
+        Auto-generated ``not_in_use output_N`` placeholders on
+        input-class modules (pc_logic, interface_module) are normalised
+        to ``not_in_use input_N`` on every pass — those strings are
+        library-allocated defaults, never user-written, so rewriting
+        them is safe.
         """
 
         if channels_count <= 0:
             return list(existing) if isinstance(existing, list) else []
         out: list[dict] = []
         source = existing if isinstance(existing, list) else []
+        is_input = module_type in _INPUT_MODULE_TYPES
         for idx in range(max(channels_count, len(source))):
             if idx < len(source) and isinstance(source[idx], dict):
-                out.append(source[idx])
+                channel = source[idx]
+                if is_input:
+                    desc = channel.get("description", "")
+                    if desc.startswith("not_in_use output_"):
+                        channel = dict(channel)
+                        channel["description"] = "not_in_use input_" + desc[
+                            len("not_in_use output_") :
+                        ]
+                out.append(channel)
             else:
                 out.append(_default_channel(module_type, idx + 1))
         return out
