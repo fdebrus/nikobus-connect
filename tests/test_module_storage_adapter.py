@@ -354,3 +354,91 @@ def test_discovery_without_module_data_skips_module_persistence(
 
     # No module file written; no exception raised.
     assert not any("nikobus_module_config.json" in p for p in opened)
+
+
+# --- pc_logic is channelless --------------------------------------------
+
+
+def _pc_logic_device(address: str = "940C") -> dict:
+    return {
+        "address": address,
+        "category": "Module",
+        "description": "PC-Logic",
+        "discovered_name": "PC-Logic",
+        "device_type": "08",
+        "model": "05-201",
+        "module_type": "pc_logic",
+        "channels": 6,
+        "channels_count": 6,
+    }
+
+
+def test_pc_logic_module_has_no_channels_in_store():
+    """The PC-Logic module's 6 logical inputs are surfaced as synthesized
+    button-store entries (one ``LM-INPUT N`` per input), so the module
+    entry itself must not duplicate them as a ``channels`` array."""
+
+    store: dict = {"nikobus_module": {}}
+    discovered = {"940C": _pc_logic_device()}
+
+    merge_discovered_modules(store, discovered)
+
+    entry = store["nikobus_module"]["940C"]
+    assert "channels" not in entry
+    # Discovered-info still carries the channel count for provenance.
+    assert entry["discovered_info"]["channels_count"] == 6
+
+
+def test_pc_logic_existing_channels_stripped_on_remerge():
+    """If an older store carries a legacy ``channels`` array on a
+    pc_logic entry, re-merging must drop it — the synthesized
+    button-store entries are the source of truth."""
+
+    store: dict = {
+        "nikobus_module": {
+            "940C": {
+                "module_type": "pc_logic",
+                "description": "PC-Logic",
+                "model": "05-201",
+                "channels": [
+                    {"description": "not_in_use input_1"},
+                    {"description": "Renamed input"},
+                ],
+                "discovered_info": {
+                    "name": "PC-Logic",
+                    "device_type": "08",
+                    "channels_count": 6,
+                },
+            }
+        }
+    }
+    discovered = {"940C": _pc_logic_device()}
+
+    merge_discovered_modules(store, discovered)
+
+    assert "channels" not in store["nikobus_module"]["940C"]
+
+
+def test_interface_module_keeps_channels():
+    """05-206 modular interface has no synthesis path yet — its
+    channels array must still be populated on merge."""
+
+    store: dict = {"nikobus_module": {}}
+    discovered = {
+        "1234": {
+            "address": "1234",
+            "category": "Module",
+            "description": "Modular interface",
+            "device_type": "07",
+            "model": "05-206",
+            "module_type": "interface_module",
+            "channels": 6,
+            "channels_count": 6,
+        }
+    }
+
+    merge_discovered_modules(store, discovered)
+
+    entry = store["nikobus_module"]["1234"]
+    assert isinstance(entry.get("channels"), list)
+    assert len(entry["channels"]) == 6

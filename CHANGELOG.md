@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.9.0
+
+Drop the redundant ``channels`` array from PC-Logic module entries
+in the module store. With 0.8.0's synthesis path, each of the 6
+logical inputs is surfaced as its own button-store entry (one
+``LM-INPUT N`` device under the PC-Logic module), so the module
+record's own per-channel placeholders were duplicating those entries
+without driving any entity.
+
+### Changed
+
+- **``merge_discovered_modules``** no longer writes a ``channels``
+  array for ``pc_logic`` modules. Existing pc_logic entries in the
+  store have their ``channels`` array stripped on next merge.
+- The 05-201 ``model`` field on synthesized inputs replaces the
+  invented ``05-201-LM`` (released in 0.8.0 → 0.8.1) — the
+  ``LM-INPUT N`` device name already disambiguates them from the
+  parent PC-Logic module.
+
+### Unchanged
+
+- ``interface_module`` (05-206) still carries its ``channels``
+  array — it has no synthesis path yet.
+- ``discovered_info.channels_count`` is preserved on pc_logic
+  entries for provenance.
+
 ## 0.8.0
 
 Surface PC-Logic (05-201) logical inputs as virtual button entries.
