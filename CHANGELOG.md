@@ -1,5 +1,65 @@
 # Changelog
 
+## 0.8.0
+
+Surface PC-Logic (05-201) logical inputs as virtual button entries.
+PC-Logic's 6 logical inputs emit bus events when triggered (from
+hardware buttons or from PC-Logic's own programming), but the
+addresses they emit are **not stored** in any flash region the
+discovery sweep reaches — they are computed by firmware from the
+PC-Logic's own bus address. Validated on the 2026-05-18 install
+(PC-Logic at ``940C`` → inputs fire as ``64A061..64A066``,
+producing 12 bus events when all 6 are triggered).
+
+### Added
+
+- **``derive_pc_logic_input_physicals(pc_logic_address,
+  channel_count)``** in ``protocol.py`` — returns the list of
+  6-hex physical addresses for a PC-Logic module's logical inputs.
+  Formula: ``((byteswap(addr) * 8) << 8) | (0x60 + slot)`` for
+  slot index 1..N.
+- **``pc_logic_address_for_input(input_physical)``** — inverse of
+  the above, returns the parent PC-Logic address (or ``None`` if
+  the input physical doesn't fit the pattern).
+- **``pc_logic_input_slot_index(input_physical)``** — returns the
+  slot number 1..N for a given input physical.
+- **``NikobusDiscovery._synthesize_pc_logic_inputs``** — invoked
+  at the end of Stage 1 inventory enumeration. For each
+  ``pc_logic`` module in ``discovered_devices``, adds
+  ``category="Button"`` entries for its derived input physicals,
+  tagged with ``pc_logic_parent_address`` and
+  ``pc_logic_slot_index`` provenance fields. The regular
+  ``merge_discovered_buttons`` path then writes these into the
+  button store as 2-channel virtual buttons.
+- **Provenance pass-through in ``merge_discovered_buttons``** —
+  the two ``pc_logic_*`` fields survive the merge so HA-side
+  rendering can parent the device under the PC-Logic module
+  instead of the wall-buttons category.
+
+### Compatibility
+
+- **Production unchanged** for installs without a PC-Logic module
+  in inventory (the synthesis loop short-circuits when no
+  ``pc_logic`` entry exists).
+- **No protocol change.** The synthesis is pure local math
+  against addresses already in ``discovered_devices``.
+
+### Known limits
+
+- The formula has only been validated on **one PC-Logic address**
+  (``940C``). The derivation refuses (raises ``ValueError``) when
+  ``byteswap(addr) * 8`` would overflow 16 bits — e.g. addresses
+  with byteswap ≥ ``0x2000``. If a future install reports a
+  PC-Logic outside the validated range, the synthesis will skip
+  that module with a warning rather than emit incorrect addresses.
+  Capture a fresh bus-event log + module address from such an
+  install to extend the formula.
+- The synthesis assumes the **slot byte starts at ``0x60 + slot``**.
+  If a future install allocates slots from a different base (e.g.
+  ``0x70..`` or per-PC-Logic-instance bases), the formula needs
+  the per-install offset to be discoverable. No evidence of this
+  yet — current data is consistent with a universal ``0x60`` base.
+
 ## 0.7.0
 
 Forensic register-range mode on ``query_module_inventory``. Lets the
