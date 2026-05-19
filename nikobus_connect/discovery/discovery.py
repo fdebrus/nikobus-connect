@@ -1106,7 +1106,7 @@ class NikobusDiscovery:
     # device as ``LM-INPUT N`` parented under the PC-Logic module
     # instead of using the generic wall-button category.
     PC_LOGIC_INPUT_TYPE: str = "PC-Logic Logical Input"
-    PC_LOGIC_INPUT_MODEL: str = "05-201-LM"
+    PC_LOGIC_INPUT_MODEL: str = "05-201"
 
     def _synthesize_pc_logic_inputs(self) -> None:
         """Add virtual-button entries for each PC-Logic module's inputs.
