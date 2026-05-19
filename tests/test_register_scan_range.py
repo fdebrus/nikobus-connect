@@ -433,3 +433,195 @@ async def test_switch_scan_two_pass_total_is_tuned_not_full_sweep(tmp_path):
     # Sanity bound: still well under a full 256-per-pass sweep.
     total_regs = sum(len(c["command_range"]) for c in calls)
     assert total_regs < 256
+
+
+# ---------------------------------------------------------------------------
+# Forensic mode: caller-supplied register_start / register_end / sub_byte
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_forensic_mode_uses_caller_supplied_range(tmp_path):
+    """When register_start + register_end are provided, the scan walks
+    exactly that range with the given sub_byte and skips extra passes."""
+
+    coord = _make_coordinator()
+    discovery = NikobusDiscovery(
+        coord,
+        config_dir=str(tmp_path),
+        create_task=_drop_coro,
+        button_data={"nikobus_button": {}},
+        on_button_save=None,
+    )
+
+    discovery.discovered_devices = {
+        "4707": {
+            "address": "4707",
+            "category": "Module",
+            "model": "05-000-02",
+            "channels": 12,
+            "device_type": "01",
+        }
+    }
+    discovery._is_known_module_address = MagicMock(return_value=True)
+    discovery._resolve_module_type = MagicMock(return_value="switch_module")
+
+    calls, fake_scan = _capture_scan_calls()
+    discovery._scan_module_registers = fake_scan
+    discovery._finalize_discovery = AsyncMock()
+
+    await discovery.query_module_inventory(
+        "4707",
+        register_start=0x70,
+        register_end=0x83,
+        sub_byte="01",
+    )
+
+    # Single pass — extra-pass logic must be skipped in forensic mode.
+    assert len(calls) == 1
+    call = calls[0]
+    assert call["sub_byte"] == "01"
+    assert call["command_range"].start == 0x70
+    assert call["command_range"].stop == 0x84  # 0x83 + 1
+
+
+@pytest.mark.asyncio
+async def test_forensic_mode_bypasses_non_output_module_guard(tmp_path):
+    """A module type the production path declines (e.g. interface_module)
+    is still scanned when the caller provides an explicit range — the
+    whole point of forensic mode."""
+
+    coord = _make_coordinator()
+    discovery = NikobusDiscovery(
+        coord,
+        config_dir=str(tmp_path),
+        create_task=_drop_coro,
+        button_data={"nikobus_button": {}},
+        on_button_save=None,
+    )
+
+    discovery.discovered_devices = {
+        "1234": {
+            "address": "1234",
+            "category": "Module",
+            "model": "05-206",
+            "channels": 6,
+            "device_type": "37",
+        }
+    }
+    discovery._is_known_module_address = MagicMock(return_value=True)
+    discovery._resolve_module_type = MagicMock(return_value="interface_module")
+
+    calls, fake_scan = _capture_scan_calls()
+    discovery._scan_module_registers = fake_scan
+    discovery._finalize_discovery = AsyncMock()
+
+    await discovery.query_module_inventory(
+        "1234",
+        register_start=0x00,
+        register_end=0x0F,
+        sub_byte="04",
+    )
+
+    # Production path would have skipped this module type entirely;
+    # forensic mode must scan.
+    assert len(calls) == 1
+    assert calls[0]["command_range"].start == 0x00
+    assert calls[0]["command_range"].stop == 0x10
+
+
+@pytest.mark.asyncio
+async def test_forensic_mode_defaults_sub_byte_to_04(tmp_path):
+    """sub_byte is optional in forensic mode and defaults to '04' when omitted."""
+
+    coord = _make_coordinator()
+    discovery = NikobusDiscovery(
+        coord,
+        config_dir=str(tmp_path),
+        create_task=_drop_coro,
+        button_data={"nikobus_button": {}},
+        on_button_save=None,
+    )
+
+    discovery.discovered_devices = {
+        "4707": {
+            "address": "4707",
+            "category": "Module",
+            "model": "05-000-02",
+            "channels": 12,
+            "device_type": "01",
+        }
+    }
+    discovery._is_known_module_address = MagicMock(return_value=True)
+    discovery._resolve_module_type = MagicMock(return_value="switch_module")
+
+    calls, fake_scan = _capture_scan_calls()
+    discovery._scan_module_registers = fake_scan
+    discovery._finalize_discovery = AsyncMock()
+
+    await discovery.query_module_inventory(
+        "4707",
+        register_start=0x10,
+        register_end=0x1F,
+    )
+
+    assert len(calls) == 1
+    assert calls[0]["sub_byte"] == "04"
+
+
+@pytest.mark.asyncio
+async def test_forensic_mode_rejects_partial_range(tmp_path):
+    """Supplying only one of register_start / register_end is a hard error."""
+
+    coord = _make_coordinator()
+    discovery = NikobusDiscovery(
+        coord,
+        config_dir=str(tmp_path),
+        create_task=_drop_coro,
+        button_data={"nikobus_button": {}},
+        on_button_save=None,
+    )
+
+    with pytest.raises(ValueError, match="both"):
+        await discovery.query_module_inventory("4707", register_start=0x10)
+
+    with pytest.raises(ValueError, match="both"):
+        await discovery.query_module_inventory("4707", register_end=0x10)
+
+
+@pytest.mark.asyncio
+async def test_forensic_mode_rejects_inverted_range(tmp_path):
+    """register_end must be >= register_start."""
+
+    coord = _make_coordinator()
+    discovery = NikobusDiscovery(
+        coord,
+        config_dir=str(tmp_path),
+        create_task=_drop_coro,
+        button_data={"nikobus_button": {}},
+        on_button_save=None,
+    )
+
+    with pytest.raises(ValueError, match=">="):
+        await discovery.query_module_inventory(
+            "4707", register_start=0x40, register_end=0x10
+        )
+
+
+@pytest.mark.asyncio
+async def test_forensic_mode_rejects_with_all_mode(tmp_path):
+    """register range overrides require a specific module — ALL mode rejects them."""
+
+    coord = _make_coordinator()
+    discovery = NikobusDiscovery(
+        coord,
+        config_dir=str(tmp_path),
+        create_task=_drop_coro,
+        button_data={"nikobus_button": {}},
+        on_button_save=None,
+    )
+
+    with pytest.raises(ValueError, match="ALL mode"):
+        await discovery.query_module_inventory(
+            "ALL", register_start=0x10, register_end=0x20
+        )

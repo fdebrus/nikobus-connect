@@ -1,5 +1,50 @@
 # Changelog
 
+## 0.7.0
+
+Forensic register-range mode on ``query_module_inventory``. Lets the
+caller scan a caller-supplied register range with a caller-supplied
+sub-byte on any module address, bypassing the per-module-type
+tuning (``_scan_range_for_sub``) and the non-output-module
+early-return guard. Use it to reverse-engineer storage layouts of
+modules the production path declines (interface modules, audio
+modules) or to focus a scan on a specific region of a module that
+production already scans (e.g. inspect ``0x70..0x83`` of PC-Logic
+on sub-byte ``01`` to look for the BP-cell layout a vendor trace
+revealed).
+
+### Added
+
+- **``query_module_inventory(device_address, *, register_start,
+  register_end, sub_byte)``** — three new optional keyword
+  arguments. When ``register_start`` and ``register_end`` are both
+  provided, the scan walks exactly that range with the given
+  ``sub_byte`` (default ``"04"``), skips the extra-pass logic, and
+  bypasses the non-output-module guard. Both range bounds are
+  required together; an inverted range, an out-of-bounds value, or
+  using forensic mode together with ``device_address="ALL"`` raises
+  ``ValueError``.
+
+### Compatibility
+
+- **Production path unchanged.** Existing callers that omit the new
+  kwargs see exactly the same behaviour as 0.6.0: per-module-type
+  range tuning, extra passes, non-output-module guard.
+- **No protocol change.** The forensic mode reuses the same
+  ``$1410 <addr> <reg> <sub>`` reads the production path uses; only
+  the range and the per-module guard differ.
+
+### Why this matters
+
+Reverse-engineering Nikobus's PC-Logic output storage required
+scanning register ranges the production code doesn't normally
+touch. Calling the internal ``_scan_module_registers`` helper
+directly worked but wasn't a stable surface. This API surfaces the
+forensic capability as a documented parameter set, used in the
+Nikobus-HA integration by the ``nikobus.query_module_inventory``
+service action (which gains matching ``register_start`` /
+``register_end`` / ``sub_byte`` fields in the same release cycle).
+
 ## 0.6.0
 
 Revert chunk decoding to the 0.8.0 (pre-rewrite) single-alignment
