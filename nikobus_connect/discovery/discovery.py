@@ -1622,8 +1622,64 @@ class NikobusDiscovery:
             source,
         )
 
-    async def query_module_inventory(self, device_address, *, from_queue: bool = False):
+    async def query_module_inventory(
+        self,
+        device_address,
+        *,
+        from_queue: bool = False,
+        register_start: int | None = None,
+        register_end: int | None = None,
+        sub_byte: str | None = None,
+    ):
+        """Scan a module's register space.
+
+        Production mode (no range params): pick the per-module-type
+        register range from ``_scan_range_for_sub`` and run the
+        configured extra passes from ``_EXTRA_SCAN_SUBS_BY_MODULE_TYPE``.
+        Non-output module types (``feedback_module``, ``other_module``,
+        ``interface_module``, ``audio_module``) early-return without
+        scanning.
+
+        Forensic mode (``register_start`` and ``register_end`` both
+        provided): scan **only** the specified range with the given
+        ``sub_byte`` (default ``"04"``). Skip the extra-pass logic and
+        bypass the non-output-module guard so any module — including
+        ones the production path declines to scan — can be inspected.
+        Useful for reverse-engineering storage layouts: e.g.
+        ``register_start=0x70, register_end=0x83, sub_byte="01"``
+        targets the BP-cell region a vendor trace revealed.
+        """
+
+        if register_start is None and register_end is None:
+            custom_range_mode = False
+        elif register_start is None or register_end is None:
+            raise ValueError(
+                "query_module_inventory: register_start and register_end "
+                "must both be provided (or both omitted)"
+            )
+        else:
+            if not (0 <= register_start <= 0xFF):
+                raise ValueError(
+                    f"register_start 0x{register_start:X} out of range 0x00..0xFF"
+                )
+            if not (0 <= register_end <= 0xFF):
+                raise ValueError(
+                    f"register_end 0x{register_end:X} out of range 0x00..0xFF"
+                )
+            if register_end < register_start:
+                raise ValueError(
+                    f"register_end (0x{register_end:X}) must be >= "
+                    f"register_start (0x{register_start:X})"
+                )
+            custom_range_mode = True
+
         if isinstance(device_address, str) and device_address.strip().upper() == "ALL":
+            if custom_range_mode or sub_byte is not None:
+                raise ValueError(
+                    "query_module_inventory: register range / sub_byte "
+                    "overrides are not compatible with ALL mode; supply "
+                    "a specific module address"
+                )
             all_addresses = []
             dict_data = getattr(self._coordinator, "dict_module_data", {})
             for module_type, modules in dict_data.items():
@@ -1710,6 +1766,30 @@ class NikobusDiscovery:
             command_range = None
         else:
             command_range = range(0xA4, 0x100)
+
+        # Forensic mode: user supplied an explicit register range.
+        # Bypass the per-module-type tuning and the non-output-module
+        # guard, scan exactly the range they asked for, and stop.
+        if custom_range_mode:
+            effective_sub = (sub_byte or "04").upper()
+            forensic_range = range(register_start, register_end + 1)
+            _LOGGER.info(
+                "Forensic register scan | module=%s function=%s sub=%s "
+                "range=0x%02X..0x%02X (custom range mode — extra passes skipped)",
+                normalized_address,
+                base_command[:2],
+                effective_sub,
+                forensic_range.start,
+                forensic_range.stop - 1,
+            )
+            await self._scan_module_registers(
+                normalized_address,
+                base_command,
+                forensic_range,
+                sub_byte=effective_sub,
+            )
+            await self._finalize_discovery(normalized_address)
+            return
 
         if not is_output_module:
             _LOGGER.debug(
