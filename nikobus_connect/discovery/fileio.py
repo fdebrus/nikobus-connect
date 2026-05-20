@@ -247,12 +247,14 @@ def merge_discovered_modules(module_data, discovered_devices):
     )
 
     # Module types that don't carry a ``channels`` array in the module
-    # store at all. PC-Logic's 6 logical inputs are now surfaced through
-    # the synthesized button-store entries (one per input, parented under
-    # the PC-Logic module), so the module's own ``channels`` field is
-    # redundant. Other modules — including the 05-206 modular interface,
-    # which has no synthesis path yet — still carry channels.
-    _CHANNELLESS_MODULE_TYPES: frozenset[str] = frozenset({"pc_logic"})
+    # store at all. Both PC-Logic (05-201) and Modular Interface (05-206)
+    # have their 6 inputs surfaced through synthesised button-store
+    # entries (one ``LM-INPUT N`` device per input, parented under the
+    # owning module), so the module record's own ``channels`` field is
+    # redundant for both.
+    _CHANNELLESS_MODULE_TYPES: frozenset[str] = frozenset(
+        {"pc_logic", "interface_module"}
+    )
 
     def _default_channel(module_type: str, index: int) -> dict:
         label = "input" if module_type in _INPUT_MODULE_TYPES else "output"
@@ -596,7 +598,11 @@ def merge_discovered_buttons(
         # ``pc_logic_parent_address`` + ``pc_logic_slot_index`` so the
         # HA-side renderer can parent the device under the PC-Logic
         # module and label it ``LM-INPUT N``.
-        for provenance_key in ("pc_logic_parent_address", "pc_logic_slot_index"):
+        for provenance_key in (
+            "pc_logic_parent_address",
+            "pc_logic_parent_type",
+            "pc_logic_slot_index",
+        ):
             if provenance_key in device:
                 phys_entry[provenance_key] = device[provenance_key]
         # Only (re)generate the description when none exists or the stored

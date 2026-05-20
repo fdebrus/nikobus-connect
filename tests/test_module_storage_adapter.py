@@ -419,14 +419,16 @@ def test_pc_logic_existing_channels_stripped_on_remerge():
     assert "channels" not in store["nikobus_module"]["940C"]
 
 
-def test_interface_module_keeps_channels():
-    """05-206 modular interface has no synthesis path yet — its
-    channels array must still be populated on merge."""
+def test_interface_module_has_no_channels_in_store():
+    """05-206 modular interface inputs are now surfaced through
+    synthesised button-store entries (one LM-INPUT N per input),
+    so the module record itself must not carry a redundant
+    ``channels`` array — same treatment as pc_logic."""
 
     store: dict = {"nikobus_module": {}}
     discovered = {
-        "1234": {
-            "address": "1234",
+        "6E40": {
+            "address": "6E40",
             "category": "Module",
             "description": "Modular interface",
             "device_type": "07",
@@ -439,6 +441,45 @@ def test_interface_module_keeps_channels():
 
     merge_discovered_modules(store, discovered)
 
-    entry = store["nikobus_module"]["1234"]
-    assert isinstance(entry.get("channels"), list)
-    assert len(entry["channels"]) == 6
+    entry = store["nikobus_module"]["6E40"]
+    assert "channels" not in entry
+    assert entry["discovered_info"]["channels_count"] == 6
+
+
+def test_interface_module_existing_channels_stripped_on_remerge():
+    """Legacy interface_module entries from pre-0.12.0 stores carry
+    a channels array; re-merging with 0.12.0+ must drop it (the
+    synthesised input entries are now the source of truth)."""
+
+    store: dict = {
+        "nikobus_module": {
+            "6E40": {
+                "module_type": "interface_module",
+                "description": "interface_module_1",
+                "model": "05-206",
+                "channels": [
+                    {"description": "not_in_use input_1"},
+                    {"description": "Renamed input 2"},
+                ],
+                "discovered_info": {
+                    "name": "Modular interface",
+                    "device_type": "07",
+                    "channels_count": 6,
+                },
+            }
+        }
+    }
+    discovered = {
+        "6E40": {
+            "address": "6E40",
+            "category": "Module",
+            "module_type": "interface_module",
+            "model": "05-206",
+            "channels": 6,
+            "channels_count": 6,
+        }
+    }
+
+    merge_discovered_modules(store, discovered)
+
+    assert "channels" not in store["nikobus_module"]["6E40"]

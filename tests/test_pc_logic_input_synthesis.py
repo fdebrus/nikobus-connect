@@ -174,6 +174,128 @@ def test_inverse_pc_logic_slot_index_8dc8():
 
 
 # ---------------------------------------------------------------------------
+# Interface-module synthesis (05-206) — same formula, hypothesis pending
+# hardware confirmation
+# ---------------------------------------------------------------------------
+#
+# The 05-206 Modular Interface has the same 6-input shape as PC-Logic but
+# wired contacts instead of logical engine. We're applying the same
+# address-derivation formula to it on the working hypothesis that the
+# firmware uses the same scheme. The user with interface_module at 0x6E40
+# can confirm against real bus events; these tests pin the predicted
+# addresses so any future correction is immediately visible.
+
+
+def test_synthesize_extends_to_interface_module(tmp_path):
+    """A 05-206 interface_module discovery entry should now trigger
+    the same synthesis path as pc_logic — six button entries, each
+    carrying provenance tagged with module_type='interface_module'."""
+
+    discovery = _make_discovery(tmp_path)
+    discovery.discovered_devices = {
+        "6E40": {
+            "category": "Module",
+            "module_type": "interface_module",
+            "model": "05-206",
+            "address": "6E40",
+            "channels": 6,
+            "channels_count": 6,
+        }
+    }
+
+    discovery._synthesize_pc_logic_inputs()
+
+    expected_physicals = [f"63720{slot}" for slot in range(1, 7)]
+    for slot, phys in enumerate(expected_physicals, start=1):
+        assert phys in discovery.discovered_devices, phys
+        entry = discovery.discovered_devices[phys]
+        assert entry["category"] == "Button"
+        assert entry["channels"] == 2
+        assert entry["pc_logic_parent_address"] == "6E40"
+        assert entry["pc_logic_parent_type"] == "interface_module"
+        assert entry["pc_logic_slot_index"] == slot
+        assert entry["model"] == "05-206"
+        assert entry["description"] == NikobusDiscovery.INTERFACE_MODULE_INPUT_TYPE
+
+
+def test_interface_module_predicted_bus_addresses_pending_verification(tmp_path):
+    """Pin the predicted 1A / 1B bus addresses for the user's
+    interface_module at 0x6E40. These come from applying the
+    PC-Logic formula to the module address; they need confirmation
+    against actual bus events.
+
+    If hardware later reports different addresses, this test fails
+    loudly — that's the signal to revisit the assumption that the
+    same formula applies to 05-206."""
+
+    expected = {
+        "637201": {"1A": "2013B3", "1B": "6013B3"},
+        "637202": {"1A": "1013B3", "1B": "5013B3"},
+        "637203": {"1A": "3013B3", "1B": "7013B3"},
+        "637204": {"1A": "0813B3", "1B": "4813B3"},
+        "637205": {"1A": "2813B3", "1B": "6813B3"},
+        "637206": {"1A": "1813B3", "1B": "5813B3"},
+    }
+
+    discovery = _make_discovery(tmp_path)
+    discovery.discovered_devices = {
+        "6E40": {
+            "category": "Module",
+            "module_type": "interface_module",
+            "channels": 6,
+            "channels_count": 6,
+            "address": "6E40",
+        }
+    }
+    discovery._synthesize_pc_logic_inputs()
+
+    button_data: dict = {"nikobus_button": {}}
+    merge_discovered_buttons(
+        button_data,
+        discovery.discovered_devices,
+        KEY_MAPPING,
+        convert_nikobus_address,
+    )
+
+    for phys, ops in expected.items():
+        entry = button_data["nikobus_button"][phys]
+        op_points = entry["operation_points"]
+        for key_label, expected_bus in ops.items():
+            assert op_points[key_label]["bus_address"] == expected_bus, (
+                phys,
+                key_label,
+            )
+        # Provenance must carry through the merge so HA renders these
+        # under the interface_module parent device.
+        assert entry["pc_logic_parent_address"] == "6E40"
+        assert entry["pc_logic_parent_type"] == "interface_module"
+
+
+def test_synthesize_skips_other_module_types(tmp_path):
+    """Switch, dimmer, roller, etc. modules must not trigger
+    input-synthesis even if they happen to be in discovered_devices."""
+
+    discovery = _make_discovery(tmp_path)
+    discovery.discovered_devices = {
+        "C9A5": {
+            "category": "Module",
+            "module_type": "switch_module",
+            "channels": 12,
+            "channels_count": 12,
+        },
+        "8CF5": {
+            "category": "Module",
+            "module_type": "roller_module",
+            "channels": 6,
+            "channels_count": 6,
+        },
+    }
+    before = dict(discovery.discovered_devices)
+    discovery._synthesize_pc_logic_inputs()
+    assert discovery.discovered_devices == before
+
+
+# ---------------------------------------------------------------------------
 # Synthesis path tests
 # ---------------------------------------------------------------------------
 

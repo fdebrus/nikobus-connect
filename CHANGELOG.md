@@ -1,5 +1,55 @@
 # Changelog
 
+## 0.12.0
+
+Extend the PC-Logic input synthesis path to **05-206 Modular
+Interface** modules. The 05-206 has the same six-input shape as
+PC-Logic but with wired dry contacts instead of a logical engine,
+and the working hypothesis (pending hardware confirmation on the
+6E40 install) is that its firmware uses the same address-derivation
+scheme.
+
+### Added
+
+- ``_synthesize_pc_logic_inputs`` now iterates **both** ``pc_logic``
+  and ``interface_module`` modules in ``discovered_devices``,
+  producing six 2-channel synthetic button entries per module.
+  Function name retained for callsite stability — the behaviour
+  is generalised.
+- New ``pc_logic_parent_type`` provenance field on each synthesised
+  entry (``"pc_logic"`` or ``"interface_module"``) so consumers can
+  distinguish the two parents without lookup.
+- ``NikobusDiscovery.INTERFACE_MODULE_INPUT_TYPE`` /
+  ``INTERFACE_MODULE_INPUT_MODEL`` class constants
+  (``"Modular Interface Input"`` / ``"05-206"``).
+- ``merge_discovered_buttons`` carries ``pc_logic_parent_type``
+  through alongside the existing provenance fields.
+
+### Predicted, not yet verified on hardware
+
+For the user's interface_module at ``0x6E40``, the formula predicts:
+
+| Slot | Physical  | 1A primary | 1B alias |
+|------|-----------|------------|----------|
+| 1    | ``637201``| ``2013B3`` | ``6013B3`` |
+| 2    | ``637202``| ``1013B3`` | ``5013B3`` |
+| 3    | ``637203``| ``3013B3`` | ``7013B3`` |
+| 4    | ``637204``| ``0813B3`` | ``4813B3`` |
+| 5    | ``637205``| ``2813B3`` | ``6813B3`` |
+| 6    | ``637206``| ``1813B3`` | ``5813B3`` |
+
+These are pinned in
+``test_interface_module_predicted_bus_addresses_pending_verification``
+so any future correction surfaces immediately.
+
+### Not changed
+
+- PC-Logic 940C / 8DC8 synthesis output is byte-identical to 0.11.0
+  (same formula, same provenance shape).
+- ``interface_module`` continues to carry its ``channels`` array in
+  the module store; only the bus-event-emitting children get
+  synthesised.
+
 ## 0.11.0
 
 Rewrite the PC-Logic logical-input physical-address derivation so it
