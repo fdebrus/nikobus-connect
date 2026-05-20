@@ -320,3 +320,93 @@ def test_merged_button_provenance_survives_re_merge(tmp_path):
     entry = button_data["nikobus_button"]["64A061"]
     assert entry["pc_logic_parent_address"] == "940C"
     assert entry["pc_logic_slot_index"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Bus-address derivation: PC-Logic-specific key mapping
+# ---------------------------------------------------------------------------
+#
+# Regular 2-channel push buttons use ``KEY_MAPPING[2] = {1A: 8, 1B: C}`` so
+# the op-point bus addresses are ``convert(phys) + 8`` / ``... + C``.
+# PC-Logic logical inputs use offsets ``+0`` / ``+4`` instead. Hardware-
+# captured from a 940C install (2026-05-20): pressing slot 6 emits
+# ``19814B`` then ``59814B`` — first nibbles 1 and 5, matching
+# ``original_nibble + 0`` and ``original_nibble + 4``.
+#
+# These tests pin the captured truth so any regression in the
+# PC-Logic-specific mapping override gets caught immediately.
+
+
+def test_pc_logic_synthesized_bus_addresses_match_hardware(tmp_path):
+    """Each synthesized input must produce op-point bus addresses
+    matching what the hardware actually emits on press."""
+
+    expected = {
+        "64A061": {"1A": "21814B", "1B": "61814B"},
+        "64A062": {"1A": "11814B", "1B": "51814B"},
+        "64A063": {"1A": "31814B", "1B": "71814B"},
+        "64A064": {"1A": "09814B", "1B": "49814B"},
+        "64A065": {"1A": "29814B", "1B": "69814B"},
+        "64A066": {"1A": "19814B", "1B": "59814B"},  # confirmed on hardware
+    }
+
+    discovery = _make_discovery(tmp_path)
+    discovery.discovered_devices = {
+        "940C": {
+            "category": "Module",
+            "module_type": "pc_logic",
+            "channels": 6,
+            "channels_count": 6,
+            "address": "940C",
+        }
+    }
+    discovery._synthesize_pc_logic_inputs()
+
+    button_data: dict = {"nikobus_button": {}}
+    merge_discovered_buttons(
+        button_data,
+        discovery.discovered_devices,
+        KEY_MAPPING,
+        convert_nikobus_address,
+    )
+
+    for phys, ops in expected.items():
+        entry = button_data["nikobus_button"][phys]
+        op_points = entry["operation_points"]
+        for key_label, expected_bus in ops.items():
+            assert op_points[key_label]["bus_address"] == expected_bus, (
+                phys,
+                key_label,
+            )
+
+
+def test_regular_2channel_button_still_uses_standard_offsets(tmp_path):
+    """A real 2-channel push button (no PC-Logic provenance) must still
+    use the standard +8/+C offsets — the PC-Logic override must not
+    bleed into ordinary buttons."""
+
+    discovery = _make_discovery(tmp_path)
+    discovery.discovered_devices = {
+        "10998B": {
+            "category": "Button",
+            "address": "10998B",
+            "channels": 2,
+            "model": "05-060-02",
+            "description": "Bus push button, 2 control buttons",
+        }
+    }
+
+    button_data: dict = {"nikobus_button": {}}
+    merge_discovered_buttons(
+        button_data,
+        discovery.discovered_devices,
+        KEY_MAPPING,
+        convert_nikobus_address,
+    )
+
+    entry = button_data["nikobus_button"]["10998B"]
+    ops = entry["operation_points"]
+    # original_nibble for 10998B is 3 (convert -> 346642); +8 -> B,
+    # +C -> F. From the real-install dump shared by the user.
+    assert ops["1A"]["bus_address"] == "B46642"
+    assert ops["1B"]["bus_address"] == "F46642"

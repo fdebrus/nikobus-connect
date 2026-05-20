@@ -371,6 +371,20 @@ KEY_MAPPING = {
     },
 }
 
+# PC-Logic logical inputs emit two bus events per press at offsets
+# computed from ``convert_nikobus_address(physical) + 0`` (primary)
+# and ``... + 4`` (alias) — distinct from the standard 2-channel
+# layout used by wall-mounted push buttons. Captured from hardware
+# on a 940C install: pressing slot 6 fires ``19814B`` and ``59814B``,
+# whose first nibbles are 1 (= original_nibble + 0) and 5 (= + 4).
+# ``merge_discovered_buttons`` consults this table instead of
+# ``KEY_MAPPING`` when the device entry carries the synthesized
+# ``pc_logic_parent_address`` provenance.
+PC_LOGIC_KEY_MAPPING = {
+    2: {"1A": "0", "1B": "4"},
+}
+
+
 KEY_MAPPING_MODULE = {
     1: {1: "8"},
     2: {1: "8", 3: "C"},

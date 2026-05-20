@@ -1,5 +1,40 @@
 # Changelog
 
+## 0.10.0
+
+Fix PC-Logic logical-input bus-address derivation. The synthesized
+input entries from 0.8.0/0.9.0 carried op-point bus addresses
+computed with the standard 2-channel key-mapping (``+8`` / ``+C``
+nibble offsets), but hardware emits each press at offsets ``+0`` /
+``+4``. Press lookups for PC-Logic inputs miss the button store
+entirely on 0.9.0 — every press logs as ``unknown button``.
+Confirmed against a 940C install on 2026-05-20: pressing slot 6
+fires ``19814B`` and ``59814B``, matching ``convert(64A066)`` plus
+offsets 0 and 4.
+
+### Added
+
+- **``PC_LOGIC_KEY_MAPPING``** in ``mapping.py`` —
+  ``{2: {"1A": "0", "1B": "4"}}``. Documented as the canonical
+  layout for PC-Logic logical inputs, sourced from observed bus
+  events rather than a guessed extension of the wall-button table.
+
+### Changed
+
+- **``merge_discovered_buttons``** selects ``PC_LOGIC_KEY_MAPPING``
+  for devices whose entry carries ``pc_logic_parent_address``,
+  falling back to the standard ``KEY_MAPPING`` for everything else.
+- Tests pin the full 6-input × 2-key bus-address table for the
+  940C install so future regressions surface immediately.
+
+### Migration
+
+Existing button-store entries for PC-Logic input physicals
+(``64A061..64A066`` on a 940C-class install) carry incorrect
+``bus_address`` values in their op-points. The next discovery run
+rewrites them with the correct addresses; no manual cleanup
+required.
+
 ## 0.9.0
 
 Drop the redundant ``channels`` array from PC-Logic module entries
