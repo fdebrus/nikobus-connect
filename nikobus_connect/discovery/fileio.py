@@ -550,6 +550,17 @@ def merge_discovered_buttons(
             continue
 
         mapping = key_mapping.get(num_channels, {})
+        # PC-Logic logical inputs don't follow the standard 2-channel
+        # nibble layout (+8 / +C). Hardware-captured presses on a
+        # 940C install show offsets +0 (primary) and +4 (alias) —
+        # which correspond to a custom 2-channel mapping. Switch
+        # mappings when the device carries the synthesized PC-Logic
+        # provenance fields.
+        if device.get("pc_logic_parent_address") is not None:
+            from .mapping import PC_LOGIC_KEY_MAPPING
+            pc_logic_mapping = PC_LOGIC_KEY_MAPPING.get(num_channels)
+            if pc_logic_mapping is not None:
+                mapping = pc_logic_mapping
         converted_address = convert_nikobus_address(physical_addr)
         try:
             original_nibble = int(converted_address[0], 16)
