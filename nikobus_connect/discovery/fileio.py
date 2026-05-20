@@ -246,6 +246,14 @@ def merge_discovered_modules(module_data, discovered_devices):
         {"pc_logic", "interface_module"}
     )
 
+    # Module types that don't carry a ``channels`` array in the module
+    # store at all. PC-Logic's 6 logical inputs are now surfaced through
+    # the synthesized button-store entries (one per input, parented under
+    # the PC-Logic module), so the module's own ``channels`` field is
+    # redundant. Other modules — including the 05-206 modular interface,
+    # which has no synthesis path yet — still carry channels.
+    _CHANNELLESS_MODULE_TYPES: frozenset[str] = frozenset({"pc_logic"})
+
     def _default_channel(module_type: str, index: int) -> dict:
         label = "input" if module_type in _INPUT_MODULE_TYPES else "output"
         channel = {"description": f"not_in_use {label}_{index}"}
@@ -334,6 +342,8 @@ def merge_discovered_modules(module_data, discovered_devices):
         except (TypeError, ValueError):
             channels_count = 0
 
+        channelless = module_type in _CHANNELLESS_MODULE_TYPES
+
         existing = modules.get(address)
         if isinstance(existing, dict):
             # Refresh discovery-owned fields only; keep everything else.
@@ -347,7 +357,9 @@ def merge_discovered_modules(module_data, discovered_devices):
             existing["discovered_info"] = _refresh_discovered_info(
                 channels_count, device
             )
-            if channels_count > 0:
+            if channelless:
+                existing.pop("channels", None)
+            elif channels_count > 0:
                 existing["channels"] = _pad_channels(
                     module_type, existing.get("channels", []), channels_count
                 )
@@ -362,7 +374,7 @@ def merge_discovered_modules(module_data, discovered_devices):
                     channels_count, device
                 ),
             }
-            if channels_count > 0:
+            if not channelless and channels_count > 0:
                 entry["channels"] = _pad_channels(
                     module_type, [], channels_count
                 )
