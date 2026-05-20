@@ -105,19 +105,72 @@ def test_derive_rejects_invalid_address():
         derive_pc_logic_input_physicals("not-hex", 6)
 
 
-def test_derive_rejects_overflow_address():
-    """An address where byteswap*8 overflows 16 bits hasn't been seen
-    on validated hardware; refuse rather than guess."""
-
-    # byteswap(9E90) = 0x909E; 0x909E * 8 = 0x484F0 > 0xFFFF
-    with pytest.raises(ValueError, match="overflow"):
-        derive_pc_logic_input_physicals("9E90", 6)
-
-
 def test_derive_respects_channel_count():
     """With channel_count=3, only 3 inputs are returned."""
 
     assert derive_pc_logic_input_physicals("940C", 3) == ["64A061", "64A062", "64A063"]
+
+
+# ---------------------------------------------------------------------------
+# Second-install validation: PC-Logic at 0x8DC8
+# ---------------------------------------------------------------------------
+#
+# The 0.8.0/0.9.0 byteswap*8 formula overflows on this address (0xC88D × 8
+# = 0x64468 > 0xFFFF) and was rejected with ValueError. The user's
+# .migrated v1 file gives us the ground-truth bus addresses to validate
+# the rewritten formula against.
+
+
+def test_derive_inputs_for_8dc8_matches_observed_install():
+    """PC-Logic at 0x8DC8 produces physicals 646E41..646E46.
+    Sourced from the user's .migrated v1 file (twelve bus events
+    decoded inversely)."""
+
+    physicals = derive_pc_logic_input_physicals("8DC8", 6)
+    assert physicals == ["646E41", "646E42", "646E43", "646E44", "646E45", "646E46"]
+
+
+def test_8dc8_physicals_produce_observed_bus_addresses():
+    """Each derived input physical for 8DC8, fed through
+    ``convert_nikobus_address``, must reproduce the primary
+    (1A / Hoog) bus addresses from the user's v1 dump."""
+
+    expected_primary_bus = {
+        "646E41": "209D8B",
+        "646E42": "109D8B",
+        "646E43": "309D8B",
+        "646E44": "089D8B",
+        "646E45": "289D8B",
+        "646E46": "189D8B",
+    }
+    for phys, expected in expected_primary_bus.items():
+        assert convert_nikobus_address(phys) == expected, phys
+
+
+def test_inverse_pc_logic_address_8dc8():
+    """The inverse must work for both validated installs, not just 940C."""
+
+    for phys, expected_parent in [
+        ("646E41", "8DC8"),
+        ("646E42", "8DC8"),
+        ("646E43", "8DC8"),
+        ("646E44", "8DC8"),
+        ("646E45", "8DC8"),
+        ("646E46", "8DC8"),
+    ]:
+        assert pc_logic_address_for_input(phys) == expected_parent, phys
+
+
+def test_inverse_pc_logic_slot_index_8dc8():
+    for phys, expected_slot in [
+        ("646E41", 1),
+        ("646E42", 2),
+        ("646E43", 3),
+        ("646E44", 4),
+        ("646E45", 5),
+        ("646E46", 6),
+    ]:
+        assert pc_logic_input_slot_index(phys) == expected_slot, phys
 
 
 # ---------------------------------------------------------------------------
@@ -337,7 +390,7 @@ def test_merged_button_provenance_survives_re_merge(tmp_path):
 # PC-Logic-specific mapping override gets caught immediately.
 
 
-def test_pc_logic_synthesized_bus_addresses_match_hardware(tmp_path):
+def test_pc_logic_synthesized_bus_addresses_match_hardware_940c(tmp_path):
     """Each synthesized input must produce op-point bus addresses
     matching what the hardware actually emits on press."""
 
@@ -358,6 +411,52 @@ def test_pc_logic_synthesized_bus_addresses_match_hardware(tmp_path):
             "channels": 6,
             "channels_count": 6,
             "address": "940C",
+        }
+    }
+    discovery._synthesize_pc_logic_inputs()
+
+    button_data: dict = {"nikobus_button": {}}
+    merge_discovered_buttons(
+        button_data,
+        discovery.discovered_devices,
+        KEY_MAPPING,
+        convert_nikobus_address,
+    )
+
+    for phys, ops in expected.items():
+        entry = button_data["nikobus_button"][phys]
+        op_points = entry["operation_points"]
+        for key_label, expected_bus in ops.items():
+            assert op_points[key_label]["bus_address"] == expected_bus, (
+                phys,
+                key_label,
+            )
+
+
+def test_pc_logic_synthesized_bus_addresses_match_hardware_8dc8(tmp_path):
+    """Second-install pin: PC-Logic at 0x8DC8 from the user's
+    .migrated v1 file. The 0.8.0/0.9.0 byteswap*8 formula refused
+    to derive this install (overflow); the rewritten formula
+    handles it cleanly. Bus addresses sourced verbatim from the
+    user's v1 records (Hoog = 1A primary, Laag = 1B alias)."""
+
+    expected = {
+        "646E41": {"1A": "209D8B", "1B": "609D8B"},
+        "646E42": {"1A": "109D8B", "1B": "509D8B"},
+        "646E43": {"1A": "309D8B", "1B": "709D8B"},
+        "646E44": {"1A": "089D8B", "1B": "489D8B"},
+        "646E45": {"1A": "289D8B", "1B": "689D8B"},
+        "646E46": {"1A": "189D8B", "1B": "589D8B"},
+    }
+
+    discovery = _make_discovery(tmp_path)
+    discovery.discovered_devices = {
+        "8DC8": {
+            "category": "Module",
+            "module_type": "pc_logic",
+            "channels": 6,
+            "channels_count": 6,
+            "address": "8DC8",
         }
     }
     discovery._synthesize_pc_logic_inputs()

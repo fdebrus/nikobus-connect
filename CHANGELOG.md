@@ -1,5 +1,54 @@
 # Changelog
 
+## 0.11.0
+
+Rewrite the PC-Logic logical-input physical-address derivation so it
+works for installs whose PC-Logic address overflowed the 0.8.0
+formula. The previous formula (`byteswap(addr) × 8`) refused to
+derive inputs for any PC-Logic address whose byteswap exceeded
+`0x1FFF` — confirmed against a user install where PC-Logic at
+`0x8DC8` (`byteswap × 8 = 0x64468`, 17 bits) raised `ValueError` and
+left the synthesis path silent. The user's v1 manual config carries
+ground-truth bus addresses for that install; the rewritten formula
+predicts them exactly.
+
+### New formula
+
+```
+input_physical = 0x600000 | ((pc_logic_addr >> 1) << 4) | slot
+```
+
+Reading the layout: a constant ``0x6`` top nibble (PC-Logic module-
+class marker), then `pc_logic_addr >> 1` as the next 16 bits (bit 0
+of the module address is dropped — Nikobus module addresses are
+conventionally even), then the slot index in the low nibble.
+
+### Validated against
+
+| PC-Logic | Physicals                 | 1A primary bus              | 1B alias bus                |
+|----------|---------------------------|-----------------------------|-----------------------------|
+| `940C`   | `64A061..64A066`          | `21814B`…`19814B`           | `61814B`…`59814B`           |
+| `8DC8`   | `646E41..646E46`          | `209D8B`…`189D8B`           | `609D8B`…`589D8B`           |
+
+All 24 bus addresses across the two installs match.
+
+### Migration
+
+Existing PC-Logic input button-store entries are unaffected for
+940C-class installs (same physicals as 0.8.0/0.9.0/0.10.0). Installs
+that previously raised `ValueError` (8DC8-class) gain synthesised
+entries on next discovery — provided the migration carried over the
+PC-Logic module record itself.
+
+### Changed
+
+- `derive_pc_logic_input_physicals` rewritten with the new formula;
+  no longer raises on byteswap overflow.
+- `pc_logic_address_for_input` updated to gate on the new
+  ``0x6`` top-nibble marker instead of the old ``0x60..0x6F``
+  slot-byte range.
+- `pc_logic_input_slot_index` updated likewise.
+
 ## 0.10.0
 
 Fix PC-Logic logical-input bus-address derivation. The synthesized
