@@ -623,6 +623,14 @@ class NikobusDiscovery:
         self._scan_trailer_seen: bool = False
         self._scan_active: bool = False
         self._scan_lock: asyncio.Lock = asyncio.Lock()
+        # Cross-module accumulators for the remote-transmitter synthesis
+        # pass. Per-module ``merge_linked_modules`` collects button
+        # addresses that didn't resolve to any inventory entry; we hold
+        # them here until all module scans finish, then cluster by
+        # 4-hex suffix and synthesise virtual transmitter parents +
+        # passthrough children for clusters above the threshold.
+        self._accumulated_unmatched: set[str] = set()
+        self._accumulated_command_mapping: dict = {}
         self.reset_state()
 
     def reset_state(self, *, update_flags: bool = True):
@@ -644,6 +652,8 @@ class NikobusDiscovery:
         self._module_consecutive_empties = 0
         self.discovery_stage = None
         self._decoded_buffer: dict | None = None
+        self._accumulated_unmatched = set()
+        self._accumulated_command_mapping = {}
         if update_flags:
             self._coordinator.discovery_running = False
             self._coordinator.discovery_module = False
@@ -1226,6 +1236,115 @@ class NikobusDiscovery:
 
         self.discovered_devices.update(new_entries)
 
+    # Minimum cluster size that qualifies as a "virtual transmitter".
+    # Set to 8 (one 8-channel button's worth of A/B/C/D × 2 keys) so
+    # we catch unenrolled multi-key remotes and large keypads while
+    # still ignoring random small coincidences in flash garbage.
+    REMOTE_TRANSMITTER_CLUSTER_THRESHOLD: int = 8
+
+    # Prefix prepended to a 4-hex suffix to form the synthetic
+    # ``physical address`` of a virtual transmitter parent. The full
+    # synthetic ID is e.g. ``RT-E31C`` — used as the via_device
+    # identifier so HA can group all 52 emitted codes under one
+    # parent device.
+    REMOTE_TRANSMITTER_PREFIX: str = "RT-"
+
+    def _synthesize_remote_transmitters_from_unmatched(self) -> None:
+        """Synthesise virtual transmitters from clusters of unmatched
+        button references collected across module scans.
+
+        A "cluster" is N >= threshold button addresses sharing the
+        last 4 hex characters (the low 16 bits). Each cluster gets:
+
+          * A virtual transmitter parent entry in
+            ``self.discovered_devices`` (synthetic key
+            ``RT-<suffix>``, ``category="Module"``,
+            ``module_type="remote_transmitter"``).
+          * One passthrough button child per cluster member, keyed
+            in the button store by the observed bus address itself.
+            ``merge_discovered_buttons`` has a passthrough branch
+            for entries carrying ``remote_transmitter_address`` —
+            it writes the op-point's ``bus_address`` directly from
+            the synthesis entry, skipping the
+            ``convert_nikobus_address`` round-trip (which isn't a
+            true bijection for all 24-bit values).
+
+        After populating ``discovered_devices``, the caller is
+        expected to re-run ``merge_discovered_buttons`` so the new
+        entries land in the button store, then re-run
+        ``merge_linked_modules`` with the accumulated command
+        mapping to wire up the previously-unmatched link records.
+        """
+
+        if not self._accumulated_unmatched:
+            return
+
+        # Cluster by last 4 hex chars.
+        clusters: dict[str, list[str]] = {}
+        for addr in self._accumulated_unmatched:
+            if len(addr) < 4:
+                continue
+            suffix = addr[-4:].upper()
+            clusters.setdefault(suffix, []).append(addr.upper())
+
+        new_entries: dict[str, dict] = {}
+        for suffix, members in clusters.items():
+            if len(members) < self.REMOTE_TRANSMITTER_CLUSTER_THRESHOLD:
+                continue
+
+            transmitter_id = f"{self.REMOTE_TRANSMITTER_PREFIX}{suffix}"
+            new_entries[transmitter_id] = {
+                "category": "Module",
+                "module_type": "remote_transmitter",
+                "model": "RF Remote (synthesized)",
+                "description": f"Remote Transmitter ({suffix})",
+                "address": transmitter_id,
+                "channels": 0,
+                "channels_count": 0,
+                "transmitter_suffix": suffix,
+                "transmitter_member_count": len(members),
+                "discovered": True,
+            }
+
+            for bus_address in sorted(set(members)):
+                if bus_address in self.discovered_devices:
+                    # A real button enrolled later in the scan
+                    # already covers this address — don't shadow.
+                    continue
+                new_entries[bus_address] = {
+                    "category": "Button",
+                    "device_type": "RT",  # synthetic marker
+                    "model": "Remote Code",
+                    "description": f"Remote {bus_address}",
+                    "discovered_name": f"Remote {bus_address}",
+                    "address": bus_address,
+                    "channels": 1,
+                    "channels_count": 1,
+                    "module_type": "other_module",
+                    "discovered": True,
+                    # The merge layer keys off
+                    # ``remote_transmitter_address`` to use the
+                    # passthrough branch: op-point bus_address is
+                    # set from ``remote_transmitter_bus_address``
+                    # directly. HA-side renderer parents the device
+                    # under the synthetic transmitter via the same
+                    # provenance field.
+                    "remote_transmitter_address": transmitter_id,
+                    "remote_transmitter_suffix": suffix,
+                    "remote_transmitter_bus_address": bus_address,
+                }
+
+            _LOGGER.info(
+                "Synthesized remote transmitter | suffix=%s "
+                "member_count=%d transmitter_id=%s",
+                suffix,
+                len(members),
+                transmitter_id,
+            )
+
+        if new_entries:
+            self.discovered_devices.update(new_entries)
+
     async def _finalize_inventory_phase(self) -> None:
         """Finalize the PC-Link inventory phase."""
         self._cancel_inventory_timeout()
@@ -1359,6 +1478,60 @@ class NikobusDiscovery:
         self._cancel_inventory_timeout()
         _LOGGER.info("Discovery finished")
         await self._emit_progress(PHASE_FINALIZING)
+
+        # Cluster-synthesis pass for unmatched references collected
+        # across the per-module scans. Multi-page Easywave remotes
+        # emit dozens of distinct bus codes from one physical
+        # transmitter, none of which appear in PC-Link inventory.
+        # The decoders see them in module BP cells, the merge layer
+        # logs them as unmatched and skips the link record. Here we
+        # cluster the unmatched set by 4-hex suffix, synthesise a
+        # virtual transmitter parent + passthrough children for any
+        # cluster meeting the threshold, and re-run the merges so
+        # the previously-skipped link records resolve.
+        if self._button_data is not None and self._accumulated_unmatched:
+            pre_synth_count = len(self.discovered_devices)
+            self._synthesize_remote_transmitters_from_unmatched()
+            synthesised = len(self.discovered_devices) - pre_synth_count
+            if synthesised:
+                try:
+                    merge_discovered_buttons(
+                        self._button_data,
+                        self.discovered_devices,
+                        KEY_MAPPING,
+                        convert_nikobus_address,
+                    )
+                    # Re-run link merge with the accumulated
+                    # command_mapping so the previously-unmatched
+                    # records resolve to the newly-synthesised
+                    # children. dedup in merge_linked_modules keeps
+                    # already-resolved entries idempotent.
+                    (
+                        updated_buttons,
+                        links_added,
+                        outputs_added,
+                        _residual_unmatched,
+                    ) = merge_linked_modules(
+                        self._button_data,
+                        self._accumulated_command_mapping,
+                    )
+                    _LOGGER.info(
+                        "Remote-transmitter cluster synthesis | "
+                        "new_devices=%d updated_buttons=%d "
+                        "links_added=%d outputs_added=%d "
+                        "residual_unmatched=%d",
+                        synthesised,
+                        updated_buttons,
+                        links_added,
+                        outputs_added,
+                        len(_residual_unmatched),
+                    )
+                    if self._on_button_save is not None:
+                        await self._on_button_save()
+                except Exception:  # pragma: no cover - defensive
+                    _LOGGER.exception(
+                        "Remote-transmitter post-synthesis merge failed"
+                    )
 
         # Capture state for the callback's kwargs (Bug 1 fix per
         # Nikobus-HA #319). The consumer's callback runs in the same
@@ -2323,9 +2496,23 @@ class NikobusDiscovery:
         if self._button_data is None:
             return
 
-        updated_buttons, links_added, outputs_added = merge_linked_modules(
-            self._button_data, command_mapping
-        )
+        (
+            updated_buttons,
+            links_added,
+            outputs_added,
+            unmatched,
+        ) = merge_linked_modules(self._button_data, command_mapping)
+        # Accumulate unmatched references and the originating command
+        # mapping across module scans so we can run the remote-
+        # transmitter cluster-synthesis pass at end-of-discovery.
+        if unmatched:
+            self._accumulated_unmatched.update(unmatched)
+        if command_mapping:
+            for key, outputs in command_mapping.items():
+                bucket = self._accumulated_command_mapping.setdefault(key, [])
+                for output in outputs:
+                    if output not in bucket:
+                        bucket.append(output)
         # Only log at INFO when something actually merged; routine
         # no-op merges (the common case on re-discovery) stay at DEBUG.
         if updated_buttons or links_added or outputs_added:
