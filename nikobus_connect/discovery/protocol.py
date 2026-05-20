@@ -140,6 +140,19 @@ def convert_nikobus_address(address_string: str) -> str:
         return f"[{address_string}]"
 
 
+# NOTE: ``convert_nikobus_address`` is *not* a strict bijection. Its
+# 3-bit button field (input bits 21..23) gets added (not OR'd) into
+# the low 3 bits of the bit-reversed 21-bit result; when input bit 20
+# is set and button bit 1 is set, the addition produces a carry that
+# collapses two distinct inputs onto the same output. Building an
+# exact inverse therefore requires search rather than a closed form.
+# Synthesis paths that need to round-trip an observed bus address
+# back to a "physical" should use the bus address directly as the
+# storage key (see the remote-transmitter passthrough in
+# ``merge_discovered_buttons``) rather than relying on an inverse
+# transform.
+
+
 # ---------------------------------------------------------------------------
 # PC-Logic logical-input address derivation
 # ---------------------------------------------------------------------------

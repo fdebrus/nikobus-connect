@@ -1,5 +1,85 @@
 # Changelog
 
+## 0.13.0
+
+Recover button-store entries for multi-page RF remotes whose
+emitted bus codes don't enrol in PC-Link inventory. Pre-v2 versions
+of the library accumulated such entries via a more permissive
+discovery gate; v2's stricter resolution layer
+(``merge_linked_modules``) drops them as ``unmatched_addresses``,
+so v2 installs lose them on next discovery. Hardware example: the
+user's 52-key Easywave 05-312 with 13 scene pages emits 52 distinct
+bus codes sharing the trailing 4-hex ``E31C`` — none of which
+appear in ``$1011`` inventory frames.
+
+### Added
+
+- **``_synthesize_remote_transmitters_from_unmatched``** on
+  ``NikobusDiscovery`` — clusters accumulated unmatched references
+  by their last 4 hex characters and synthesises one virtual
+  transmitter parent + N passthrough children per cluster meeting
+  the threshold.
+- **``REMOTE_TRANSMITTER_CLUSTER_THRESHOLD = 8``** class constant
+  (= one 8-channel button's worth of A/B/C/D × 2 keys). Catches
+  multi-page remotes and unenrolled 8-channel keypads while
+  rejecting random small coincidences in flash garbage.
+- **Remote-transmitter passthrough** in ``merge_discovered_buttons``:
+  entries carrying ``remote_transmitter_bus_address`` get their
+  op-point ``bus_address`` set directly from the synthesis entry,
+  bypassing the ``convert_nikobus_address`` round-trip (which is
+  not a strict bijection across all 24-bit values — the 3-bit
+  button field gets added, not OR'd, into the bit-reversed result,
+  and carries can collapse two distinct inputs onto one output).
+- **Cross-module accumulators** on ``NikobusDiscovery``
+  (``_accumulated_unmatched``, ``_accumulated_command_mapping``)
+  collect rejected references and their originating link records
+  across all module scans. After the final scan,
+  ``_complete_discovery_run`` runs the synthesis pass and re-merges
+  the accumulated mapping so previously-skipped links resolve.
+
+### Changed
+
+- ``merge_linked_modules`` now returns ``(updated_buttons,
+  links_added, outputs_added, unmatched_addresses)`` — the
+  unmatched set is needed for cluster synthesis. Existing tests
+  unpacking the tuple updated.
+
+### Synthesised entry shape
+
+```
+discovered_devices = {
+  "RT-E31C": {                      # synthetic parent
+    "category": "Module",
+    "module_type": "remote_transmitter",
+    "model": "RF Remote (synthesized)",
+    "transmitter_suffix": "E31C",
+    "transmitter_member_count": 52,
+    ...
+  },
+  "80E31C": {                       # child, keyed by bus address
+    "category": "Button",
+    "channels": 1,
+    "remote_transmitter_address": "RT-E31C",
+    "remote_transmitter_suffix": "E31C",
+    "remote_transmitter_bus_address": "80E31C",
+    ...
+  },
+  # ... 51 more children
+}
+```
+
+### Validation
+
+7 new tests in ``test_remote_transmitter_synthesis.py``, pinning:
+
+- Sub-threshold clusters not promoted (3 entries → no synthesis).
+- Threshold (8 members) triggers synthesis.
+- Full 52-member ``E31C`` install produces 1 parent + 52 children,
+  keyed by original bus address.
+- Multiple independent clusters → separate transmitters.
+- Real enrolled buttons at cluster-member addresses aren't shadowed.
+- Synthesis is idempotent across repeated calls.
+
 ## 0.12.0
 
 Extend the PC-Logic input synthesis path to **05-206 Modular

@@ -242,10 +242,10 @@ def test_ir_op_point_merge_is_idempotent():
             }
         ]
     }
-    u1, la1, oa1 = merge_linked_modules(store, mapping)
+    u1, la1, oa1, _ = merge_linked_modules(store, mapping)
     assert (u1, la1, oa1) == (1, 1, 1)
 
-    u2, la2, oa2 = merge_linked_modules(store, mapping)
+    u2, la2, oa2, _ = merge_linked_modules(store, mapping)
     assert (u2, la2, oa2) == (0, 0, 0)
 
 

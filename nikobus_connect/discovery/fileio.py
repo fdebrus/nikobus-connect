@@ -542,6 +542,48 @@ def merge_discovered_buttons(
         model = device.get("model", "") or ""
         num_channels = device.get("channels", 0)
 
+        # Remote-transmitter passthrough. Synthesised entries from
+        # the cluster-detection pass carry a pre-computed
+        # ``remote_transmitter_bus_address`` plus provenance tagging
+        # them to a virtual transmitter parent. Write them into the
+        # button store as a single-op-point button with the bus
+        # address preserved verbatim, skipping the standard
+        # ``convert_nikobus_address`` round-trip (which isn't a
+        # bijection across all 24-bit values).
+        rt_bus = device.get("remote_transmitter_bus_address")
+        if rt_bus is not None:
+            generated_phys_desc = description or f"Remote {physical_addr}"
+            phys_entry = buttons.setdefault(
+                physical_addr,
+                {
+                    "type": "Remote Code",
+                    "model": model or "Remote Code",
+                    "channels": 1,
+                    "description": generated_phys_desc,
+                    "operation_points": {},
+                },
+            )
+            phys_entry["channels"] = 1
+            current_desc = phys_entry.get("description")
+            if not current_desc:
+                phys_entry["description"] = generated_phys_desc
+            for provenance_key in (
+                "remote_transmitter_address",
+                "remote_transmitter_suffix",
+                "remote_transmitter_bus_address",
+            ):
+                if provenance_key in device:
+                    phys_entry[provenance_key] = device[provenance_key]
+            op_points = phys_entry.setdefault("operation_points", {})
+            if not isinstance(op_points, dict):
+                op_points = {}
+                phys_entry["operation_points"] = op_points
+            op_point = op_points.setdefault("1A", {})
+            op_point["bus_address"] = rt_bus
+            if not op_point.get("description"):
+                op_point["description"] = f"Remote code {rt_bus}"
+            continue
+
         keys = _BUTTON_KEYS_BY_CHANNEL_COUNT.get(num_channels)
         if keys is None:
             _LOGGER.error(
@@ -602,6 +644,8 @@ def merge_discovered_buttons(
             "pc_logic_parent_address",
             "pc_logic_parent_type",
             "pc_logic_slot_index",
+            "remote_transmitter_address",
+            "remote_transmitter_suffix",
         ):
             if provenance_key in device:
                 phys_entry[provenance_key] = device[provenance_key]
@@ -1196,7 +1240,7 @@ def merge_linked_modules(button_data, command_mapping):
             mirrored,
         )
 
-    return updated_buttons, links_added, outputs_added
+    return updated_buttons, links_added, outputs_added, unmatched_addresses
 
 
 # Pair / group keys for paired-button modes.

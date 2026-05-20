@@ -232,11 +232,11 @@ def test_merge_linked_modules_routes_by_bus_address_to_op_point():
         ]
     }
 
-    updated, links_added, outputs_added = merge_linked_modules(button_data, mapping)
+    updated, links_added, outputs_added, _ = merge_linked_modules(button_data, mapping)
     assert (updated, links_added, outputs_added) == (1, 1, 1)
 
     # Second identical call is a no-op.
-    updated, links_added, outputs_added = merge_linked_modules(button_data, mapping)
+    updated, links_added, outputs_added, _ = merge_linked_modules(button_data, mapping)
     assert (updated, links_added, outputs_added) == (0, 0, 0)
 
     # Link landed under the correct operation point.
