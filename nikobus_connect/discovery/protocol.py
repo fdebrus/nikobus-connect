@@ -146,31 +146,35 @@ def convert_nikobus_address(address_string: str) -> str:
 #
 # PC-Logic (05-201) exposes 6 logical inputs whose bus-event addresses are
 # **algorithmic**, not stored — the firmware computes them from the PC-Logic
-# module's own bus address and a slot index. Empirically validated on the
-# 2026-05-18 install (PC-Logic at 940C → input slots fire as 64A061..64A066,
-# producing the 12 bus events observed when the user triggered all 6 inputs
-# in sequence). PC-Logic's own flash is empty for the bus addresses (BP-cell
-# region at registers 0x12..0x1E sub=00 reads 0F 00 00 per cell), confirming
-# the addresses are not flash-resident.
+# module's own bus address and a slot index. Validated against two
+# independent installs:
+#
+#   PC-Logic 0x940C → physicals 0x64A061..0x64A066
+#       bus 1A (offset +0): 21814B / 11814B / 31814B / 09814B / 29814B / 19814B
+#       bus 1B (offset +4): 61814B / 51814B / 71814B / 49814B / 69814B / 59814B
+#
+#   PC-Logic 0x8DC8 → physicals 0x646E41..0x646E46
+#       bus 1A: 209D8B / 109D8B / 309D8B / 089D8B / 289D8B / 189D8B
+#       bus 1B: 609D8B / 509D8B / 709D8B / 489D8B / 689D8B / 589D8B
+#
+# Both confirmed: 1A bus = convert_nikobus_address(physical), 1B bus =
+# 1A with the first nibble incremented by 4 (PC_LOGIC_KEY_MAPPING).
 #
 # Formula:
-#   input_high_16 = (byteswap(pc_logic_address) << 3) & 0xFFFF
-#                 = (byteswap(pc_logic_address) * 8) & 0xFFFF
-#   slot_low_byte = 0x60 + slot_index      (slot_index = 1..N)
-#   input_phys    = (input_high_16 << 8) | slot_low_byte
+#   input_physical = 0x600000 | ((pc_logic_addr >> 1) << 4) | slot
 #
-# Worked example for PC-Logic 0x940C:
-#   byteswap(940C)  = 0x0C94
-#   0x0C94 * 8      = 0x64A0
-#   slot 1 → physical 0x64A061   (bus = convert_nikobus_address → 0x21814B)
-#   slot 2 → physical 0x64A062   (bus 0x11814B)
-#   ...
-#   slot 6 → physical 0x64A066   (bus 0x19814B)
+# Reading the layout:
+#   bits 20-23: 0x6 — PC-Logic "module class" marker (empirical across
+#                       the two known installs; may evolve)
+#   bits 4-19:  pc_logic_addr >> 1 — the module's own bus address with
+#                       bit 0 dropped (Nikobus module addresses are
+#                       16-bit and conventionally even)
+#   bits 0-3:   slot_index (1..N)
 #
-# Each input physical is a virtual 2-channel "button" — key 1A emits the
-# primary bus address (output of convert_nikobus_address); key 1B emits the
-# +0x40_0000 alias (the standard 8-channel-style key sibling). Twelve bus
-# events total per PC-Logic when all inputs are triggered.
+# Worked example, PC-Logic 0x940C:
+#   (0x940C >> 1) << 4 = 0x4A060
+#   | 0x600000 = 0x64A060
+#   slot 1 → 0x64A061, ..., slot 6 → 0x64A066
 
 
 def derive_pc_logic_input_physicals(
@@ -179,15 +183,10 @@ def derive_pc_logic_input_physicals(
     """Compute the physical addresses of a PC-Logic module's logical inputs.
 
     Returns ``channel_count`` 6-char hex addresses, one per input slot
-    (1-indexed). On the empirically-validated install, a PC-Logic at
-    ``940C`` produces ``["64A061", "64A062", "64A063", "64A064",
-    "64A065", "64A066"]``.
+    (1-indexed). Empirically validated against two installs:
+    ``940C → 64A061..64A066`` and ``8DC8 → 646E41..646E46``.
 
-    Raises ``ValueError`` if ``pc_logic_address`` is malformed or if
-    ``byteswap(pc_logic_address) * 8`` would overflow 16 bits (which
-    would indicate either an unfamiliar PC-Logic address range or a
-    different firmware revision — needs forensic data before we
-    extrapolate).
+    Raises ``ValueError`` if ``pc_logic_address`` is malformed.
     """
 
     try:
@@ -202,23 +201,13 @@ def derive_pc_logic_input_physicals(
             f"PC-Logic address 0x{addr:X} out of expected 16-bit range"
         )
 
-    byteswapped = ((addr & 0xFF) << 8) | ((addr >> 8) & 0xFF)
-    input_high_16 = byteswapped * 8
-    if input_high_16 > 0xFFFF:
-        raise ValueError(
-            f"PC-Logic input-address derivation overflowed for "
-            f"address 0x{addr:04X} (byteswap * 8 = 0x{input_high_16:X}). "
-            "The validated formula only fits when byteswap(address) "
-            "is below 0x2000. Capture a fresh trace for this address."
-        )
-
     if not (1 <= channel_count <= 16):
         raise ValueError(
             f"channel_count {channel_count} out of plausible range 1..16"
         )
 
-    base = input_high_16 << 8
-    return [f"{base | (0x60 + slot):06X}" for slot in range(1, channel_count + 1)]
+    base = 0x600000 | ((addr >> 1) << 4)
+    return [f"{base | slot:06X}" for slot in range(1, channel_count + 1)]
 
 
 def pc_logic_address_for_input(input_physical: str) -> str | None:
@@ -227,6 +216,10 @@ def pc_logic_address_for_input(input_physical: str) -> str | None:
     Given a 6-hex input physical address, return the PC-Logic module
     address it belongs to (canonical 4-hex form) — or ``None`` if the
     address doesn't fit the PC-Logic input pattern.
+
+    Assumes the PC-Logic address is even (bit 0 = 0), which holds on
+    all observed installs and matches Nikobus's 16-bit module-address
+    convention.
     """
 
     try:
@@ -236,20 +229,22 @@ def pc_logic_address_for_input(input_physical: str) -> str | None:
     if not (0 <= addr <= 0xFFFFFF):
         return None
 
-    low_byte = addr & 0xFF
-    if not (0x61 <= low_byte <= 0x6F):
-        return None  # not in the slot-byte range
-
-    input_high_16 = (addr >> 8) & 0xFFFF
-    if input_high_16 % 8 != 0:
-        return None  # not a multiple of 8 — can't be a PC-Logic block base
-
-    byteswapped = input_high_16 // 8
-    if not (0 <= byteswapped <= 0xFFFF):
+    # Top 4 bits must be 0x6 — the PC-Logic input class marker.
+    if (addr >> 20) & 0xF != 0x6:
         return None
 
-    canonical = ((byteswapped & 0xFF) << 8) | ((byteswapped >> 8) & 0xFF)
-    return f"{canonical:04X}"
+    # Slot index lives in the low nibble, 1..N.
+    slot = addr & 0x0F
+    if not (1 <= slot <= 16):
+        return None
+
+    # Recover (pc_logic_addr >> 1) from bits 4..19 of the physical.
+    half_addr = (addr >> 4) & 0xFFFF
+    pc_logic = half_addr << 1
+    if not (0 <= pc_logic <= 0xFFFF):
+        return None
+
+    return f"{pc_logic:04X}"
 
 
 def pc_logic_input_slot_index(input_physical: str) -> int | None:
@@ -259,10 +254,12 @@ def pc_logic_input_slot_index(input_physical: str) -> int | None:
         addr = int(input_physical, 16)
     except (TypeError, ValueError):
         return None
-    low_byte = addr & 0xFF
-    if not (0x61 <= low_byte <= 0x6F):
+    if (addr >> 20) & 0xF != 0x6:
         return None
-    return low_byte - 0x60
+    slot = addr & 0x0F
+    if not (1 <= slot <= 16):
+        return None
+    return slot
 
 
 def is_known_button_canonical(
