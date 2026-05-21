@@ -1277,6 +1277,12 @@ class NikobusDiscovery:
         """
 
         if not self._accumulated_unmatched:
+            _LOGGER.info(
+                "Remote-transmitter synthesis | accumulator empty — no "
+                "unmatched references were collected during this scan "
+                "(either no scan ran or every BP-cell reference resolved "
+                "to an existing button-store entry)."
+            )
             return
 
         # Cluster by last 4 hex chars.
@@ -1286,6 +1292,26 @@ class NikobusDiscovery:
                 continue
             suffix = addr[-4:].upper()
             clusters.setdefault(suffix, []).append(addr.upper())
+
+        # Always log what we found, even when no cluster meets the
+        # threshold — diagnosing "synthesis didn't fire" is impossible
+        # without visibility into the accumulator contents and the
+        # cluster shape we computed.
+        cluster_summary = sorted(
+            ((suffix, len(members)) for suffix, members in clusters.items()),
+            key=lambda item: -item[1],
+        )
+        sample_addresses = sorted(self._accumulated_unmatched)[:20]
+        _LOGGER.info(
+            "Remote-transmitter synthesis | accumulator_size=%d "
+            "unique_suffixes=%d threshold=%d top_clusters=%s "
+            "sample_addresses=%s",
+            len(self._accumulated_unmatched),
+            len(clusters),
+            self.REMOTE_TRANSMITTER_CLUSTER_THRESHOLD,
+            cluster_summary[:10],
+            sample_addresses,
+        )
 
         new_entries: dict[str, dict] = {}
         for suffix, members in clusters.items():

@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.13.1
+
+Add diagnostic logging to ``_synthesize_remote_transmitters_from_unmatched``.
+Field report (user with 52-key Easywave install) showed the
+synthesis path not firing after upgrading to library 0.13.0 +
+running a full module scan, even though the necessary references
+should have surfaced as unmatched. Without log visibility into the
+accumulator we can't tell whether (a) the accumulator stayed empty
+(no unmatched refs collected — possibly a per-module merge issue),
+(b) the accumulator filled with addresses whose 4-hex suffix
+doesn't cluster the way 0.13.0 assumed (BP cells store physicals,
+which may not share the same suffix as the bus addresses).
+
+### Added
+
+- ``Remote-transmitter synthesis | ...`` INFO log fired at every
+  ``_complete_discovery_run``, reporting:
+  - ``accumulator_size`` — total unmatched references collected.
+  - ``unique_suffixes`` — distinct 4-hex suffixes seen.
+  - ``top_clusters`` — top 10 (suffix, count) pairs.
+  - ``sample_addresses`` — first 20 raw entries from the accumulator.
+- Separate "accumulator empty" log line so the no-data case is
+  unambiguous in the wild.
+
+No behaviour change beyond the new log lines.
+
 ## 0.13.0
 
 Recover button-store entries for multi-page RF remotes whose
