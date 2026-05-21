@@ -1,5 +1,59 @@
 # Changelog
 
+## 0.14.0
+
+Support the Niko **05-312 Easywave 52-key hand-held** remote. The
+firmware enrols it in PC-Link inventory as device_type ``0x3D``
+with ``channels=52``, which the library's catalogue already
+recognised — but ``merge_discovered_buttons`` only knew how to
+expand ``{1, 2, 4, 8}``-channel buttons into op-points. The
+05-312 fell through with::
+
+    ERROR Unexpected number of channels: 52 for device <physical>
+
+The remote was silently dropped from the v2 button store, and any
+BP-cell reference to its 52 sub-codes went to the unmatched
+accumulator as a single physical (degenerate cluster, below the
+transmitter-synthesis threshold of 8). The previous 0.13.x cluster
+synthesis was the wrong layer for this — the firmware was already
+telling us "this is one button with 52 sub-codes."
+
+### Added
+
+- ``EASYWAVE_52_KEY_MAPPING`` in ``mapping.py`` — the full 52-entry
+  per-key first-byte table, derived from a real install and
+  pinned with 9 tests. The label scheme matches the user's
+  natural naming (``1A``..``1C`` for Ch1 base codes,
+  ``1.1A``..``1.5B`` for Ch1 scenes, similarly for Ch2/3/4).
+- ``KEY_MAPPING_FIRST_BYTE`` dispatch table — channel counts whose
+  per-key offsets are expressed as a full 2-hex first byte rather
+  than the standard single-nibble add. ``merge_discovered_buttons``
+  picks the right derivation path off this table.
+- ``_BUTTON_KEYS_BY_CHANNEL_COUNT[52]`` — the ordered list of 52
+  key labels so op-points materialise consistently.
+
+### Changed
+
+- ``merge_discovered_buttons`` gains a multi-key remote branch:
+  when ``KEY_MAPPING_FIRST_BYTE`` has an entry for the device's
+  channel count, op-point bus addresses are built by full
+  first-byte replacement of the physical's converted address
+  instead of single-nibble offset.
+
+### Migration
+
+The next discovery run on an install with a 05-312 will materialise
+it as one button-store entry with 52 op-points, names matching the
+user's v1 ``.migrated`` conventions (e.g., ``Push button 1.1A
+#N80E31C``). Existing installs with no 05-312 are unaffected.
+
+### Validated
+
+Against a real 2026-05-21 install where the physical is ``0E31C0``,
+all 52 emitted bus addresses round-trip through the new merge path
+byte-for-byte. The 4-channel wall-button regression test confirms
+the single-nibble path is untouched.
+
 ## 0.13.1
 
 Add diagnostic logging to ``_synthesize_remote_transmitters_from_unmatched``.

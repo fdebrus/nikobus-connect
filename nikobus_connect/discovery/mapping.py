@@ -385,6 +385,77 @@ PC_LOGIC_KEY_MAPPING = {
 }
 
 
+# Niko 05-312 Easywave 52-key hand-held remote.
+#
+# Unlike the 1/2/4/8-channel wall buttons (where each key's bus
+# address differs from the physical's ``convert_nikobus_address``
+# only in the first NIBBLE), the 05-312's 52 sub-codes differ in the
+# full first BYTE. The low nibble of the first byte identifies the
+# channel button (1-4) on the remote; the high nibble identifies
+# the sub-code within that channel.
+#
+# Channel low-nibble decoder:
+#   Ch1 -> base 8, scene 0
+#   Ch2 -> base C, scene 4
+#   Ch3 -> base A, scene 2
+#   Ch4 -> base E, scene 6
+#
+# Sub-code high-nibble decoder:
+#   base A/B/C   -> 8 / C / 0
+#   scene 1 A/B  -> 8 / C
+#   scene 2 A/B  -> A / E
+#   scene 3 A/B  -> 9 / D
+#   scene 4 A/B  -> B / F
+#   scene 5 A/B  -> 3 / 7
+#
+# So e.g. "1.5 B" = (high_nibble for scene 5 B = 7) << 4 | (Ch1 scene
+# low = 0) = 0x70. The full bus address is then
+# ``first_byte + convert_nikobus_address(physical)[2:]`` — for the
+# real-install physical ``0E31C0`` (convert -> ``00E31C``), Ch1.5 B
+# emits ``70E31C``, matching the user's .migrated dump exactly.
+#
+# Validated against a 2026-05-21 install: all 52 emitted bus
+# addresses round-trip through this table. Document is the source
+# of truth — change only against a fresh capture from real hardware.
+EASYWAVE_52_KEY_MAPPING = {
+    "1A": "88", "1B": "C8", "1C": "08",
+    "1.1A": "80", "1.1B": "C0",
+    "1.2A": "A0", "1.2B": "E0",
+    "1.3A": "90", "1.3B": "D0",
+    "1.4A": "B0", "1.4B": "F0",
+    "1.5A": "30", "1.5B": "70",
+    "2A": "8C", "2B": "CC", "2C": "0C",
+    "2.1A": "84", "2.1B": "C4",
+    "2.2A": "A4", "2.2B": "E4",
+    "2.3A": "94", "2.3B": "D4",
+    "2.4A": "B4", "2.4B": "F4",
+    "2.5A": "34", "2.5B": "74",
+    "3A": "8A", "3B": "CA", "3C": "0A",
+    "3.1A": "82", "3.1B": "C2",
+    "3.2A": "A2", "3.2B": "E2",
+    "3.3A": "92", "3.3B": "D2",
+    "3.4A": "B2", "3.4B": "F2",
+    "3.5A": "32", "3.5B": "72",
+    "4A": "8E", "4B": "CE", "4C": "0E",
+    "4.1A": "86", "4.1B": "C6",
+    "4.2A": "A6", "4.2B": "E6",
+    "4.3A": "96", "4.3B": "D6",
+    "4.4A": "B6", "4.4B": "F6",
+    "4.5A": "36", "4.5B": "76",
+}
+
+
+# Channel counts whose key offsets are expressed as a full 2-hex
+# first byte (full first-byte replacement on the physical's
+# converted address) rather than a single-nibble add. Used by
+# ``merge_discovered_buttons`` to dispatch the right derivation
+# path. Currently only 05-312 (52 keys); add to this table when
+# new multi-key remote variants are catalogued.
+KEY_MAPPING_FIRST_BYTE = {
+    52: EASYWAVE_52_KEY_MAPPING,
+}
+
+
 KEY_MAPPING_MODULE = {
     1: {1: "8"},
     2: {1: "8", 3: "C"},

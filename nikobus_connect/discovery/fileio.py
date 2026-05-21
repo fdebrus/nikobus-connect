@@ -417,6 +417,24 @@ _BUTTON_KEYS_BY_CHANNEL_COUNT = {
     2: ["1A", "1B"],
     4: ["1A", "1B", "1C", "1D"],
     8: ["1A", "1B", "1C", "1D", "2A", "2B", "2C", "2D"],
+    # Niko 05-312 Easywave hand-held — 52 sub-codes across 4 channel
+    # buttons (Ch1..Ch4), each with 3 base keys (A/B/C) plus 5
+    # paged scenes (.1..A/B). See EASYWAVE_52_KEY_MAPPING in
+    # mapping.py for the per-key offset table.
+    52: [
+        "1A", "1B", "1C",
+        "1.1A", "1.1B", "1.2A", "1.2B", "1.3A", "1.3B",
+        "1.4A", "1.4B", "1.5A", "1.5B",
+        "2A", "2B", "2C",
+        "2.1A", "2.1B", "2.2A", "2.2B", "2.3A", "2.3B",
+        "2.4A", "2.4B", "2.5A", "2.5B",
+        "3A", "3B", "3C",
+        "3.1A", "3.1B", "3.2A", "3.2B", "3.3A", "3.3B",
+        "3.4A", "3.4B", "3.5A", "3.5B",
+        "4A", "4B", "4C",
+        "4.1A", "4.1B", "4.2A", "4.2B", "4.3A", "4.3B",
+        "4.4A", "4.4B", "4.5A", "4.5B",
+    ],
 }
 
 
@@ -663,26 +681,58 @@ def merge_discovered_buttons(
 
         channels_data: dict[str, dict] = {}
 
-        for idx, key_label in enumerate(keys, start=1):
-            if key_label not in mapping:
-                continue
-            add_value = int(mapping[key_label], 16)
-            new_nibble_value = (original_nibble + add_value) & 0xF
-            new_nibble_hex = f"{new_nibble_value:X}"
-            updated_addr = _normalize_address(new_nibble_hex + converted_address[1:])
-            channels_data[f"channel_{idx}"] = {
-                "key": key_label,
-                "address": updated_addr,
-            }
-            generated_op_desc = f"Push button {key_label} #N{updated_addr}"
-            op_point = op_points.setdefault(
-                key_label,
-                {"bus_address": updated_addr, "description": generated_op_desc},
-            )
-            op_point["bus_address"] = updated_addr
-            current_op_desc = op_point.get("description")
-            if not current_op_desc or current_op_desc.endswith(f"#N{updated_addr}"):
-                op_point["description"] = generated_op_desc
+        # Multi-key remote dispatch. Some Nikobus remotes (currently
+        # only the 05-312 Easywave 52-key) emit sub-codes that differ
+        # in the FULL first byte of the bus address, not just the
+        # first nibble. Use a separate derivation path when the
+        # channel count is registered in ``KEY_MAPPING_FIRST_BYTE``.
+        from .mapping import KEY_MAPPING_FIRST_BYTE
+        first_byte_map = KEY_MAPPING_FIRST_BYTE.get(num_channels)
+
+        if first_byte_map is not None:
+            for idx, key_label in enumerate(keys, start=1):
+                first_byte_hex = first_byte_map.get(key_label)
+                if first_byte_hex is None:
+                    continue
+                updated_addr = _normalize_address(
+                    first_byte_hex.upper() + converted_address[2:]
+                )
+                channels_data[f"channel_{idx}"] = {
+                    "key": key_label,
+                    "address": updated_addr,
+                }
+                generated_op_desc = f"Push button {key_label} #N{updated_addr}"
+                op_point = op_points.setdefault(
+                    key_label,
+                    {"bus_address": updated_addr, "description": generated_op_desc},
+                )
+                op_point["bus_address"] = updated_addr
+                current_op_desc = op_point.get("description")
+                if not current_op_desc or current_op_desc.endswith(f"#N{updated_addr}"):
+                    op_point["description"] = generated_op_desc
+        else:
+            for idx, key_label in enumerate(keys, start=1):
+                if key_label not in mapping:
+                    continue
+                add_value = int(mapping[key_label], 16)
+                new_nibble_value = (original_nibble + add_value) & 0xF
+                new_nibble_hex = f"{new_nibble_value:X}"
+                updated_addr = _normalize_address(
+                    new_nibble_hex + converted_address[1:]
+                )
+                channels_data[f"channel_{idx}"] = {
+                    "key": key_label,
+                    "address": updated_addr,
+                }
+                generated_op_desc = f"Push button {key_label} #N{updated_addr}"
+                op_point = op_points.setdefault(
+                    key_label,
+                    {"bus_address": updated_addr, "description": generated_op_desc},
+                )
+                op_point["bus_address"] = updated_addr
+                current_op_desc = op_point.get("description")
+                if not current_op_desc or current_op_desc.endswith(f"#N{updated_addr}"):
+                    op_point["description"] = generated_op_desc
 
         # Surface channel-address mapping on the discovered device so later
         # merge steps (which consume ``command_mapping`` keyed by bus
