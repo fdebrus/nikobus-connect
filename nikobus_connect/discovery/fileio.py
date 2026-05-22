@@ -783,6 +783,113 @@ def _build_bus_to_op_index(buttons: dict) -> dict[str, tuple[str, str]]:
     return index
 
 
+def _build_easywave_52_lookup(buttons: dict) -> dict[str, str]:
+    """Index every address in the 32-byte BP-cell window of each
+    52-channel button back to that button's physical base.
+
+    The 05-312 Easywave remote emits BP-cell ``button_address``
+    references of the form ``physical + offset`` with ``offset`` in
+    ``[0, 32)``. The mapping is install-agnostic: only the per-remote
+    ``physical`` base is read from the button store. Bus broadcast
+    addresses use the unrelated 52-entry ``EASYWAVE_52_KEY_MAPPING``
+    first-byte table, so this window cannot be inferred from
+    ``bus_address`` and needs its own index.
+    """
+
+    lookup: dict[str, str] = {}
+    for phys_addr, entry in buttons.items():
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("channels") != 52:
+            continue
+        normalized = _normalize_address(phys_addr)
+        if not normalized or len(normalized) != 6:
+            continue
+        try:
+            base = int(normalized, 16)
+        except ValueError:
+            continue
+        for offset in range(32):
+            if (offset & 0x07) >= 6:
+                # slots 6, 7 of each channel block are unused on the 05-312
+                continue
+            window_addr = f"{(base + offset) & 0xFFFFFF:06X}"
+            lookup.setdefault(window_addr, normalized)
+    return lookup
+
+
+def _resolve_easywave_52(
+    normalized_addr: str,
+    key_raw,
+    buttons: dict,
+    easywave_52_lookup: dict[str, str],
+):
+    """Resolve a BP-cell ref to a 05-312 op-point.
+
+    The BP-cell ``button_address`` decomposes as ``physical + offset``
+    where::
+
+        bits 4..3 of offset = channel - 1     (4 channels)
+        bits 2..0 of offset = slot in channel (6 slots used of 8)
+
+            slot 0..2 = rocker X-1AB .. X-3AB (paired sub-buttons)
+            slot 3    = X-4AB if key=1 else X-5AB (shared slot)
+            slot 4    = channel master rocker X-AB
+            slot 5    = channel C button X-C
+            slot 6,7  = unused
+
+    This is the *BP-cell* encoding, distinct from the broadcast
+    bus-first-byte encoding in ``EASYWAVE_52_KEY_MAPPING``. Verified
+    against PC-software ground truth + BP-cell scans on a 52-channel
+    install (modules 8CF5, 8B9C, 9418, C95D); the layout depends only
+    on slot/key/mode and is universal across 05-312 units.
+
+    Returns the A-half op-point as canonical. The B-half link is
+    populated post-resolve by ``_mirror_paired_button_links`` (M01
+    Open/On and M02 Close/Off modes both pair A↔B).
+    """
+
+    phys_addr = easywave_52_lookup.get(normalized_addr)
+    if not phys_addr:
+        return None
+    entry = buttons.get(phys_addr)
+    if not isinstance(entry, dict):
+        return None
+    try:
+        offset = (int(normalized_addr, 16) - int(phys_addr, 16)) & 0xFFFFFF
+    except ValueError:
+        return None
+    if offset >= 32:
+        return None
+
+    channel = (offset >> 3) + 1
+    slot = offset & 0x07
+    if not 1 <= channel <= 4:
+        return None
+
+    try:
+        key_int = int(key_raw) if key_raw is not None else 1
+    except (TypeError, ValueError):
+        key_int = 1
+
+    if slot < 3:
+        label = f"{channel}.{slot + 1}A"
+    elif slot == 3:
+        label = f"{channel}.{4 if key_int else 5}A"
+    elif slot == 4:
+        label = f"{channel}A"
+    elif slot == 5:
+        label = f"{channel}C"
+    else:
+        return None
+
+    op_points = entry.get("operation_points") or {}
+    op_point = op_points.get(label)
+    if not isinstance(op_point, dict):
+        return None
+    return phys_addr, label, op_point
+
+
 def _build_ir_base_lookup(buttons: dict) -> dict[str, int]:
     """Map 4-char IR prefix -> base byte, derived from physical IR receivers."""
 
@@ -810,6 +917,7 @@ def _resolve_operation_point(
     buttons: dict,
     bus_to_op: dict[str, tuple[str, str]],
     ir_base_lookup: dict[str, int],
+    easywave_52_lookup: dict[str, str] | None = None,
 ):
     """Find the (physical_addr, key_label, operation_point) tuple for a press.
 
@@ -820,6 +928,18 @@ def _resolve_operation_point(
     normalized = _normalize_address(push_button_address)
     if not normalized:
         return None
+
+    # 0) 05-312 Easywave 52-key remote: BP-cell address is
+    # ``physical + offset`` (offset ∈ [0, 32)) — neither a direct
+    # physical match nor a bus address. Resolved before path 1 because
+    # offset=0 collides with the physical itself, and the generic
+    # ``_key_raw_to_label`` has no entry for ``channels=52``.
+    if easywave_52_lookup:
+        resolved = _resolve_easywave_52(
+            normalized, key_raw, buttons, easywave_52_lookup
+        )
+        if resolved is not None:
+            return resolved
 
     # 1) Direct physical-address match.
     physical = buttons.get(normalized)
@@ -1077,6 +1197,7 @@ def merge_linked_modules(button_data, command_mapping):
 
     bus_to_op = _build_bus_to_op_index(buttons)
     ir_base_lookup = _build_ir_base_lookup(buttons)
+    easywave_52_lookup = _build_easywave_52_lookup(buttons)
 
     updated_buttons = 0
     links_added = 0
@@ -1123,6 +1244,7 @@ def merge_linked_modules(button_data, command_mapping):
                 buttons,
                 bus_to_op,
                 ir_base_lookup,
+                easywave_52_lookup,
             )
             if resolved is None:
                 normalized = _normalize_address(push_button_address)
@@ -1314,6 +1436,20 @@ _TWO_BUTTON_PAIRS: dict[str, tuple[str, ...]] = {
     "2C": ("2D",),
     "2D": ("2C",),
 }
+
+# 05-312 sub-rocker pairs (``X.YA`` ↔ ``X.YB`` for channel X=1..4, row
+# Y=1..5) plus the channel-master rockers (``3A``↔``3B`` and
+# ``4A``↔``4B``). The 4/8-channel wall button pairs above already
+# cover ``1A``↔``1B`` and ``2A``↔``2B``; the 52-key remote reuses
+# those labels for channels 1 and 2 master rockers.
+for _ch in range(3, 5):
+    _TWO_BUTTON_PAIRS[f"{_ch}A"] = (f"{_ch}B",)
+    _TWO_BUTTON_PAIRS[f"{_ch}B"] = (f"{_ch}A",)
+for _ch in range(1, 5):
+    for _row in range(1, 6):
+        _TWO_BUTTON_PAIRS[f"{_ch}.{_row}A"] = (f"{_ch}.{_row}B",)
+        _TWO_BUTTON_PAIRS[f"{_ch}.{_row}B"] = (f"{_ch}.{_row}A",)
+del _ch, _row
 
 # M02 master keys mirror to the rest of their row. Only fired when the
 # source key is the master (1A or 2A) — a record on a non-master key is
