@@ -1,5 +1,64 @@
 # Changelog
 
+## 0.15.0
+
+Resolve BP-cell links from a **05-312 Easywave 52-key** remote into
+specific op-points on the button store. 0.14.0 materialised the
+remote's 52 op-points with correct bus addresses, but BP cells in
+switch / dimmer / roller modules reference the remote with the
+*other* per-button encoding — ``physical + offset`` for ``offset
+∈ [0, 32)``. None of the existing resolver paths in
+``_resolve_operation_point`` (direct physical, +1 sibling alias,
+``bus_to_op``, IR-slot) covered that window, so links from
+05-312 rockers to outputs stayed unmatched and never reached the
+op-points' ``linked_modules`` lists.
+
+The decode is fully algorithmic — no per-install table:
+
+    offset = button_address - physical_base
+        bits 4..3 → channel (1..4)
+        bits 2..0 → slot
+            0..2 → rocker X-1AB .. X-3AB
+            3    → X-4AB if key=1 else X-5AB
+            4    → channel master rocker X-AB
+            5    → channel C button X-C
+            6,7  → unused
+
+Validated against the PC-software export and BP-cell scans on the
+diagnostic install (modules 8CF5, 8B9C, 9418, C95D, C5C1). Every
+rocker reference in the log now lands on the expected op-point
+label.
+
+### Added
+
+- ``_build_easywave_52_lookup`` — indexes every address in the
+  32-byte BP-cell window of each 52-channel button back to that
+  remote's physical base. One pass over ``buttons`` at merge time.
+- ``_resolve_easywave_52`` — slot-dispatch decoder for the BP-cell
+  offset / key bit, returning the A-half op-point as canonical.
+- ``_TWO_BUTTON_PAIRS`` extended with ``X.YA`` ↔ ``X.YB`` pairs for
+  channel 1..4, row 1..5 (40 new entries). The existing channel-
+  master pairs (``1A``↔``1B``..``4A``↔``4B``) already cover the X-AB
+  master rockers.
+
+### Changed
+
+- ``_resolve_operation_point`` gains an optional
+  ``easywave_52_lookup`` parameter, consulted before the direct
+  physical-match path so ``offset=0`` (which would otherwise alias
+  the remote's own physical) routes through slot decode instead of
+  the generic resolver that has no ``KEY_MAPPING_MODULE`` entry for
+  ``channels=52``.
+- ``merge_linked_modules`` builds the new lookup once per call and
+  passes it through. No behaviour change for non-05-312 buttons.
+
+### Verified
+
+- ``test_easywave_52_link_resolution`` (new): 14 ground-truth
+  (button, key, expected label) tuples derived from the BP-cell
+  scans on the diagnostic install, plus offset / slot integrity,
+  A↔B mirror propagation, and isolation from 4/8-channel buttons.
+
 ## 0.14.0
 
 Support the Niko **05-312 Easywave 52-key hand-held** remote. The
