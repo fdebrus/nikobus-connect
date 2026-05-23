@@ -533,6 +533,34 @@ ROLLER_TIMER_MAPPING = {
     16: ["90 s", None, None],
 }
 
+# Roller M06 ("Open with operating time") and M07 ("Close with operating
+# time") use the T1 nibble to encode a PAIRED duration rather than a
+# single operating time. Format is ``<long-press-time> / <short-press-time>``.
+#
+# Per Niko ParamBase ``S_DB_ROLLUIK_T3`` (product.mdb KP=6). Used only for
+# mode bytes 0x05 (M06) and 0x06 (M07) — the regular operating-time modes
+# (M01/M02/M03/M05) use ``ROLLER_TIMER_MAPPING`` instead.
+ROLLER_T3_MAPPING = {
+    0x0: "-  / 1s",
+    0x1: "-  / 1s",   # canonical Niko table has both slot 0 and slot 1 as
+                      # "-  / 1s" — keeping the duplication faithful to the
+                      # spec rather than de-duplicating.
+    0x2: "-  / 2s",
+    0x3: "-  / 3s",
+    0x4: "8s / 1s",
+    0x5: "8s / 2s",
+    0x6: "8s / 3s",
+    0x7: "16s / 1s",
+    0x8: "16s / 2s",
+    0x9: "16s / 3s",
+    0xA: "30s / 1s",
+    0xB: "30s / 2s",
+    0xC: "30s / 3s",
+    0xD: "90s / 1s",
+    0xE: "90s / 2s",
+    0xF: "90s / 3s",
+}
+
 # =============================================================================
 # Dimmer
 # =============================================================================

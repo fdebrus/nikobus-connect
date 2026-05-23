@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.15.3
+
+Surface the T1 paired-time value for roller modes **M06** ("Open with
+operating time") and **M07** ("Close with operating time"). These modes
+use a different T1 encoding than the regular operating-time modes
+(M01/M02/M03/M05): instead of one duration, the nibble selects a
+``"<long-press> / <short-press>"`` pair.
+
+Pre-fix, the shutter decoder used ``ROLLER_TIMER_MAPPING`` for every
+mode, so M06/M07 records reported ``None`` for T1 because the
+``ROLLER_TIMER_MAPPING`` rows are single-valued.
+
+Now ``shutter_decoder._timer_value`` takes the mode byte too and
+dispatches to the new ``ROLLER_T3_MAPPING`` for M06/M07. The 16-entry
+table is sourced from Niko ParamBase ``S_DB_ROLLUIK_T3`` (product.mdb
+KP=6).
+
+Pinned in ``test_roller_t3_paired_times`` (5 tests covering the
+full table, the mode-dispatch behaviour, the structural quartet
+pattern, and back-compat for callers that don't pass ``mode_raw``).
+
 ## 0.15.0
 
 Resolve BP-cell links from a **05-312 Easywave 52-key** remote into
