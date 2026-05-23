@@ -1,24 +1,25 @@
 # Changelog
 
-## 0.15.2
+## 0.15.3
 
-Fix ``DIMMER_TIMER_MAPPING`` col[2] (T2 ramp time) slots 10 and 11
-which had their values swapped relative to Niko's canonical
-``S_DB_DIMMER_T2`` parameter table:
+Surface the T1 paired-time value for roller modes **M06** ("Open with
+operating time") and **M07** ("Close with operating time"). These modes
+use a different T1 encoding than the regular operating-time modes
+(M01/M02/M03/M05): instead of one duration, the nibble selects a
+``"<long-press> / <short-press>"`` pair.
 
-    pre-fix:   slot 10 = "1 m"  slot 11 = "90 s"
-    post-fix:  slot 10 = "50 s" slot 11 = "1 m"
+Pre-fix, the shutter decoder used ``ROLLER_TIMER_MAPPING`` for every
+mode, so M06/M07 records reported ``None`` for T1 because the
+``ROLLER_TIMER_MAPPING`` rows are single-valued.
 
-The Niko ramp-time table is strictly monotonic (1 s, 2 s, 4 s,
-... 30 s, 40 s, 50 s, 1 m, 2 m, ...) and ``"90 s"`` is not a value
-in that table at all — it was leftover from a different parameter
-column that got mis-merged into col[2].
+Now ``shutter_decoder._timer_value`` takes the mode byte too and
+dispatches to the new ``ROLLER_T3_MAPPING`` for M06/M07. The 16-entry
+table is sourced from Niko ParamBase ``S_DB_ROLLUIK_T3`` (product.mdb
+KP=6).
 
-Verified against Niko's product database (``product.mdb``,
-``ParamBase`` row KP=12 ``S_DB_DIMMER_T2``).
-
-Pinned in ``test_dimmer_timer_mapping`` which locks the full 16-entry
-table, enforces monotonicity, and asserts ``"90 s"`` cannot reappear.
+Pinned in ``test_roller_t3_paired_times`` (5 tests covering the
+full table, the mode-dispatch behaviour, the structural quartet
+pattern, and back-compat for callers that don't pass ``mode_raw``).
 
 ## 0.15.0
 
