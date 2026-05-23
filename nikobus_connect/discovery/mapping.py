@@ -571,3 +571,50 @@ DIMMER_TIMER_MAPPING = {
     16: ["9,5 V", None, None],
     17: ["10,0 V", None, None],
 }
+
+# ---------------------------------------------------------------------------
+# Authoritative per-mode T1 lookup tables for the dimmer.
+#
+# Niko's product database exposes a separate parameter table per dimmer
+# mode — there is no "one T1 table per module". The legacy
+# ``DIMMER_TIMER_MAPPING`` collapses three of the four real tables into
+# one structure with positional columns, which prevents callers from
+# resolving the T1 value correctly per mode.
+#
+# Source: product.mdb ParamBase rows (Niko PC-software master catalogue):
+#   KP=11 S_DB_DIMMER_AMOUNT  → preset dim level (M11 / M12)
+#   KP=12 S_DB_DIMMER_T2      → T2 ramp/fade time (every dimmer mode)
+#   KP=13 S_DB_DIMMER_T1_1    → on/off step config (M01 / M02 / M03)
+#   KP=14 S_DB_DIMMER_T1_2    → push time (M05 / M06)
+#   KP=15 S_DB_DIMMER_T1_3    → delayed-off duration (M07)
+# ---------------------------------------------------------------------------
+
+DIMMER_T1_1 = ("On/off step 0", "On/off step 1", "On/off step 2-F")
+DIMMER_T1_2 = ("0 s", "1 s", "2 s", "3 s")
+DIMMER_T1_3 = (
+    "10 s", "1 m", "2 m", "3 m", "4 m", "5 m", "6 m", "7 m",
+    "8 m", "9 m", "15 m", "30 m", "45 m", "60 m", "90 m", "120 m",
+)
+DIMMER_AMOUNT_PERCENT = (
+    "1%", "1.5%", "2%", "2.5%", "3%", "3.5%", "4%", "4.5%",
+    "5%", "5.5%", "6%", "6.5%", "7%", "8%", "9%", "10%",
+)
+DIMMER_T2_RAMP = (
+    "1 s", "2 s", "4 s", "6 s", "8 s", "10 s", "15 s", "20 s",
+    "30 s", "40 s", "50 s", "1 m", "2 m", "3 m", "4 m", "5 m",
+)
+
+# Mode-byte → T1 lookup table dispatch. Modes outside this map (M04, M08,
+# M13, M14) use no T1 parameter per Niko's spec — the chunk's T1 nibble
+# is ignored for them, so we deliberately return ``None`` rather than
+# fabricating a value.
+DIMMER_MODE_T1_LOOKUP = {
+    0x00: DIMMER_T1_1,         # M01 - Dim on/off (2 buttons)
+    0x01: DIMMER_T1_1,         # M02 - Dim on/off (4 buttons)
+    0x02: DIMMER_T1_1,         # M03 - Light scene on/off
+    0x04: DIMMER_T1_2,         # M05 - On (if necessary with operating time)
+    0x05: DIMMER_T1_2,         # M06 - Off (eventually with operating time)
+    0x06: DIMMER_T1_3,         # M07 - Delayed off
+    0x08: DIMMER_AMOUNT_PERCENT,  # M11 - Preset on/off
+    0x09: DIMMER_AMOUNT_PERCENT,  # M12 - Preset on
+}
