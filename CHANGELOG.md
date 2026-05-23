@@ -1,5 +1,65 @@
 # Changelog
 
+## 0.18.0
+
+Anchored productive-band scan for switch and roller modules.
+
+**Problem.** 0.17.0's per-product DLL profiles work, but they scan far
+more registers than necessary on populated installs:
+
+- Switch: 312 register reads per module across 6 passes, of which
+  three live-switch traces (2026-05-23, modules C9A5 and 4707) showed
+  only ~23-86 productive responses concentrated in two tight clusters
+  (sub=00 reg 0x8F..0xA7, sub=04 reg 0x10..0x27 with a deterministic
+  hole at 0x14).
+- Roller: 251 register reads per module across 5 passes, of which two
+  live-roller traces (modules 9105, 8394) showed productive records
+  only in sub=00 reg 0x90..0x9C plus a lone "master" slot at 0xF0,
+  with sub=01 0x00..0x27 holding a per-channel state mirror.
+
+The long sub=00 sweep (194 contiguous registers) also exhibited a
+**reliability failure** on one trace: module 4707 stopped responding
+at reg=0xD9 after 156 reads (consecutive_give_ups=8 abort). All
+downstream passes (sub=01, sub=04) then ACK-timed-out completely,
+yielding zero records — the module was effectively exhausted.
+
+**Cross-validation.** The DLL magic tuple for the switch
+(``Niko_05_000_01.dll`` ``GetDLLReadInfo`` returns
+``offset=0x100, recsize=6, recs_per_unit=0x10, length=0``) confirms
+the trace: every decoded chunk was exactly 6 bytes, and the page
+size of 16 records × 6 bytes = 96 bytes = 6 register reads matches
+the 4 × 6-register page structure visible in both productive
+clusters.
+
+Empirical mode-distribution analysis on C9A5 showed sub=00 and
+sub=04 store **disjoint** record sets (0 overlap across 32 + 42
+records), but sub=01 0x70..0x96 was a near-subset of sub=04
+(9 of 12 records duplicated). Dropping sub=01 from the default loses
+~3 unique records but saves 44 register reads.
+
+**Changes.**
+
+- ``_SWITCH_PROFILE_ANCHORED`` (new): sub=00 0x8E..0xAF (34) +
+  sub=04 0x00..0x2F (48) = **82 reads** per switch, padded around
+  the observed clusters for install headroom.
+- ``_ROLLER_PROFILE_ANCHORED`` (new): sub=00 0x8E..0xA8 + 0xF0 +
+  sub=01 0x00..0x27 = **68 reads** per roller.
+- ``_MODULE_SCAN_PROFILES`` now points switch/roller at the anchored
+  profiles; the full DLL-derived plans are renamed ``_SWITCH_PROFILE_FULL``
+  and ``_ROLLER_PROFILE_FULL`` and remain accessible via the
+  ``_MODULE_SCAN_PROFILES_BROAD_EXTRA`` superset.
+- ``broad_scan=True`` on ``NikobusDiscovery`` restores the full
+  DLL-derived coverage (anchored + dropped bands + huge variable
+  sections) for installs that want the safety-net sweep back.
+
+**Performance.** Default scan time drops by ~3.8× on switches and
+~3.7× on rollers. Module-exhaustion failures from the long sub=00
+sweep are eliminated since no single pass exceeds 34 reads.
+
+**Validation status.** Anchored profiles are validated against 3
+switch and 2 roller traces. The dimmer / pc_logic / pc_link profiles
+are unchanged — no trace data yet to narrow them.
+
 ## 0.17.1
 
 Discovery speed regression fix for installs with feedback modules.

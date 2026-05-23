@@ -85,11 +85,22 @@ def test_dimmer_plan_includes_link_table_band() -> None:
     assert 240 <= total <= 260, total
 
 
-def test_roller_plan_includes_link_table_band() -> None:
-    """Roller's primary link-table section (offset 0x3E8, default 0xE90
-    bytes ≈ 234 reads) must be present."""
+def test_roller_default_uses_anchored_band() -> None:
+    """0.18.0: roller default scans the anchored productive band
+    (sub=00 link cluster around 0x90 + master slot at 0xF0, plus
+    sub=01 0x00..0x27 state mirror). ~68 reads vs the 251-read full
+    profile, validated against two live rollers (9105, 8394)."""
     total = _total_reads("roller_module")
-    assert 240 <= total <= 260, total
+    assert 50 <= total <= 90, total
+
+
+def test_roller_broad_scan_restores_full_link_table() -> None:
+    """``broad_scan=True`` reaches the rest of section 1's link-table
+    range, the sec 4 mirror, sec 0/3 sentinels, and the huge sec 2
+    variable band."""
+    total = _total_reads("roller_module", broad_scan=True)
+    # Full (251) + sec 2 (~700 regs) = ~950+. Generous bounds.
+    assert total >= 900, total
 
 
 def test_pc_logic_plan_dispatches_dll_sections() -> None:
@@ -125,15 +136,27 @@ def test_feedback_plan_is_skipped_post_017_1() -> None:
     )
 
 
-def test_switch_plan_includes_legacy_safety_net() -> None:
-    """The switch DLL (Niko_05_000_01) returns a magic tuple rather than
-    a section list. Pending dynamic decode of the EXE-side dispatch, we
-    apply the dimmer/roller pattern (sub=0 link table) PLUS the
-    pre-0.16.0 sub=4 0x00..0x3F band as a proven safety net."""
+def test_switch_default_uses_anchored_band() -> None:
+    """0.18.0: switch default scans only the anchored productive band
+    (sub=00 link cluster around 0x90, sub=04 legacy cluster around
+    0x10). Validated against three switch traces; reduces ~312 → ~82
+    reads per switch and eliminates the long-sweep exhaustion mode."""
     plan = _scan_passes_for_module_type("switch_module")
     subs_used = {sub for sub, _regs in plan}
+    # sub=01 dropped from default — empirical overlap with sub=04
+    # rendered it nearly redundant.
+    assert subs_used == {"00", "04"}, subs_used
+    total = _total_reads("switch_module")
+    assert 60 <= total <= 100, total
+
+
+def test_switch_broad_scan_restores_full_dll_profile() -> None:
+    """``broad_scan=True`` restores the bands dropped from the anchored
+    default — sub=01 secondary, sub=00 pre-anchor sweep, sub=04 dead
+    tail and status probes — for installs that want full coverage."""
+    plan = _scan_passes_for_module_type("switch_module", broad_scan=True)
+    subs_used = {sub for sub, _regs in plan}
     assert subs_used == {"00", "01", "04"}, subs_used
-    # Verify the legacy band is present at sub=4
     sub4_regs = set()
     for sub, regs in plan:
         if sub == "04":

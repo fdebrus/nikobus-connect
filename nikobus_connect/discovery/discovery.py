@@ -196,15 +196,40 @@ _DIMMER_PROFILE_BROAD_EXTRA: tuple[ScanSection, ...] = _regs_for_bytes(0x1962, 0
 #   sec 2: offset=0x1388 length=0x2BB0 default (variable, project-only)
 #   sec 3: offset=0x1386 length=0x0002 (re-read)
 #   sec 4: offset=0x0064 length=0x00F1 default
-_ROLLER_PROFILE_DEFAULT: tuple[ScanSection, ...] = _merge_passes((
+_ROLLER_PROFILE_FULL: tuple[ScanSection, ...] = _merge_passes((
     *_regs_for_bytes(0x0064, 0x00F1),   # section 4 (16 reads)
     *_regs_for_bytes(0x03E6, 0x0002),   # section 0
     *_regs_for_bytes(0x03E8, 0x0E90),   # section 1 (variable, ~234 reads)
     *_regs_for_bytes(0x1386, 0x0002),   # section 3
 ))
 
-# Section 2 — 11184 bytes from 0x1388. Skipped by default.
-_ROLLER_PROFILE_BROAD_EXTRA: tuple[ScanSection, ...] = _regs_for_bytes(0x1388, 0x2BB0)
+# Anchored productive band — 0.18.0. Two live-roller traces on
+# 2026-05-23 (modules 9105, 8394) showed link records cluster tightly
+# in sub=00 reg 0x90..0x9C plus a lone "master" slot at 0xF0; the
+# sub=01 0x00..0x27 band holds the per-channel state mirror. Sec 4
+# returned only records that also appear in the sub=01 mirror —
+# dropped. Sec 0 and sec 3 are 1-reg config sentinels that yielded
+# zero records on both modules.
+#
+# Range is padded around the observed cluster (0x8E..0xA8 instead of
+# 0x90..0x9C) to leave headroom for installs with more programming.
+# Reduces default scan from 251 to ~53 reg-reads per roller (~4.7×).
+_ROLLER_PROFILE_ANCHORED: tuple[ScanSection, ...] = _merge_passes((
+    ("00", tuple(range(0x8E, 0xA9)) + (0xF0,)),
+    ("01", tuple(range(0x00, 0x28))),
+))
+
+# Sections trimmed from the anchored profile, restorable via
+# ``broad_scan=True`` — covers the sec 4 mirror, sec 0/3 sentinels,
+# the rest of sec 1's link-table range, and the huge sec 2 band.
+_ROLLER_PROFILE_BROAD_EXTRA: tuple[ScanSection, ...] = _merge_passes((
+    *_regs_for_bytes(0x0064, 0x00F1),
+    *_regs_for_bytes(0x03E6, 0x0002),
+    ("00", tuple(range(0x3F, 0x8E)) + tuple(range(0xA9, 0xF0)) + tuple(range(0xF1, 0x100))),
+    ("01", tuple(range(0x28, 0x40))),
+    *_regs_for_bytes(0x1386, 0x0002),
+    *_regs_for_bytes(0x1388, 0x2BB0),
+))
 
 # --- PC-LOGIC (Niko_05_201a) ---
 # 4 sections at sub=4 (dispatch table at 0x10001A80):
@@ -270,8 +295,7 @@ _FEEDBACK_PROFILE_DEFAULT: tuple[ScanSection, ...] = _merge_passes((
 # sub=0 reg=0x3E variable, header at 0x05..0x09, secondary at
 # sub=1 0x70..0x96, status at sub=4 0x65..0x69) PLUS the pre-0.16.0
 # legacy sub=4 0x00..0x3F band as a proven safety net.
-# Validate against PC software's real switch trace once available.
-_SWITCH_PROFILE_DEFAULT: tuple[ScanSection, ...] = _merge_passes((
+_SWITCH_PROFILE_FULL: tuple[ScanSection, ...] = _merge_passes((
     # Header (dimmer-style)
     ("00", tuple(range(0x05, 0x0A))),
     # Link-table band (dimmer-style; hypothesis)
@@ -282,6 +306,51 @@ _SWITCH_PROFILE_DEFAULT: tuple[ScanSection, ...] = _merge_passes((
     # Pre-0.16.0 sub=4 link records band — proven safety net
     ("04", tuple(range(0x00, 0x40))),
     # Vendor status band
+    ("04", tuple(range(0x65, 0x6A))),
+))
+
+# Anchored productive band — 0.18.0. Three switch-scan traces on
+# 2026-05-23 (modules C9A5 full, 4707 ×2) validated the DLL magic
+# tuple (recsize=6 bytes, recs_per_unit=0x10) and pinned down where
+# records actually live:
+#
+#   sub=00 anchor at reg=0x8F-0x90, cluster extends to 0x9A (4707) or
+#       0xA7 (C9A5) — modes M01..M15 mixed.
+#   sub=04 anchor at reg=0x10, cluster extends to 0x16 (4707) or
+#       0x27 (C9A5) with a deterministic gap at 0x14. 4707 also has
+#       a lone record at 0x00 — preserved by starting the band at 0x00.
+#
+# Bands dropped from default:
+#   - sub=00 0x05..0x09 (header probe) — 0 records on 3/3 traces.
+#   - sub=00 0x3E..0x8E (~80 dead regs before the anchor) — 0/3 traces.
+#       Also implicated in module-exhaustion failure (4707 log 2/2:
+#       pass aborted at 0xD9 after 156 reads, downstream passes timed
+#       out completely). Cutting this band removes the failure mode.
+#   - sub=01 entirely — secondary band on C9A5 returned 12 records,
+#       9 of which duplicate sub=04 content. Net 3 unique records
+#       not worth the 44 register reads.
+#   - sub=04 0x28..0x3F (24 dead regs past anchor cluster) — 0/3.
+#   - sub=04 0x65..0x69 (status probe) — 0/3 traces.
+#
+# Range padded around the observed clusters (sub=00 0x8E..0xAF,
+# sub=04 0x00..0x2F) to leave headroom for installs with more
+# programming. Reduces default scan from 312 to ~82 reg-reads per
+# switch (~3.8×) and eliminates the long-sweep exhaustion mode.
+_SWITCH_PROFILE_ANCHORED: tuple[ScanSection, ...] = _merge_passes((
+    ("00", tuple(range(0x8E, 0xB0))),
+    ("04", tuple(range(0x00, 0x30))),
+))
+
+# Bands trimmed from the anchored profile, restorable via
+# ``broad_scan=True``. Reconstitutes the full _SWITCH_PROFILE_FULL
+# plan when set, modulo the deduplicated overlap with the anchored
+# core.
+_SWITCH_PROFILE_BROAD_EXTRA: tuple[ScanSection, ...] = _merge_passes((
+    ("00", tuple(range(0x05, 0x0A))),
+    ("00", tuple(range(0x3E, 0x8E)) + tuple(range(0xB0, 0x100))),
+    ("01", tuple(range(0x00, 0x07))),
+    ("01", tuple(range(0x70, 0x94)) + (0x96,)),
+    ("04", tuple(range(0x30, 0x40))),
     ("04", tuple(range(0x65, 0x6A))),
 ))
 
@@ -297,18 +366,21 @@ _SWITCH_PROFILE_DEFAULT: tuple[ScanSection, ...] = _merge_passes((
 # is preserved as a data constant for future use if firmware variants
 # differ.
 _MODULE_SCAN_PROFILES: dict[str, tuple[ScanSection, ...]] = {
-    "switch_module":   _SWITCH_PROFILE_DEFAULT,
-    "roller_module":   _ROLLER_PROFILE_DEFAULT,
+    "switch_module":   _SWITCH_PROFILE_ANCHORED,
+    "roller_module":   _ROLLER_PROFILE_ANCHORED,
     "dimmer_module":   _DIMMER_PROFILE_DEFAULT,
     "pc_logic":        _PC_LOGIC_PROFILE_DEFAULT,
     "pc_link":         _PC_LINK_PROFILE_DEFAULT,
 }
 
-# Broad-scan extras (the huge variable sections PC software skips when
-# its CalcMemoryMap has primed a project-level cache).
+# Broad-scan extras. For switch/roller these restore the full
+# DLL-derived plan (anchored bands' dropped sections); for dimmer
+# they add the huge variable section PC software skips when its
+# CalcMemoryMap is project-primed.
 _MODULE_SCAN_PROFILES_BROAD_EXTRA: dict[str, tuple[ScanSection, ...]] = {
-    "dimmer_module":   _DIMMER_PROFILE_BROAD_EXTRA,
+    "switch_module":   _SWITCH_PROFILE_BROAD_EXTRA,
     "roller_module":   _ROLLER_PROFILE_BROAD_EXTRA,
+    "dimmer_module":   _DIMMER_PROFILE_BROAD_EXTRA,
 }
 
 # Conservative fallback when a caller hands us a sub-byte the plan
