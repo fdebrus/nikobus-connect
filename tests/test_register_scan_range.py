@@ -60,9 +60,12 @@ def _capture_scan_calls():
 
 
 @pytest.mark.asyncio
-async def test_switch_dispatches_per_product_profile(tmp_path):
-    """0.17.0: switch scan walks the DLL-derived per-product profile.
-    Each pass is one (sub_byte, register_range) from the profile."""
+async def test_switch_dispatches_anchored_profile(tmp_path):
+    """0.18.0: switch scan defaults to the anchored productive band
+    — sub=00 link cluster around 0x90, sub=04 cluster around 0x10.
+    sub=01 is dropped (empirically duplicates sub=04 content); the
+    plan still uses the switch wire function code (10) and the
+    byte-swapped address."""
 
     coord = _make_coordinator()
     discovery = NikobusDiscovery(
@@ -91,10 +94,8 @@ async def test_switch_dispatches_per_product_profile(tmp_path):
 
     await discovery.query_module_inventory("4707")
 
-    # Multiple passes across sub=00, sub=01, sub=04
     subs = {c["sub_byte"] for c in calls}
-    assert subs == {"00", "01", "04"}, subs
-    # All use the switch wire function code (10) and byte-swapped address
+    assert subs == {"00", "04"}, subs
     assert all(c["base_cmd"] == "100747" for c in calls)
 
 
@@ -177,8 +178,10 @@ async def test_roller_dispatches_per_product_profile(tmp_path):
     assert all(c["base_cmd"] == "109483" for c in calls)
     subs = {c["sub_byte"] for c in calls}
     assert "00" in subs and "01" in subs
+    # 0.18.0 anchored default: ~68 reads (productive band only). Full
+    # 251-read DLL plan re-enabled by ``broad_scan=True``.
     total_regs = sum(len(c["command_range"]) for c in calls)
-    assert total_regs >= 240, total_regs
+    assert 50 <= total_regs <= 90, total_regs
 
 
 @pytest.mark.asyncio

@@ -515,10 +515,14 @@ async def test_pc_logic_register_scan_drives_dll_profile(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_switch_register_scan_drives_dll_profile(tmp_path):
-    """0.17.0: switch scan dispatches the per-product profile derived
-    from Niko_05_000_01.dll. The plan includes the legacy sub=4
-    0x00..0x3F safety net (still a hypothesis pending real switch trace)."""
+async def test_switch_register_scan_uses_anchored_profile(tmp_path):
+    """0.18.0: switch scan defaults to the anchored productive band
+    derived from three live switch traces (2026-05-23 on modules C9A5
+    and 4707). Reads cluster tightly at sub=00 reg ~0x90 and sub=04
+    reg ~0x10. The empty sub=01 band, the sub=00 pre-anchor sweep
+    (0x3E..0x8E, also implicated in module-exhaustion failures), and
+    the dead status probes are dropped from the default plan but
+    restored when ``broad_scan=True``."""
 
     coord = _make_coordinator()
     coord.get_module_channel_count = MagicMock(return_value=12)
@@ -552,18 +556,82 @@ async def test_switch_register_scan_drives_dll_profile(tmp_path):
 
     await discovery.query_module_inventory("4707")
 
-    # Switch profile uses multiple sub-bytes (00, 01, 04) — link table
-    # band at sub=0 0x3E..0xFF, secondary at sub=1 0x70..0x96, legacy
-    # safety net at sub=4 0x00..0x3F, status at sub=4 0x65..0x69.
+    # Anchored profile drops sub=01 entirely.
+    subs = {c["sub_byte"] for c in scan_calls}
+    assert subs == {"00", "04"}, subs
+
+    sub0_regs = set()
+    sub4_regs = set()
+    for c in scan_calls:
+        if c["sub_byte"] == "00":
+            sub0_regs.update(c["range"])
+        elif c["sub_byte"] == "04":
+            sub4_regs.update(c["range"])
+
+    # sub=00 anchor cluster (observed 0x8F..0xA7) with margin.
+    assert {0x8F, 0x90, 0x9A, 0xA7}.issubset(sub0_regs), \
+        f"sub=00 anchor cluster not covered: {sorted(sub0_regs)}"
+    # Pre-anchor sweep dropped (was 0x3E..0x8E).
+    assert 0x3E not in sub0_regs
+    assert 0x70 not in sub0_regs
+    # sub=04 anchor cluster (observed 0x00, 0x10..0x27) with margin.
+    assert {0x00, 0x10, 0x16, 0x27}.issubset(sub4_regs), \
+        f"sub=04 anchor cluster not covered: {sorted(sub4_regs)}"
+    # Dead tail dropped (was 0x28..0x3F).
+    assert 0x3F not in sub4_regs
+    # Status probe dropped.
+    assert 0x65 not in sub4_regs
+
+
+@pytest.mark.asyncio
+async def test_switch_register_scan_broad_restores_full_profile(tmp_path):
+    """``broad_scan=True`` restores the dropped bands so installs that
+    want the full DLL-derived sweep can opt back in. The combined
+    plan must reach the legacy sub=4 0x3F register and the sub=01
+    secondary band, plus probe sub=00 0x05..0x09."""
+
+    coord = _make_coordinator()
+    coord.get_module_channel_count = MagicMock(return_value=12)
+    discovery = NikobusDiscovery(
+        coord,
+        config_dir=str(tmp_path),
+        create_task=_drop_coro,
+        button_data={"nikobus_button": {}},
+        on_button_save=None,
+        broad_scan=True,
+    )
+
+    discovery.discovered_devices = {
+        "4707": {
+            "address": "4707",
+            "category": "Module",
+            "model": "05-000-02",
+            "channels": 12,
+            "device_type": "01",
+        }
+    }
+    discovery._is_known_module_address = MagicMock(return_value=True)
+    discovery._resolve_module_type = MagicMock(return_value="switch_module")
+
+    scan_calls: list[dict] = []
+
+    async def fake_scan(address, base_cmd, command_range, sub_byte="04"):
+        scan_calls.append({"sub_byte": sub_byte, "range": tuple(command_range)})
+
+    discovery._scan_module_registers = fake_scan
+    discovery._finalize_discovery = AsyncMock()
+
+    await discovery.query_module_inventory("4707")
+
     subs = {c["sub_byte"] for c in scan_calls}
     assert subs == {"00", "01", "04"}, subs
-    # The pre-0.16.0 legacy band must be present (proven to find records).
+
     sub4_regs = set()
     for c in scan_calls:
         if c["sub_byte"] == "04":
             sub4_regs.update(c["range"])
     assert {0x00, 0x10, 0x20, 0x3F}.issubset(sub4_regs), \
-        "switch profile missing legacy sub=4 0x00..0x3F safety net"
+        "broad_scan must restore legacy sub=4 0x00..0x3F safety net"
 
 
 # ---------------------------------------------------------------------------
