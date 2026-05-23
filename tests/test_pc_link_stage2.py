@@ -123,16 +123,18 @@ async def test_pc_link_module_runs_register_scan(tmp_path):
     await discovery.query_module_inventory("86F5")
 
     assert scan_calls, "PC-Link module was skipped instead of scanned"
+    # 0.16.0: PC-Link has its own scan profile (the synthetic
+    # ``pc_link_inventory`` plan-time sub-byte maps to sub=04 on the
+    # wire and iterates 0xA3..0xFF — the module-registry band per
+    # the May 2024 Nikobus PC-software trace).
+    assert len(scan_calls) == 1
     assert scan_calls[0]["sub_byte"] == "04"
     assert scan_calls[0]["base_cmd"].startswith("10"), (
         "PC-Link uses function 10 (it's not a dimmer)"
     )
-    assert scan_calls[0]["command_range"] == range(0xA3, 0x100), (
-        "PC-Link scan range must be tuned to the productive band "
-        "0xA3..0xFF observed in the Nikobus PC-software trace. The "
-        "0.5.0 full-sweep was observed to abort at register 0x04 in "
-        "real installs because PC Link doesn't respond to reads in "
-        "0x00..0x07, tripping the consecutive-give-up early-stop."
+    assert tuple(scan_calls[0]["command_range"]) == tuple(range(0xA3, 0x100)), (
+        "PC-Link scan band must remain 0xA3..0xFF — the controller's "
+        "module-registry, separate from the per-output-module vendor map."
     )
 
 

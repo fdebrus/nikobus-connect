@@ -17,7 +17,9 @@ import pytest
 from nikobus_connect.discovery.chunk_decoder import _CHUNK_LENGTHS
 from nikobus_connect.discovery.discovery import (
     NikobusDiscovery,
-    _scan_range_for_sub,
+    _VENDOR_REGISTER_MAP_BY_SUB,
+    _scan_registers_for_sub,
+    _scan_subs_for_module_type,
 )
 from nikobus_connect.discovery.mapping import (
     DEVICE_TYPES,
@@ -309,10 +311,11 @@ async def test_pc_logic_module_runs_register_scan(tmp_path):
     await discovery.query_module_inventory("80D9")
 
     assert scan_calls, "PC-Logic module was skipped instead of scanned"
-    # Pass 1 uses the standard sub=04 with the function-10 prefix
-    # (PC-Logic is not a dimmer).
-    assert scan_calls[0]["sub_byte"] == "04"
-    assert scan_calls[0]["base_cmd"].startswith("10")
+    # 0.16.0: PC-Logic follows the vendor 3-pass plan (sub=00 / sub=01 /
+    # sub=04) with the function-10 prefix.
+    assert len(scan_calls) == 3
+    assert [c["sub_byte"] for c in scan_calls] == ["00", "01", "04"]
+    assert all(c["base_cmd"].startswith("10") for c in scan_calls)
 
 
 # ---------------------------------------------------------------------------
@@ -427,56 +430,53 @@ def test_pc_logic_chunk_length_is_sixteen_byte_record_stride():
 # types must keep their tuned range.
 
 
-def test_scan_range_for_sub_default_is_tuned_for_switch_and_roller():
-    """The 0.4.10 tuning of sub=04 to 0x00..0x3F applies to switch and
-    roller (multi-firmware verified). Dimmer was reverted in 0.5.7 to
-    the pre-0.4.10 full sweep — covered by a dedicated test below.
-    The bare-sub default (no ``module_type``) keeps the historical
-    tuned range so callers without a known type see the conservative
-    behaviour."""
+def test_vendor_register_map_is_exact_per_sub_byte():
+    """The Niko COM3 trace (2026-05-08, module 3D82) pins the register
+    list per sub-byte. These lists are the authoritative scan plan
+    for ALL output modules + PC-Logic since 0.16.0."""
 
-    assert _scan_range_for_sub("04") == range(0x00, 0x40)
-    assert _scan_range_for_sub("04", module_type="switch_module") == range(0x00, 0x40)
-    assert _scan_range_for_sub("04", module_type="roller_module") == range(0x00, 0x40)
-
-
-def test_scan_range_for_sub_dimmer_is_full_sweep_per_pass():
-    """Dimmer reverts to pre-0.4.10 ``range(0x00, 0x100)`` for both
-    sub=04 and sub=01 since 0.5.7. Real-hardware capture (2026-05-04,
-    modules 116D + 0E0A) showed the 0.4.10 narrowing dropped link
-    records on channels 3 and 5; restoring the full sweep recovers
-    them at the cost of ~3 minutes extra per dimmer scan."""
-
-    assert _scan_range_for_sub("04", module_type="dimmer_module") == range(0x00, 0x100)
-    assert _scan_range_for_sub("01", module_type="dimmer_module") == range(0x00, 0x100)
+    assert _VENDOR_REGISTER_MAP_BY_SUB["00"] == (
+        0x05, 0x06, 0x07, 0x08, 0x09, 0x3E,
+    )
+    assert _VENDOR_REGISTER_MAP_BY_SUB["01"] == tuple(range(0x70, 0x94)) + (0x96,)
+    assert _VENDOR_REGISTER_MAP_BY_SUB["04"] == (
+        0x65, 0x66, 0x67, 0x68, 0x69,
+    )
 
 
-def test_scan_range_for_sub_overrides_pc_logic_to_full_sweep():
-    assert _scan_range_for_sub("04", module_type="pc_logic") == range(0x00, 0x100)
+def test_scan_registers_for_each_vendor_sub_is_exact_vendor_list():
+    """Helper returns the EXACT vendor register list for sub=00/01/04
+    — no widening, no contiguous-range approximation."""
+
+    assert _scan_registers_for_sub("00") == _VENDOR_REGISTER_MAP_BY_SUB["00"]
+    assert _scan_registers_for_sub("01") == _VENDOR_REGISTER_MAP_BY_SUB["01"]
+    assert _scan_registers_for_sub("04") == _VENDOR_REGISTER_MAP_BY_SUB["04"]
 
 
-def test_scan_range_for_sub_pc_logic_override_applies_to_all_subs():
-    """The override is per-module-type, not per-sub. Even if a future
-    Stage extends PC-Logic with extra sub-bytes, those passes must also
-    sweep the full range until we know where the cell content lives."""
+def test_dimmer_default_plan_is_full_vendor_alignment():
+    """0.16.0: dimmer no longer has the 2026-05-04 full-sweep exception.
+    Every output module uses the same vendor map: (sub=00, sub=01, sub=04)
+    with the exact captured register lists."""
 
-    for sub in ("04", "00", "01"):
-        assert _scan_range_for_sub(sub, module_type="pc_logic") == range(0x00, 0x100)
+    assert _scan_subs_for_module_type("dimmer_module") == ("00", "01", "04")
 
 
-def test_scan_range_priority_per_pass_overrides_per_module():
-    """The (module_type, sub_byte) override beats the module-type-only
-    override. This is what lets us widen one pass on one module type
-    without affecting any other (module, sub) combination."""
+def test_pc_logic_default_plan_is_full_vendor_alignment():
+    """0.16.0: PC-Logic no longer has the 0x00..0xFF defensive sweep.
+    Same vendor plan as output modules — full alignment."""
 
-    # Dimmer has both a per-pass widening AND falls under the per-sub
-    # default — per-pass wins for the registered sub-bytes.
-    assert _scan_range_for_sub("04", module_type="dimmer_module") == range(0x00, 0x100)
-    assert _scan_range_for_sub("01", module_type="dimmer_module") == range(0x00, 0x100)
-    # An unregistered sub-byte for dimmer falls through to the
-    # per-sub default (no per-module-type-only override exists for
-    # dimmer; PC-Logic / PC-Link are the only whole-module overrides).
-    assert _scan_range_for_sub("00", module_type="dimmer_module") == range(0x00, 0x40)
+    assert _scan_subs_for_module_type("pc_logic") == ("00", "01", "04")
+
+
+def test_switch_and_roller_use_same_vendor_plan() -> None:
+    """All output modules + PC-Logic share the vendor map. No per-type
+    deviation — that's what "FULL vendor alignment" means."""
+
+    plan = _scan_subs_for_module_type("switch_module")
+    assert plan == _scan_subs_for_module_type("roller_module")
+    assert plan == _scan_subs_for_module_type("dimmer_module")
+    assert plan == _scan_subs_for_module_type("pc_logic")
+    assert plan == ("00", "01", "04")
 
 
 @pytest.mark.asyncio
@@ -517,11 +517,17 @@ async def test_pc_logic_register_scan_uses_full_range(tmp_path):
 
     await discovery.query_module_inventory("80D9")
 
-    assert len(scan_calls) == 1, "Stage 1.5 still expects a single sub=04 pass"
-    assert scan_calls[0]["sub_byte"] == "04"
-    assert scan_calls[0]["command_range"] == range(0x00, 0x100), (
-        "PC-Logic must sweep the full 0..255 register space, not the "
-        "output-module tuned 0..63 band."
+    # 0.16.0: PC-Logic follows the same vendor scan plan as output
+    # modules — full alignment, no special-case full sweep. 3 passes
+    # over the vendor register lists (sub=00 / sub=01 / sub=04).
+    assert len(scan_calls) == 3
+    assert [c["sub_byte"] for c in scan_calls] == ["00", "01", "04"]
+    assert tuple(scan_calls[0]["command_range"]) == (
+        0x05, 0x06, 0x07, 0x08, 0x09, 0x3E,
+    )
+    assert tuple(scan_calls[1]["command_range"]) == tuple(range(0x70, 0x94)) + (0x96,)
+    assert tuple(scan_calls[2]["command_range"]) == (
+        0x65, 0x66, 0x67, 0x68, 0x69,
     )
 
 
@@ -566,8 +572,18 @@ async def test_switch_register_scan_range_unaffected_by_pc_logic_override(tmp_pa
 
     await discovery.query_module_inventory("4707")
 
-    assert scan_calls
-    assert scan_calls[0]["command_range"] == range(0x00, 0x40)
+    # 0.16.0: switch scans the same vendor plan as PC-Logic — the
+    # "PC-Logic override" the original test guarded against is gone.
+    # Both module types follow the unified vendor map (sub=00 header,
+    # sub=01 link table, sub=04 status).
+    assert len(scan_calls) == 3
+    assert tuple(scan_calls[0]["command_range"]) == (
+        0x05, 0x06, 0x07, 0x08, 0x09, 0x3E,
+    )
+    assert tuple(scan_calls[1]["command_range"]) == tuple(range(0x70, 0x94)) + (0x96,)
+    assert tuple(scan_calls[2]["command_range"]) == (
+        0x65, 0x66, 0x67, 0x68, 0x69,
+    )
 
 
 # ---------------------------------------------------------------------------

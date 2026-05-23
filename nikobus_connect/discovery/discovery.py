@@ -65,87 +65,107 @@ _LOGGER = logging.getLogger(__name__)
 _IR_BANK_CYCLE = ("C", "A", "D", "B")
 _IR_MAX_CHANNEL = 39
 
-# Additional scan-pass sub-bytes per module type, verified against
-# real-hardware traces in 0.4.7. The historic sub=04 pass runs first
-# for all output modules; this table adds secondary passes that proved
-# productive for that specific module type. Anything not listed falls
-# back to the single sub=04 pass.
-_EXTRA_SCAN_SUBS_BY_MODULE_TYPE: dict[str, tuple[str, ...]] = {
-    # Dimmer: sub=01 surfaces channels 7-12 (the "second group"
-    # referenced by the legacy Nikobus PC tool's ``group=2`` column).
-    # sub=00 returns byte-identical data to sub=04, skipped.
-    "dimmer_module": ("01",),
-    # Switch: sub=04 covers the primary bank but the original
-    # rejection of sub=01 ("misread as phantom records") was logged
-    # under the broken cross-frame chunk buffering of 0.2.1..0.5.4 —
-    # every chunk on a 32-char switch frame was 8 chars out of phase,
-    # so sub=01 *and* sub=04 produced phantom-only output. With the
-    # 0.5.5 chunker fix that discards register-end padding, sub=01
-    # returns its own productive band; the ``unknown_button`` /
-    # ``unknown_mode`` gates filter any genuine config-byte phantoms
-    # that survive. Cost: ~40 s extra per switch module; benefit:
-    # link records that live outside 0x00..0x3E surface for the
-    # merge layer.
-    "switch_module": ("01",),
-    # Roller: same family layout as switch (12-char records, 32-char
-    # register frames). Mirror the sub=01 secondary pass for the
-    # same reason.
-    "roller_module": ("01",),
+# Vendor "load current installation" register map, captured from a
+# Niko PC software COM3 trace on 2026-05-08 against module 0x3D82.
+# The PC software does NOT bus-scan to discover modules — it reads
+# from a fixed list loaded from its saved project file. This is the
+# authoritative per-module read sequence used by the vendor:
+#
+#   sub=00 → 6 regs (module header / identity)
+#            0x05, 0x06, 0x07, 0x08, 0x09, 0x3E
+#   sub=01 → 37 regs (link table + checksum at 0x96)
+#            0x70..0x93 contiguous (36 regs), then 0x96
+#            (regs 0x94, 0x95 deliberately skipped)
+#   sub=04 → 5 regs (status / state)
+#            0x65, 0x66, 0x67, 0x68, 0x69
+#
+# Total: 48 register reads per module. 0.16.0 wires this exact list
+# into the default scan plan for ALL output modules (switch, roller,
+# dimmer) AND PC-Logic — full alignment with vendor logic, no
+# install- or firmware-specific exceptions.
+#
+# Safety net: ``broad_scan=True`` on the discovery instance re-adds
+# the pre-0.16.0 sub=04 0x00..0x3F sweep as an extra pass after the
+# vendor primary, for installs that report missing records on a
+# firmware revision where the link table doesn't sit in the
+# vendor-canonical 0x70..0x96 band.
+_VENDOR_REGISTER_MAP_BY_SUB: dict[str, tuple[int, ...]] = {
+    "00": (0x05, 0x06, 0x07, 0x08, 0x09, 0x3E),
+    "01": tuple(range(0x70, 0x94)) + (0x96,),
+    "04": (0x65, 0x66, 0x67, 0x68, 0x69),
 }
 
-# Productive register range per sub-byte. Derived from PC-software
-# serial trace: each sub-byte addresses a distinct memory region on
-# the module, and each region occupies a narrow register band — not
-# the full 0x00..0xFF. Scanning only the productive band cuts scan
-# time ~4× per pass.
+# Source attribution for ``_VENDOR_REGISTER_MAP_BY_SUB``. Surfaced as
+# a constant so a regression-flagging test can pin the provenance
+# without re-stating the trace context inline.
+_VENDOR_REGISTER_MAP_TRACE_SOURCE = (
+    "Niko PC software COM3 trace, 2026-05-08, "
+    "addr 3D82, 'load current installation' operation"
+)
+
+# Pre-0.16.0 broad-scan extra: when ``broad_scan=True`` is set on the
+# discovery instance, add this contiguous sub=04 sweep as an *extra*
+# pass after the vendor-aligned primary. Safety net for firmware
+# revisions whose link table doesn't sit in the vendor's 0x70..0x96
+# band — e.g. a 2026-05-04 dimmer capture (116D + 0E0A) showed
+# records past 0x3F that the vendor map alone would miss.
+_BROAD_SCAN_LEGACY_REGISTERS: tuple[int, ...] = tuple(range(0x00, 0x40))
+
+
+# Sub-bytes scanned per module type, in order. Default plan is fully
+# vendor-aligned (sub=00 header, sub=01 link table, sub=04 status) for
+# every output module AND PC-Logic — no install-specific exceptions.
+# PC-Link uses a separate captured trace (module-registry band) keyed
+# off the synthetic ``"pc_link_inventory"`` sub-byte.
+_SCAN_SUBS_BY_MODULE_TYPE: dict[str, tuple[str, ...]] = {
+    "switch_module": ("00", "01", "04"),
+    "roller_module": ("00", "01", "04"),
+    "dimmer_module": ("00", "01", "04"),
+    "pc_logic":      ("00", "01", "04"),
+    "pc_link":       ("pc_link_inventory",),
+}
+
+# Per-module-type sub=04 broad-scan extra registers (legacy band).
+# Adds the pre-0.16.0 sub=04 0x00..0x3F sweep ALONGSIDE the vendor
+# primary when ``broad_scan=True``. Switch/roller/dimmer all benefit
+# from the same extra band; PC-Logic too.
+_BROAD_SCAN_EXTRA_SUBS_BY_MODULE_TYPE: dict[str, tuple[str, ...]] = {
+    "switch_module": ("04_broad",),
+    "roller_module": ("04_broad",),
+    "dimmer_module": ("04_broad",),
+    "pc_logic":      ("04_broad",),
+}
+
+# Per-sub-byte register lists.
 #
-#   sub=04 / sub=00  → forward link records (primary bank).
-#                      PC tool sweeps 0x05..0x3E. We start at 0x00 to
-#                      preserve the 0.4.4 regression fix (records
-#                      stored in 0x00..0x0F on some real hardware).
-#   sub=01           → extended link / channel-config bank.
-#                      PC tool sweeps 0x70..0x96 exactly.
-_SCAN_REGISTER_RANGE_BY_SUB: dict[str, range] = {
-    "04": range(0x00, 0x40),
-    "00": range(0x00, 0x40),
-    "01": range(0x70, 0x97),
+#   "00"/"01"/"04" → exact vendor register lists, applied to every
+#     output module AND PC-Logic. No approximation to contiguous ranges.
+#   "04_broad" → synthetic sub-byte used only by ``broad_scan=True``.
+#     Iterates the pre-0.16.0 sub=04 0x00..0x3F sweep; mapped back
+#     to sub=04 on the wire by ``_wire_sub_byte``.
+#   "pc_link_inventory" → PC-Link's module-registry band (0xA3..0xFF).
+#     Captured separately (May 2024 trace) since PC-Link doesn't have
+#     per-module link tables — only a controller-side module list.
+#     Mapped to sub=04 on the wire.
+_SCAN_REGISTERS_BY_SUB: dict[str, tuple[int, ...]] = {
+    "00": _VENDOR_REGISTER_MAP_BY_SUB["00"],
+    "01": _VENDOR_REGISTER_MAP_BY_SUB["01"],
+    "04": _VENDOR_REGISTER_MAP_BY_SUB["04"],
+    "04_broad": _BROAD_SCAN_LEGACY_REGISTERS,
+    "pc_link_inventory": tuple(range(0xA3, 0x100)),
 }
 
 # Conservative fallback when a caller hands us a sub-byte the trace
 # didn't cover (keeps future sub-bytes probeable without a silent skip).
-_DEFAULT_SCAN_REGISTER_RANGE = range(0x00, 0x100)
+_DEFAULT_SCAN_REGISTERS: tuple[int, ...] = tuple(range(0x00, 0x100))
 
-# Per-module-type override for the primary (sub=04) scan range.
-# Stage 1 of the PC-Logic dump (0.4.11) only covered ``0x00..0x3F`` —
-# the same productive band as the output-module link table — and
-# returned a 4×16 cell-index directory plus a stretch of all-FF
-# registers. Roswennen's reporter install on Nikobus-HA#303 has five
-# BP grids programmed across the LOM, so the cell content has to live
-# *somewhere*. Either it sits past the 0x3F boundary on the LOM
-# itself (this override surfaces it), or it lives at separate BP-unit
-# bus addresses that the scan engine doesn't currently visit
-# (orthogonal experiment: invoke ``query_module_inventory`` on a
-# 3CF0x0 BP address directly). The full 0x00..0xFF sweep is the
-# cheaper of the two probes — costs ~25 s extra per PC-Logic module
-# at the current ``COMMAND_EXECUTION_DELAY`` and produces a definitive
-# yes/no on the "more memory beyond the directory" hypothesis.
-_PC_LOGIC_SCAN_RANGE_OVERRIDE = _DEFAULT_SCAN_REGISTER_RANGE
-
-# PC Link's productive band is 0xA3..0xD3 (module registry) and a
-# few neighbouring registers, validated against a Nikobus PC-software
-# serial trace on real hardware (May 2024). 0.5.0 shipped with a full
-# 0x00..0xFF sweep, but on the live install fdebrus@2026-05-03 the
-# scan aborted at register 0x04 after 5 consecutive ACK timeouts —
-# PC Link doesn't respond to register reads in the 0x00..0x07 range,
-# and our consecutive-give-up early-stop fires before we ever reach
-# 0xA3. Tuning the range to start at 0xA3 sidesteps that early-stop
-# entirely and matches the PC-software trace exactly.
-_PC_LINK_SCAN_RANGE_OVERRIDE = range(0xA3, 0x100)
-
-_SCAN_REGISTER_RANGE_BY_MODULE_TYPE: dict[str, range] = {
-    "pc_logic": _PC_LOGIC_SCAN_RANGE_OVERRIDE,
-    "pc_link": _PC_LINK_SCAN_RANGE_OVERRIDE,
-}
+# PC-Link's scan profile is a separate captured trace — the controller
+# reads its OWN module-registry table from this band, not the per-module
+# link table the vendor map describes. Captured from a Nikobus PC
+# software serial trace on real hardware (May 2024) and aligned to
+# the 0xA3 start to skip the 0x00..0x07 dead-zone where PC Link's
+# consecutive-give-up early-stop fires.
+_PC_LINK_REGISTERS: tuple[int, ...] = tuple(range(0xA3, 0x100))
 
 # Module-type buckets whose addresses are NOT included in the
 # ``query_module_inventory("ALL")`` register-scan queue and whose
@@ -173,90 +193,69 @@ NON_OUTPUT_MODULE_TYPES: frozenset[str] = frozenset({
     "audio_module",
 })
 
-# Per-(module-type, sub-byte) override. When a (module_type, sub) pair
-# is registered here, it takes precedence over both the per-module-type
-# override and the per-sub-byte default — letting us widen one pass on
-# one module type without affecting any other (module, sub) combination.
-#
-# Dimmer 2026-05-04 capture (modules 116D + 0E0A on this firmware
-# revision) shows the 0.4.10 narrowing dropped link records on
-# channels 3 and 5. The dimmer's link table on this firmware extends
-# past the 0.4.10 sub=04 cap (0x3F) — PC software clearly displays
-# connections to outputs O09 / O11 / O12 of 116D, but our scan finds
-# records only on channels 1, 2, 6. Restoring the pre-0.4.10 full
-# sweep (0x00..0xFF) for both dimmer passes recovers them. Switch and
-# roller stay at the tuned ranges; their traces have been validated
-# against multiple firmware captures and the narrowing wasn't
-# observed to drop records there.
-_SCAN_REGISTER_RANGE_BY_MODULE_TYPE_AND_SUB: dict[tuple[str, str], range] = {
-    ("dimmer_module", "04"): range(0x00, 0x100),
-    ("dimmer_module", "01"): range(0x00, 0x100),
-}
+def _scan_subs_for_module_type(
+    module_type: str | None, *, broad_scan: bool = False
+) -> tuple[str, ...]:
+    """Return the ordered sequence of sub-bytes to scan for a module type.
 
-# Vendor "load current installation" register map, captured from a
-# Niko PC software COM3 trace on 2026-05-08 against module 0x3D82.
-# The PC software does NOT bus-scan to discover modules — it reads
-# from a fixed list loaded from its saved project file. So this map
-# captures the per-module read sequence the vendor actually uses,
-# which is fundamentally different from our current discovery sweep:
-#
-#   sub=00 → 6 specific regs (module header / identity)
-#            0x05, 0x06, 0x07, 0x08, 0x09, 0x3E
-#            (reg 0x3E read TWICE, back-to-back, as a sanity probe)
-#   sub=01 → 37 regs in 0x70..0x96 (link table + checksum at 0x96)
-#            0x70..0x93 contiguous (36 regs), then 0x96
-#            (regs 0x94, 0x95 deliberately skipped)
-#            (reg 0x96 read at both start AND end of readout —
-#             likely a concurrent-modification detector)
-#   sub=04 → 5 regs in 0x65..0x69 (status / state)
-#
-# Total: 48 register reads per module vs. our current ~167 — vendor
-# is ~3.5x faster. Captured but NOT wired into the scan loop:
-# switching the default scan strategy without staged validation
-# against multiple installs risks silent data loss (the vendor may
-# rely on project-file context our scan doesn't have). Reference
-# data only — future PRs can opt in once validated.
-_VENDOR_REGISTER_MAP_BY_SUB: dict[str, tuple[int, ...]] = {
-    "00": (0x05, 0x06, 0x07, 0x08, 0x09, 0x3E),
-    "01": tuple(range(0x70, 0x94)) + (0x96,),
-    "04": (0x65, 0x66, 0x67, 0x68, 0x69),
-}
+    Default plan is fully vendor-aligned: every output module AND
+    PC-Logic gets the exact (sub=00, sub=01, sub=04) sequence the
+    PC software reads (Niko COM3 trace, 2026-05-08). No
+    install-specific or firmware-specific exceptions.
 
-# Source attribution for ``_VENDOR_REGISTER_MAP_BY_SUB``. Surfaced as
-# a constant so a regression-flagging test can pin the provenance
-# without re-stating the trace context inline.
-_VENDOR_REGISTER_MAP_TRACE_SOURCE = (
-    "Niko PC software COM3 trace, 2026-05-08, "
-    "addr 3D82, 'load current installation' operation"
-)
+    ``broad_scan=True`` appends the pre-0.16.0 sub=04 0x00..0x3F sweep
+    (synthetic ``"04_broad"`` token) as an extra pass after the
+    vendor primary — safety net for firmware revisions whose link
+    table doesn't sit in the vendor-canonical band.
 
-
-def _scan_range_for_sub(sub_byte: str, module_type: str | None = None) -> range:
-    """Return the productive register range for a given sub-byte.
-
-    Priority: most-specific match wins.
-
-    1. ``(module_type, sub_byte)`` tuple in
-       ``_SCAN_REGISTER_RANGE_BY_MODULE_TYPE_AND_SUB`` — used for
-       per-pass overrides (e.g. dimmer's restored full sweep on both
-       sub=04 and sub=01 since 0.5.7).
-    2. ``module_type`` alone in ``_SCAN_REGISTER_RANGE_BY_MODULE_TYPE``
-       — used for whole-module overrides (PC-Link, PC-Logic).
-    3. ``sub_byte`` in ``_SCAN_REGISTER_RANGE_BY_SUB`` — the per-sub
-       default (switch/roller tuned ranges).
-    4. ``_DEFAULT_SCAN_REGISTER_RANGE`` — fallback for unknown sub-bytes.
+    PC-Link is NOT in the table — it has its own scan profile, see
+    ``_PC_LINK_REGISTERS``. Module types we don't scan at all (audio,
+    feedback, interface, other) return an empty tuple.
     """
 
-    if module_type is not None:
-        per_pass = _SCAN_REGISTER_RANGE_BY_MODULE_TYPE_AND_SUB.get(
-            (module_type, sub_byte)
-        )
-        if per_pass is not None:
-            return per_pass
-        override = _SCAN_REGISTER_RANGE_BY_MODULE_TYPE.get(module_type)
-        if override is not None:
-            return override
-    return _SCAN_REGISTER_RANGE_BY_SUB.get(sub_byte, _DEFAULT_SCAN_REGISTER_RANGE)
+    if module_type not in _SCAN_SUBS_BY_MODULE_TYPE:
+        # PC-Link / unknown — leave to the caller's existing dispatch.
+        return ()
+    plan = _SCAN_SUBS_BY_MODULE_TYPE[module_type]
+    if broad_scan:
+        extras = _BROAD_SCAN_EXTRA_SUBS_BY_MODULE_TYPE.get(module_type, ())
+        seen: set[str] = set()
+        combined: list[str] = []
+        for sub in (*plan, *extras):
+            if sub in seen:
+                continue
+            seen.add(sub)
+            combined.append(sub)
+        return tuple(combined)
+    return plan
+
+
+def _scan_registers_for_sub(
+    sub_byte: str, module_type: str | None = None
+) -> tuple[int, ...]:
+    """Return the exact register list to scan for a given sub-byte.
+
+    Vendor-aligned: every module type uses the same per-sub register
+    list. No per-module-type widening — the whole point of 0.16.0 is
+    to stop deviating from the vendor's reads.
+
+    Unknown sub-bytes fall back to a full 0x00..0xFF sweep (defensive,
+    keeps future sub-bytes probeable for callers that bypass the plan).
+    """
+    return _SCAN_REGISTERS_BY_SUB.get(sub_byte, _DEFAULT_SCAN_REGISTERS)
+
+
+def _wire_sub_byte(sub_byte: str) -> str:
+    """Map a plan-time sub-byte to its on-the-wire form.
+
+    The plan uses synthetic sub-byte tokens to keep register lists
+    distinct (``"04_broad"`` for the legacy sweep, ``"pc_link_inventory"``
+    for the PC-Link registry band), but on the wire they all map back
+    to ``"04"`` because that's the function code Niko's protocol uses
+    for ``read register`` regardless of which memory region the host
+    is interested in.
+    """
+    return "04" if sub_byte in ("04_broad", "pc_link_inventory") else sub_byte
 
 
 def decode_ir_channel(ir_slot_addr: str | None, key_raw: int | None, ir_base_byte: int = 0x80) -> str | None:
@@ -568,6 +567,7 @@ class NikobusDiscovery:
         module_data=None,
         on_module_save=None,
         on_progress=None,
+        broad_scan: bool = False,
     ):
         self.discovered_devices = {}
         self._coordinator = coordinator
@@ -577,6 +577,10 @@ class NikobusDiscovery:
         self._on_button_save = on_button_save
         self._module_data = module_data
         self._on_module_save = on_module_save
+        # 0.16.0 vendor-aligned default scans only the 48 vendor regs
+        # per module. ``broad_scan=True`` re-adds the pre-0.16.0
+        # sub=04 0x00..0x3F sweep as a safety-net extra pass.
+        self._broad_scan: bool = bool(broad_scan)
         if module_data is not None:
             existing_modules = module_data.get("nikobus_module")
             if not isinstance(existing_modules, dict):
@@ -2144,59 +2148,50 @@ class NikobusDiscovery:
             await self._finalize_discovery(normalized_address)
             return
 
-        # Pass 1: primary bank (sub=04). Function-22 for dimmer,
-        # function-10 for switch/roller. Register range tuned to
-        # 0x00..0x3F for output modules — records live there on all
-        # hardware we've observed; the full-sweep of 0.4.5..0.4.8 wasted
-        # ~192 empty registers per pass. PC-Logic overrides this back
-        # to the full 0x00..0xFF sweep (Stage 1.5) so we can see whether
-        # cell content lives past the 4×16 directory at 0x00..0x3F.
-        await self._scan_module_registers(
-            normalized_address,
-            base_command,
-            _scan_range_for_sub("04", module_type=self._module_type),
-            sub_byte="04",
+        # 0.16.0 vendor-aligned scan plan: for every output module AND
+        # PC-Logic, scan the exact (sub=00, sub=01, sub=04) register
+        # lists the PC software reads per the 2026-05-08 trace. No
+        # per-firmware widening — full vendor alignment.
+        #
+        # PC-Link's scan profile is different (controller-side module
+        # registry, not per-module link table); it's handled in the
+        # ``_PC_LINK_REGISTERS`` branch above.
+        #
+        # When ``broad_scan=True`` is set on this discovery instance,
+        # the plan appends the legacy sub=04 0x00..0x3F sweep as an
+        # extra pass after the vendor primary — safety net for any
+        # firmware revision whose link table doesn't sit in the
+        # vendor band.
+        scan_subs = _scan_subs_for_module_type(
+            self._module_type, broad_scan=self._broad_scan
         )
+        if not scan_subs:
+            # Module type not in the vendor plan (e.g. PC-Link is
+            # handled by its own branch, audio/feedback/interface
+            # have no link table at all). Fall through to finalize.
+            await self._finalize_discovery(normalized_address)
+            return
 
-        # Additional passes: only the sub-bytes real-hardware traces
-        # showed are productive per module type. Mapping verified against
-        # both dimmer (0E6C) and switch (C9A5) live scans:
-        #
-        #   dimmer_module:  sub=04 -> primary bank (channels 1-6)
-        #                   sub=00 -> byte-identical to sub=04 (skip)
-        #                   sub=01 -> secondary bank (channels 7-12)
-        #   switch_module:  sub=04 -> full link table (channels 1-12)
-        #                   sub=00 -> byte-identical to sub=04 (skip)
-        #                   sub=01 -> reverse-link / config bytes the
-        #                             switch decoder misreads as phantom
-        #                             records (all rejected at merge,
-        #                             but wastes ~40 s of scan time)
-        #   roller_module:  no real-hardware trace yet; mirror switch.
-        #
-        # Unknown module types fall back to the single historic pass
-        # (sub=04) that 0.4.4 shipped.
-        extra_subs = _EXTRA_SCAN_SUBS_BY_MODULE_TYPE.get(
-            self._module_type, ()
-        )
-        for extra_sub in extra_subs:
+        for sub_byte in scan_subs:
             function_code = base_command[:2]
-            extra_range = _scan_range_for_sub(
-                extra_sub, module_type=self._module_type
+            register_list = _scan_registers_for_sub(
+                sub_byte, module_type=self._module_type
             )
+            wire_sub = _wire_sub_byte(sub_byte)
             _LOGGER.debug(
-                "Register scan pass starting | module=%s function=%s sub=%s "
-                "range=0x%02X..0x%02X",
+                "Register scan pass starting | module=%s function=%s "
+                "sub=%s wire_sub=%s registers=%d",
                 normalized_address,
                 function_code,
-                extra_sub,
-                extra_range.start,
-                extra_range.stop - 1,
+                sub_byte,
+                wire_sub,
+                len(register_list),
             )
             await self._scan_module_registers(
                 normalized_address,
                 base_command,
-                extra_range,
-                sub_byte=extra_sub,
+                register_list,
+                sub_byte=wire_sub,
             )
 
         await self._finalize_discovery(normalized_address)
