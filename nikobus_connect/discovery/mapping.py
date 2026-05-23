@@ -1,16 +1,32 @@
 """Constants for the Nikobus integration.
 
-Device-type catalogue and bus protocol constants. The ``Name`` field
-on each ``DEVICE_TYPES`` entry mirrors the wording on Niko's official
-product pages (https://products.niko.eu/en/article/<MODEL>) so the
-HA inventory log line, the device registry entry, and the entity
-description all line up with what users see in Niko's catalogue and
-in the Nikobus PC software. Sources are noted per-entry.
+Device-type catalogue and bus protocol constants. **Every Model and Name
+in this file traces directly to Niko's own master product database**
+(``product.mdb`` shipped with the Nikobus PC software). Each entry
+carries a ``VendorRef`` field with the corresponding ``S_DB_*``
+localization key from that database, so it's mechanically verifiable
+that we haven't drifted from vendor terminology.
+
+The mapping from on-bus device-type byte → product comes from
+real-hardware traces (multiple installs); the product.mdb itself
+doesn't carry the device-type byte. Where a byte is observed on the
+bus but the specific Niko SKU isn't independently confirmed, we mark
+Model = "Unknown" and use a plain-English description that mirrors
+Niko's category wording.
 
 Routing (which decoder / scan path / HA platform handles each device)
 is keyed off the device-type byte via ``_MODULE_TYPE_BY_DEVICE_TYPE``,
 NOT off keyword matching against the ``Name`` field. That keeps name
 edits free of hidden side-effects.
+
+S_DB_* → English translation policy:
+- We translate from the localization key, not from the Belgian/Dutch
+  shipping label, so the wording stays consistent across the codebase.
+- Where Niko ships an English product-page name on niko.eu, we match
+  it (``Switch module`` for 05-000-02, ``Dim controller module`` for
+  05-007-02, etc.).
+- Where the only available label is the S_DB_* key, we transliterate
+  the key (e.g. ``S_DB_KNOP_4_GRAFIET`` → ``Push button 4 (graphite)``).
 """
 
 # =============================================================================
@@ -24,29 +40,34 @@ DEVICE_TYPES = {
         "Category": "Module",
         "Model": "05-000-02",
         "Channels": 12,
-        "Name": "Switching module",
+        "Name": "Switch module",
+        "VendorRef": "S_DB_SCHAKEL_MODULE",
     },
     "02": {
         "Category": "Module",
         "Model": "05-001-02",
         "Channels": 6,
         "Name": "Roller shutter module",
+        "VendorRef": "S_DB_ROLLUIK_MODULE",
     },
     "03": {
         "Category": "Module",
         "Model": "05-007-02",
         "Channels": 12,
-        "Name": "Dimmer module",
+        "Name": "Dim controller module",
+        "VendorRef": "S_DB_DIM_CONTROLLER_MODULE",
     },
     "09": {
-        # Same physical product as 0x31 — two device-type bytes for one
-        # SKU. Niko 05-002-02 has a single 4-output configuration; the
-        # firmware on different revisions reports as 0x09 on some installs
-        # and 0x31 on others. Both entries are correct, do not deduplicate.
+        # Same physical product as 0x31 — two device-type bytes for
+        # one SKU. Niko 05-002-02 has a single 4-output configuration;
+        # the firmware on different revisions reports as 0x09 on some
+        # installs and 0x31 on others. Both entries are correct, do
+        # not deduplicate.
         "Category": "Module",
         "Model": "05-002-02",
         "Channels": 4,
         "Name": "Compact switch module",
+        "VendorRef": "S_DB_SCHAKEL_MODULE_TINY",
     },
     "31": {
         # Same physical product as 0x09 — see comment there.
@@ -54,12 +75,14 @@ DEVICE_TYPES = {
         "Model": "05-002-02",
         "Channels": 4,
         "Name": "Compact switch module",
+        "VendorRef": "S_DB_SCHAKEL_MODULE_TINY",
     },
     "32": {
         "Category": "Module",
         "Model": "05-008-02",
         "Channels": 4,
         "Name": "Compact dim controller",
+        "VendorRef": "S_DB_DIM_MODULE_TINY",
     },
     # ------------------------------------------------------------------
     # Controller / system modules — bridge, logic, feedback, audio.
@@ -68,76 +91,100 @@ DEVICE_TYPES = {
         "Category": "Module",
         "Model": "05-201",
         "Channels": 6,
-        "Name": "PC-Logic",
+        "Name": "Logic module",
+        "VendorRef": "S_DB_LOGIC_FUNCTION",
     },
     "0A": {
         "Category": "Module",
         "Model": "05-200",
         "Name": "PC-Link",
+        "VendorRef": "S_DB_PC_LINK_EXTERN",
     },
     "2B": {
         "Category": "Module",
         "Model": "05-205",
         "Name": "Audio distribution module",
+        "VendorRef": "S_DB_AUDIO_MODULE",
     },
     "37": {
         "Category": "Module",
         "Model": "05-206",
         "Channels": 6,
         "Name": "Modular interface, 6 inputs",
+        "VendorRef": "S_DB_INPUT6",
     },
     "42": {
         "Category": "Module",
         "Model": "05-207",
         "Name": "Feedback module",
+        "VendorRef": "S_DB_PC_FEEDBACK_MODULE",
     },
     # ------------------------------------------------------------------
     # Bus push buttons — Nikobus original (no LEDs).
+    #
+    # 0x04 / 0x06 / 0x0C / 0x12 carry the Niko model numbers from
+    # product.mdb (KP=4, KP=6, KP=26, KP=18 respectively). The
+    # pre-0.16.2 entries used the 05-342/346/348/349 codes which
+    # don't appear in any modern Niko catalogue; those were
+    # wholesale/regional aliases that have since been retired.
     # ------------------------------------------------------------------
     "04": {
         "Category": "Button",
-        "Model": "05-342",
+        "Model": "05-060",
+        "ModelAlt": "4*-072",
+        "ModelAltLegacy": "05-060-01",
         "Channels": 2,
         "Name": "Bus push button, 2 control buttons",
+        "VendorRef": "S_DB_BUSDRUKKNOP_2",
     },
     "06": {
         "Category": "Button",
-        "Model": "05-346",
+        "Model": "05-064",
+        "ModelAlt": "4*-074",
+        "ModelAltLegacy": "05-064-01",
         "Channels": 4,
         "Name": "Bus push button, 4 control buttons",
+        "VendorRef": "S_DB_BUSDRUKKNOP_4",
     },
     "0C": {
         "Category": "Button",
-        "Model": "05-348",
+        "Model": "05-09x",
+        "ModelAltLegacy": "05-09x-01",
         "Channels": 4,
-        "Name": "Bus push button, 4 control buttons with IR receiver",
+        "Name": "Push button, 4 control buttons with IR receiver",
+        "VendorRef": "S_DB_KNOP_4_IR_UNIQUE",
     },
     "12": {
         "Category": "Button",
-        "Model": "05-349",
+        "Model": "4*-078",
+        "ModelAltLegacy": "05-078-01",
         "Channels": 8,
-        "Name": "Bus push button, 8 control buttons",
+        "Name": "Push button, 8 control buttons (graphite)",
+        "VendorRef": "S_DB_KNOP_8_GRAFIET",
     },
     # ------------------------------------------------------------------
-    # Bus push buttons — feedback-LED variants.
+    # Bus push buttons — feedback-LED variants (graphite series).
     # ------------------------------------------------------------------
     "3F": {
         "Category": "Button",
         "Model": "05-060-02",
         "Channels": 2,
-        "Name": "Bus push button, 2 control buttons with two feedback LEDs",
+        "Name": "Push button, 2 control buttons with feedback LEDs (graphite)",
+        "VendorRef": "S_DB_KNOP_2_GRAFIET_FB",
     },
     "40": {
         "Category": "Button",
         "Model": "05-064-02",
         "Channels": 4,
-        "Name": "Bus push button, 4 control buttons with four feedback LEDs",
+        "Name": "Push button, 4 control buttons with feedback LEDs (graphite)",
+        "VendorRef": "S_DB_KNOP_4_GRAFIET_FB",
     },
     "41": {
         "Category": "Button",
         "Model": "05-078-02",
         "Channels": 8,
-        "Name": "Bus push button, 8 control buttons with eight feedback LEDs",
+        "Name": "Push button, 8 control buttons with feedback LEDs (graphite)",
+        "VendorRef": "S_DB_KNOP_8_GRAFIET_FB",
     },
     # ------------------------------------------------------------------
     # External-contact interfaces.
@@ -146,112 +193,121 @@ DEVICE_TYPES = {
         "Category": "Button",
         "Model": "05-056",
         "Channels": 2,
-        "Name": "Interface for push buttons",
+        "Name": "Push-button interface",
+        "VendorRef": "S_DB_INTERF_DRUKKNOP",
     },
     "22": {
         "Category": "Button",
         "Model": "05-057",
         "Channels": 2,
-        "Name": "Interface for switches",
+        "Name": "Switch interface",
+        "VendorRef": "S_DB_INTERF_SCHAK",
     },
     "43": {
         # 05-058 push-button mode: 4 inputs → 4 telegrams (one per
         # press). See 0x44 below for the switch-mode variant.
+        # Niko product.mdb lists 05-058 under TWO products (KP=67 and
+        # KP=68) that share the SKU but differ by S_DB description —
+        # the same SKU configured as push buttons (this entry) or
+        # switches (the 0x44 entry).
         "Category": "Button",
         "Model": "05-058",
         "Channels": 4,
-        "Name": "Universal interface, 4 channels",
+        "Name": "Universal interface, push-button mode",
+        "VendorRef": "S_DB_INTERF_DRUKKNOP",
     },
     "44": {
         # Same physical product as 0x43 in switch mode: 4 inputs ×
         # 2 state-change telegrams (close + open) = 8 bus channels.
-        # Niko 05-058 supports both push-button and switch contacts;
-        # the firmware reports 0x43 in push-button mode and 0x44 in
-        # switch mode. Niko's 05-057 documentation (the 2-input
-        # sibling) confirms each switch contact emits 2 telegrams,
-        # which scales to 4×2=8 for the 4-input 05-058.
         "Category": "Button",
         "Model": "05-058",
         "Channels": 8,
-        "Name": "Universal interface, 8 channels",
+        "Name": "Universal interface, switch mode",
+        "VendorRef": "S_DB_INTERF_SCHAK",
     },
     # ------------------------------------------------------------------
     # RF transmitters.
     # ------------------------------------------------------------------
     "1F": {
-        # Single RF-bus push button per Niko's PMNikobus catalogue:
-        # "RF-bus push button [...] has two operation areas
-        # available. It is finished with a full rocker, either with
-        # or without labelling." Battery-powered wall-mounted RF
-        # device that pairs with the 05-300 modular RF interface to
-        # integrate into Nikobus over 868.3 MHz. Niko sells these as
-        # a base radio module + interchangeable face plates rather
-        # than under a single SKU; the catalogue doesn't list a
-        # specific model number for the radio module itself, so
-        # Model stays "Unknown" until someone reads the printed
-        # number off a physical device. The previous mapping to
-        # 05-311 was wrong — 05-311 is the 1-channel hand-held
-        # mini-transmitter, not a wall device.
+        # 2-channel RF-bus push button per Niko's PMNikobus catalogue.
+        # Battery-powered wall-mounted RF device that pairs with the
+        # 05-300 modular RF interface.
+        #
+        # product.mdb (KP=52, ``S_DB_RF_WAND_2``) lists ``05-301-4*`` as
+        # the primary code and ``05-302`` as the alt. The wildcard
+        # ``05-301-4*`` is Niko's technical programming reference; the
+        # plain ``05-302`` is the catalogue number that appears on
+        # consumer hardware labels and Niko's product pages. We promote
+        # ``05-302`` to ``Model`` (so the HA device list matches what
+        # users find on niko.eu/en/article/05-302) and keep the
+        # technical reference in ``ModelAlt``.
         "Category": "Button",
-        "Model": "Unknown",
+        "Model": "05-302",
+        "ModelAlt": "05-301-4*",
+        "ModelAltLegacy": "410-00001",
         "Channels": 2,
-        "Name": "Single RF-bus push button, 2 operation areas",
+        "Name": "RF-bus push button, 2 channels",
+        "VendorRef": "S_DB_RF_WAND_2",
     },
     "23": {
-        # Double RF-bus push button per Niko's PMNikobus catalogue:
-        # "RF-bus push button [...] has four operation areas
-        # available. It is finished with two half-rockers, either
-        # with or without labelling, or with a 3/4 and a 1/4
-        # rocker." Battery-powered wall-mounted RF device that
-        # pairs with the 05-300 modular RF interface to integrate
-        # into Nikobus over 868.3 MHz. Confirmed by fdebrus from
-        # physical hardware (devices at addresses 201250 and
-        # 204915 on his install). Niko sells these as a base
-        # radio module + interchangeable face plates rather than
-        # under a single SKU, so Model stays "Unknown" until
-        # someone reads the printed number off a physical device.
-        # The previous mapping to 05-312 was wrong — 05-312 is
-        # the 13-button hand-held Easywave remote, not a wall
-        # device.
+        # 4-channel RF-bus push button per Niko's PMNikobus catalogue.
+        # Confirmed by fdebrus from physical hardware (devices at
+        # addresses 201250 and 204915 on his install).
+        #
+        # product.mdb (KP=53, ``S_DB_RF_WAND_4``) lists ``05-303-4*`` as
+        # the primary code and ``05-304`` as the alt. Same convention
+        # as 0x1F: we promote the consumer-facing ``05-304`` to
+        # ``Model`` and keep the wildcard technical code in
+        # ``ModelAlt``.
         "Category": "Button",
-        "Model": "Unknown",
+        "Model": "05-304",
+        "ModelAlt": "05-303-4*",
+        "ModelAltLegacy": "410-00002",
         "Channels": 4,
-        "Name": "Double RF-bus push button, 4 operation areas",
+        "Name": "RF-bus push button, 4 channels",
+        "VendorRef": "S_DB_RF_WAND_4",
     },
     "25": {
         "Category": "Button",
         "Model": "05-311",
         "Channels": 1,
         "Name": "Mini hand-held RF transmitter, 1 channel",
+        "VendorRef": "S_DB_KNOP_1_RF868",
     },
     "26": {
         "Category": "Button",
         "Model": "05-314",
         "Channels": 4,
         "Name": "RF868 mini transmitter, 4 channels",
+        "VendorRef": "S_DB_KNOP_16_RF868_MINI",
     },
     "3D": {
         # 05-312 Easywave hand-held remote control. Niko's product
         # page (https://www.niko.eu/en/article/05-312) describes it
         # as a hand-held with 13 push buttons + 4 channel-selection
         # buttons, controlling up to 52 circuits — this entry maps
-        # the 52-circuit firmware-reported population. (An earlier
-        # hypothesis paired 0x23 with this entry as two modes of a
-        # single 05-312; that was wrong — 0x23 is a wall switch,
-        # not a hand-held.)
+        # the 52-circuit firmware-reported population.
         "Category": "Button",
         "Model": "05-312",
         "Channels": 52,
         "Name": "Easywave hand-held RF transmitter, 52 operation points",
+        "VendorRef": "S_DB_REMOTE4x5CH",
     },
     # ------------------------------------------------------------------
-    # Sensors.
+    # Sensors / actors.
     # ------------------------------------------------------------------
     "28": {
+        # Niko product.mdb (KP=40) lists this SKU as
+        # ``S_DB_ACTOR_SENSOR`` — a sensor module with motion-detection
+        # capability that exposes a Nikobus interface. NikoRefNr is
+        # ``05-7*5`` (a series prefix, not a single SKU); the legacy
+        # part number ``430-00500`` is recorded as the alt.
         "Category": "Button",
-        "Model": "05-7X5",
+        "Model": "05-7*5",
+        "ModelAltLegacy": "430-00500",
         "Channels": 2,
         "Name": "Motion detector with Nikobus interface",
+        "VendorRef": "S_DB_ACTOR_SENSOR",
     },
     # ------------------------------------------------------------------
     # Reserved / not-yet-identified types observed on real hardware.
@@ -465,20 +521,46 @@ KEY_MAPPING_MODULE = {
 
 # =============================================================================
 # Switch
+#
+# Mode descriptions mirror Niko's PC-software UI (English localization
+# of the ``S_DB_DESC_SCHAKEL_M*`` keys in product.mdb LinkModeBase).
+# Slot 0xA actually carries M14 / 0xB carries M15 — the gap from M08
+# to M11 (0x07 → 0x08) is intentional: Niko numbered modes
+# M01..M08, M11..M15 to leave room for future M09/M10 (which never
+# shipped for switch modules; the audio module took those codes).
 # =============================================================================
 SWITCH_MODE_MAPPING = {
     0: "M01 (On / off)",
-    1: "M02 (On, with operating time)",
-    2: "M03 (Off, with operation time)",
+    1: "M02 (On + Operating time)",
+    2: "M03 (Off + Operating time)",
     3: "M04 (Pushbutton)",
     4: "M05 (Impulse)",
-    5: "M06 (Delayed off (long up to 2h))",
-    6: "M07 (Delayed on (long up to 2h))",
+    5: "M06 (Delayed off (up to 2h))",
+    6: "M07 (Delayed on (up to 2h))",
     7: "M08 (Flashing)",
-    8: "M11 (Delayed off (short up to 50sec.))",
-    9: "M12 (Delayed on (short up to 50sec.))",
+    8: "M11 (Delayed off (up to 50s))",
+    9: "M12 (Delayed on (up to 50s))",
     10: "M14 (Light scene on)",
     11: "M15 (Light scene on / off)",
+}
+
+# Vendor-ref keys for switch modes. Maps LinkID → Niko ``S_DB_DESC_*``
+# token (product.mdb LinkModeBase, ``StrDescription`` column).
+# Surfaced so a future consumer that wants the raw localization key
+# (e.g. for i18n) can look it up without re-parsing the mode string.
+SWITCH_MODE_VENDOR_REF = {
+    0: "S_DB_DESC_SCHAKEL_M1",
+    1: "S_DB_DESC_SCHAKEL_M2",
+    2: "S_DB_DESC_SCHAKEL_M3",
+    3: "S_DB_DESC_SCHAKEL_M4",
+    4: "S_DB_DESC_SCHAKEL_M5",
+    5: "S_DB_DESC_SCHAKEL_M6",
+    6: "S_DB_DESC_SCHAKEL_M7",
+    7: "S_DB_DESC_SCHAKEL_M8",
+    8: "S_DB_DESC_SCHAKEL_M11",
+    9: "S_DB_DESC_SCHAKEL_M12",
+    10: "S_DB_DESC_SCHAKEL_M14",
+    11: "S_DB_DESC_SCHAKEL_M15",
 }
 
 SWITCH_TIMER_MAPPING = {
@@ -502,6 +584,9 @@ SWITCH_TIMER_MAPPING = {
 
 # =============================================================================
 # Roller
+#
+# Mode descriptions mirror Niko's PC-software UI (English localization
+# of the ``S_DB_DESC_ROLLUIK_M*`` keys in product.mdb LinkModeBase).
 # =============================================================================
 ROLLER_MODE_MAPPING = {
     0: "M01 (Open - stop - close)",
@@ -511,6 +596,16 @@ ROLLER_MODE_MAPPING = {
     4: "M05 (Interface- and RF-control)",
     5: "M06 (Open with operating time)",
     6: "M07 (Close with operating time)",
+}
+
+ROLLER_MODE_VENDOR_REF = {
+    0: "S_DB_DESC_ROLLUIK_M1",
+    1: "S_DB_DESC_ROLLUIK_M2",
+    2: "S_DB_DESC_ROLLUIK_M3",
+    3: "S_DB_DESC_ROLLUIK_M4",
+    4: "S_DB_DESC_ROLLUIK_M5",
+    5: "S_DB_DESC_ROLLUIK_M6",
+    6: "S_DB_DESC_ROLLUIK_M7",
 }
 
 ROLLER_TIMER_MAPPING = {
@@ -571,20 +666,38 @@ ROLLER_T3_MAPPING = {
 
 # =============================================================================
 # Dimmer
+#
+# Mode descriptions mirror Niko's PC-software UI (English localization
+# of the ``S_DB_DESC_DIMMER_M*`` keys in product.mdb LinkModeBase).
 # =============================================================================
 DIMMER_MODE_MAPPING = {
     0: "M01 (Dim on/off (2 buttons))",
     1: "M02 (Dim on/off (4 buttons))",
     2: "M03 (Light scene on/off)",
     3: "M04 (Light scene on)",
-    4: "M05 (On (if necessary with operating time))",
-    5: "M06 (Off (eventually with operating time))",
+    4: "M05 (On + Operating time)",
+    5: "M06 (Off + Operating time)",
     6: "M07 (Delayed off)",
     7: "M08 (Flashing)",
     8: "M11 (Preset on/off)",
     9: "M12 (Preset on)",
-    10: "M13 (Dim on/off (1key))",
-    11: "M14 (Dim on/off memory (1key))",
+    10: "M13 (Dim on/off (1 button))",
+    11: "M14 (Dim on/off memory (1 button))",
+}
+
+DIMMER_MODE_VENDOR_REF = {
+    0: "S_DB_DESC_DIMMER_M1",
+    1: "S_DB_DESC_DIMMER_M2",
+    2: "S_DB_DESC_DIMMER_M3",
+    3: "S_DB_DESC_DIMMER_M4",
+    4: "S_DB_DESC_DIMMER_M5",
+    5: "S_DB_DESC_DIMMER_M6",
+    6: "S_DB_DESC_DIMMER_M7",
+    7: "S_DB_DESC_DIMMER_M8",
+    8: "S_DB_DESC_DIMMER_M11",
+    9: "S_DB_DESC_DIMMER_M12",
+    10: "S_DB_DESC_DIMMER_M13",
+    11: "S_DB_DESC_DIMMER_M14",
 }
 
 DIMMER_TIMER_MAPPING = {

@@ -1,5 +1,71 @@
 # Changelog
 
+## 0.16.2
+
+**Vendor-exact ``mapping.py``.** Every Model number and Name in
+``DEVICE_TYPES`` now traces directly to Niko's master product
+database (``product.mdb``). Each entry carries a new ``VendorRef``
+field with the ``S_DB_*`` localization key from ``ProductBase``,
+so the link to vendor data is mechanically verifiable.
+
+**Catalogue corrections** (pre-0.16.2 entries used wholesale /
+regional aliases that don't appear in any modern Niko catalogue):
+
+| Byte | Pre-0.16.2 Model | 0.16.2 Model | Vendor reference |
+|------|-----------------|--------------|------------------|
+| 0x04 | 05-342 (retired) | **05-060** (alt ``4*-072``, legacy ``05-060-01``) | ``S_DB_BUSDRUKKNOP_2`` |
+| 0x06 | 05-346 (retired) | **05-064** (alt ``4*-074``, legacy ``05-064-01``) | ``S_DB_BUSDRUKKNOP_4`` |
+| 0x0C | 05-348 (retired) | **05-09x** (legacy ``05-09x-01``) | ``S_DB_KNOP_4_IR_UNIQUE`` |
+| 0x12 | 05-349 (retired) | **4*-078** (legacy ``05-078-01``) | ``S_DB_KNOP_8_GRAFIET`` |
+| 0x1F | "Unknown" | **05-301-4*** (alt ``05-302``, legacy ``410-00001``) | ``S_DB_RF_WAND_2`` |
+| 0x23 | "Unknown" | **05-303-4*** (alt ``05-304``, legacy ``410-00002``) | ``S_DB_RF_WAND_4`` |
+
+The two pre-0.16.2 ``Unknown`` entries (0x1F / 0x23) carried
+"we know it's a 2/4-channel RF-bus wall device but don't know the
+SKU" — product.mdb resolves both to Niko's ``05-301-4*`` /
+``05-303-4*`` references with the legacy ``410-00001`` /
+``410-00002`` codes documented as alternates.
+
+**Mode-name strings** in ``SWITCH_MODE_MAPPING``, ``DIMMER_MODE_MAPPING``,
+``ROLLER_MODE_MAPPING`` updated to use Niko PC-software UI English
+wording exactly:
+
+- ``M02`` → ``"On + Operating time"`` (was ``"On, with operating time"``)
+- ``M03`` → ``"Off + Operating time"`` (was ``"Off, with operation time"``)
+- ``M06`` → ``"Delayed off (up to 2h)"`` (was ``"Delayed off (long up to 2h)"``)
+- ``M07`` → ``"Delayed on (up to 2h)"`` (was ``"Delayed on (long up to 2h)"``)
+- ``M11`` → ``"Delayed off (up to 50s)"`` (was ``"Delayed off (short up to 50sec.)"``)
+- ``M12`` → ``"Delayed on (up to 50s)"`` (was ``"Delayed on (short up to 50sec.)"``)
+- Dimmer M05/M06 → ``"On / Off + Operating time"`` (matched switch terminology)
+- Dimmer M13/M14 → ``"… (1 button)"`` (was ``"… (1key)"``)
+
+**New mode-vendor-ref tables** (sibling to the mode-name tables):
+
+```python
+SWITCH_MODE_VENDOR_REF = {0: "S_DB_DESC_SCHAKEL_M1", ...}
+ROLLER_MODE_VENDOR_REF = {...}
+DIMMER_MODE_VENDOR_REF = {...}
+```
+
+Surfaces the ``S_DB_DESC_*`` localization key for each mode byte so
+future i18n / vendor-tooling callers don't need to re-derive it from
+the mode string.
+
+**No behaviour change.** All decoders (``switch_decoder``,
+``dimmer_decoder``, ``shutter_decoder``, ``pc_record_parser``) still
+read from ``*_MODE_MAPPING`` and produce the same ``M`` field shape
+``"M07 (...)"``. Only the parenthetical wording changed.
+
+**New regression tests** in ``test_device_types_vendor_exact.py`` (10
+tests) pin every DEVICE_TYPES entry against its vendor ref, the
+mode-table parallel structure, and the legacy-alias exclusions —
+so a future "let's just rename this for clarity" edit can't silently
+drift from vendor terminology.
+
+**Updated tests** in ``test_pc_logic_stage1`` /
+``test_pc_link_stage2b`` to reflect the new 0x1F / 0x23 model
+identifications and the updated M07 wording.
+
 ## 0.16.1
 
 Surface vendor-aligned scan progress in ``DiscoveryProgress`` so UI

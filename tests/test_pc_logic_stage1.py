@@ -156,22 +156,27 @@ def test_device_type_0x09_and_0x31_share_05_002_02_sku():
     assert entry_09["Category"] == entry_31["Category"] == "Module"
 
 
-def test_device_type_0x23_model_is_unknown_not_05_312():
-    """0x23 was previously mapped to Niko 05-312 with 4 channels
-    (paired with 0x3D as the "channel-selector view" of the same
-    product). That pairing was wrong: fdebrus confirmed from
-    physical hardware that the 0x23 devices on his install (e.g.
-    addresses 201250 and 204915) are **wall switches**, not the
-    hand-held 05-312 described on Niko's product page
-    (https://www.niko.eu/en/article/05-312). The actual SKU isn't
-    in Niko's current web catalogue; Model stays Unknown until
-    someone reads the printed model number off a physical
-    device."""
+def test_device_type_0x23_maps_to_rf_wall_button_4ch():
+    """0x23 is the 4-channel RF-bus wall push button.
+
+    Pre-0.16.2: ``Model = "Unknown"`` — fdebrus had confirmed from
+    physical hardware (devices at addresses 201250 and 204915 on his
+    install) that this was NOT the hand-held 05-312, but the actual
+    SKU wasn't determined from Niko's catalogue.
+
+    0.16.2: vendor catalogue (product.mdb KP=53, ``S_DB_RF_WAND_4``)
+    pins this device-type byte to ``05-304`` (consumer-facing code
+    that matches Niko's product page niko.eu/en/article/05-304), with
+    the technical wildcard ``05-303-4*`` and legacy ``410-00002``
+    recorded as alternates."""
 
     entry = DEVICE_TYPES["23"]
-    assert entry["Model"] == "Unknown"
+    assert entry["Model"] == "05-304"
+    assert entry["ModelAlt"] == "05-303-4*"
+    assert entry["ModelAltLegacy"] == "410-00002"
     assert entry["Channels"] == 4
     assert entry["Category"] == "Button"
+    assert entry["VendorRef"] == "S_DB_RF_WAND_4"
 
 
 def test_device_type_0x3d_remains_05_312_easywave_hand_held():
@@ -200,22 +205,26 @@ def test_device_type_0x43_and_0x44_share_05_058_sku():
     assert entry_44["Channels"] == 8
 
 
-def test_device_type_0x1f_model_is_unknown_not_05_311():
-    """0x1F was previously mapped to Niko 05-311 with 2 channels.
-    That's wrong: Niko's official 05-311 page
-    (https://products.niko.eu/en/article/05-311) describes the
-    product as 1-channel only with 1 control button. Whatever
-    physical device emits type 0x1F on 2 channels (observed e.g.
-    at address 2E58F6 on fdebrus's install) is NOT a 05-311 —
-    likely an older / discontinued / unlisted variant. Until
-    someone reads the printed model number off the hardware, the
-    SKU stays Unknown. The channel count (2) reflects actual bus
-    emission and is correct."""
+def test_device_type_0x1f_maps_to_rf_wall_button_2ch():
+    """0x1F is the 2-channel RF-bus wall push button.
+
+    Pre-0.16.2: ``Model = "Unknown"`` — we had ruled out the wrong
+    earlier mapping (to 05-311 hand-held) but hadn't identified the
+    correct SKU.
+
+    0.16.2: vendor catalogue (product.mdb KP=52, ``S_DB_RF_WAND_2``)
+    pins this device-type byte to ``05-302`` (consumer-facing code
+    that matches Niko's product page niko.eu/en/article/05-302), with
+    the technical wildcard ``05-301-4*`` and legacy ``410-00001``
+    recorded as alternates."""
 
     entry = DEVICE_TYPES["1F"]
-    assert entry["Model"] == "Unknown"
+    assert entry["Model"] == "05-302"
+    assert entry["ModelAlt"] == "05-301-4*"
+    assert entry["ModelAltLegacy"] == "410-00001"
     assert entry["Channels"] == 2
     assert entry["Category"] == "Button"
+    assert entry["VendorRef"] == "S_DB_RF_WAND_2"
 
 
 def test_device_type_0x25_remains_correct_05_311_1ch():
@@ -655,7 +664,7 @@ def test_pc_logic_decoder_emits_decoded_command_for_resolved_link_record():
     assert cmd.module_type == "pc_logic"
     assert cmd.metadata["module_address"] == "C9A5"
     assert cmd.metadata["channel"] == 10
-    assert cmd.metadata["M"] == "M07 (Delayed on (long up to 2h))"
+    assert cmd.metadata["M"] == "M07 (Delayed on (up to 2h))"
     assert cmd.metadata["button_address"] == "1843B4"
     assert cmd.metadata["key_raw"] == 1
 
