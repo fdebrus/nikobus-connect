@@ -427,15 +427,22 @@ def test_pc_logic_chunk_length_is_sixteen_byte_record_stride():
 # types must keep their tuned range.
 
 
-def test_scan_range_for_sub_default_is_tuned_for_switch_and_roller():
-    """The 0.4.10 tuning of sub=04 to 0x00..0x3F applies to switch and
-    roller (multi-firmware verified). Dimmer was reverted in 0.5.7 to
-    the pre-0.4.10 full sweep — covered by a dedicated test below.
-    The bare-sub default (no ``module_type``) keeps the historical
-    tuned range so callers without a known type see the conservative
-    behaviour."""
+def test_scan_range_for_sub_default_is_vendor_aligned():
+    """0.16.0: default scan ranges match Niko's PC software trace.
 
-    assert _scan_range_for_sub("04") == range(0x00, 0x40)
+    sub=01 is the canonical link-table band (0x70..0x96). sub=04 is
+    the narrow status band (0x65..0x6A). The pre-0.16.0 sub=04
+    0x00..0x40 sweep is now reserved for the ``broad_scan=True``
+    safety-net path on switch / roller — see the per-(module,sub)
+    overrides below."""
+
+    # Vendor-narrow defaults (no module_type given).
+    assert _scan_range_for_sub("01") == range(0x70, 0x97)
+    assert _scan_range_for_sub("04") == range(0x65, 0x6A)
+
+    # Switch / roller restore the legacy 0x00..0x40 range for sub=04
+    # via the per-(module,sub) override so ``broad_scan=True`` can
+    # rescan the historical band when needed.
     assert _scan_range_for_sub("04", module_type="switch_module") == range(0x00, 0x40)
     assert _scan_range_for_sub("04", module_type="roller_module") == range(0x00, 0x40)
 
@@ -476,7 +483,9 @@ def test_scan_range_priority_per_pass_overrides_per_module():
     # An unregistered sub-byte for dimmer falls through to the
     # per-sub default (no per-module-type-only override exists for
     # dimmer; PC-Logic / PC-Link are the only whole-module overrides).
-    assert _scan_range_for_sub("00", module_type="dimmer_module") == range(0x00, 0x40)
+    # Post-0.16.0: the per-sub default for sub=00 is 0x05..0x3F (vendor
+    # header band), not the legacy 0x00..0x40 sweep.
+    assert _scan_range_for_sub("00", module_type="dimmer_module") == range(0x05, 0x3F)
 
 
 @pytest.mark.asyncio
@@ -528,9 +537,9 @@ async def test_pc_logic_register_scan_uses_full_range(tmp_path):
 @pytest.mark.asyncio
 async def test_switch_register_scan_range_unaffected_by_pc_logic_override(tmp_path):
     """Regression guard: the per-module-type override must not leak
-    into switch/dimmer/roller scans. Their tuned 0x00..0x3F range is
-    a deliberate optimisation tied to the productive band of the
-    output-module link table."""
+    into switch/dimmer/roller scans. 0.16.0: switch scans only sub=01
+    0x70..0x96 (vendor-aligned primary band). The PC-Logic full-sweep
+    override must stay confined to PC-Logic."""
 
     coord = _make_coordinator()
     coord.get_module_channel_count = MagicMock(return_value=12)
@@ -567,7 +576,10 @@ async def test_switch_register_scan_range_unaffected_by_pc_logic_override(tmp_pa
     await discovery.query_module_inventory("4707")
 
     assert scan_calls
-    assert scan_calls[0]["command_range"] == range(0x00, 0x40)
+    # 0.16.0: switch primary is sub=01 0x70..0x96 (vendor-aligned),
+    # not the pre-0.16.0 sub=04 0x00..0x40 sweep.
+    assert scan_calls[0]["sub_byte"] == "01"
+    assert scan_calls[0]["command_range"] == range(0x70, 0x97)
 
 
 # ---------------------------------------------------------------------------

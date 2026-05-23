@@ -63,8 +63,13 @@ def _capture_scan_calls():
 
 
 @pytest.mark.asyncio
-async def test_default_scan_range_starts_at_zero_for_output_module(tmp_path):
-    """First pass for a switch module covers 0x00..0xFF."""
+async def test_vendor_aligned_default_scan_range_for_switch_module(tmp_path):
+    """0.16.0: switch module's primary scan is sub=01 0x70..0x96.
+
+    This is the vendor-aligned default — Niko's PC software trace
+    (2026-05-08, module 3D82) reads the link table from sub=01
+    0x70..0x93 + 0x96. The pre-0.16.0 sub=04 0x00..0x3F sweep is
+    now reserved for the ``broad_scan=True`` safety-net path."""
 
     coord = _make_coordinator()
     discovery = NikobusDiscovery(
@@ -95,13 +100,11 @@ async def test_default_scan_range_starts_at_zero_for_output_module(tmp_path):
 
     assert calls, "register scan was never invoked"
     first = calls[0]
+    assert first["sub_byte"] == "01"
     scan_range = first["command_range"]
-    # Per 0.4.10 per-sub range tuning: sub=04 sweeps 0x00..0x3F
-    # (primary forward-link bank). Critically still starts at 0x00
-    # to preserve the 0.4.4 regression fix for records in 0x00..0x0F.
-    assert scan_range.start == 0x00
-    assert scan_range.stop == 0x40
-    assert 0x00 in scan_range and 0x0F in scan_range
+    assert scan_range.start == 0x70
+    assert scan_range.stop == 0x97
+    assert 0x70 in scan_range and 0x96 in scan_range
 
 
 @pytest.mark.asyncio
@@ -216,15 +219,14 @@ async def test_scan_runs_three_passes_per_dimmer_module(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_scan_runs_two_passes_per_switch_module(tmp_path):
-    """Switch modules get sub=04 + sub=01 since 0.5.5.
+async def test_scan_runs_one_vendor_pass_per_switch_module(tmp_path):
+    """0.16.0: switch modules run a single sub=01 pass by default.
 
-    Pre-0.5.5 history: 0.4.8 dropped sub=01 from switch because the
-    cross-frame chunker (broken for 32-char switch frames) misread
-    every chunk as a phantom record. With the 0.5.5 chunker fix that
-    discards register-end padding, sub=01 returns its own productive
-    band; the merge-layer ``unknown_button`` / ``unknown_mode`` gates
-    filter any genuine config-byte phantoms that survive."""
+    The pre-0.16.0 two-pass scan (sub=04 0x00..0x3F + sub=01
+    0x70..0x96) was replaced by the vendor-aligned single sub=01
+    0x70..0x96 pass — sub=01 is Niko's canonical link-table band
+    per the 2026-05-08 PC-software trace. The pre-0.16.0 sub=04
+    sweep is available via ``broad_scan=True``."""
 
     coord = _make_coordinator()
     discovery = NikobusDiscovery(
@@ -253,21 +255,62 @@ async def test_scan_runs_two_passes_per_switch_module(tmp_path):
 
     await discovery.query_module_inventory("4707")
 
-    assert len(calls) == 2, f"expected 2 passes for switch, got {len(calls)}: {calls}"
+    assert len(calls) == 1, (
+        f"expected 1 vendor-aligned pass for switch, got {len(calls)}: {calls}"
+    )
     assert calls[0]["base_cmd"] == "100747"
-    assert calls[0]["sub_byte"] == "04"
-    assert calls[1]["base_cmd"] == "100747"
-    assert calls[1]["sub_byte"] == "01"
-    assert calls[1]["command_range"].start == 0x70
-    assert calls[1]["command_range"].stop == 0x97
+    assert calls[0]["sub_byte"] == "01"
+    assert calls[0]["command_range"].start == 0x70
+    assert calls[0]["command_range"].stop == 0x97
 
 
 @pytest.mark.asyncio
-async def test_scan_runs_two_passes_per_roller_module(tmp_path):
-    """Roller modules get sub=04 + sub=01 since 0.5.5 — same family
-    layout as switch (12-char records, 32-char register frames), and
-    the same sub=01 productive band surfaces once the chunker stops
-    drifting alignment by the per-register padding."""
+async def test_broad_scan_opt_in_restores_legacy_sub04_pass_for_switch(tmp_path):
+    """``broad_scan=True`` adds the pre-0.16.0 sub=04 0x00..0x40 sweep
+    as a safety-net extra pass alongside the vendor-aligned primary."""
+
+    coord = _make_coordinator()
+    discovery = NikobusDiscovery(
+        coord,
+        config_dir=str(tmp_path),
+        create_task=_drop_coro,
+        button_data={"nikobus_button": {}},
+        on_button_save=None,
+        broad_scan=True,
+    )
+
+    discovery.discovered_devices = {
+        "4707": {
+            "address": "4707",
+            "category": "Module",
+            "model": "05-000-02",
+            "channels": 12,
+            "device_type": "01",
+        }
+    }
+    discovery._is_known_module_address = MagicMock(return_value=True)
+    discovery._resolve_module_type = MagicMock(return_value="switch_module")
+
+    calls, fake_scan = _capture_scan_calls()
+    discovery._scan_module_registers = fake_scan
+    discovery._finalize_discovery = AsyncMock()
+
+    await discovery.query_module_inventory("4707")
+
+    assert len(calls) == 2, f"expected 2 passes with broad_scan=True, got {calls}"
+    # Vendor-aligned primary runs first.
+    assert calls[0]["sub_byte"] == "01"
+    assert calls[0]["command_range"] == range(0x70, 0x97)
+    # Legacy pre-0.16.0 band re-added as extra.
+    assert calls[1]["sub_byte"] == "04"
+    assert calls[1]["command_range"] == range(0x00, 0x40)
+
+
+@pytest.mark.asyncio
+async def test_scan_runs_one_vendor_pass_per_roller_module(tmp_path):
+    """0.16.0: roller modules run a single sub=01 0x70..0x96 pass by
+    default — same vendor-aligned plan as switch (shared decoder DLL
+    Niko_05_000_01.dll → same memory layout)."""
 
     coord = _make_coordinator()
     discovery = NikobusDiscovery(
@@ -296,13 +339,13 @@ async def test_scan_runs_two_passes_per_roller_module(tmp_path):
 
     await discovery.query_module_inventory("8394")
 
-    assert len(calls) == 2, f"expected 2 passes for roller, got {len(calls)}: {calls}"
+    assert len(calls) == 1, (
+        f"expected 1 vendor-aligned pass for roller, got {len(calls)}: {calls}"
+    )
     assert calls[0]["base_cmd"] == "109483"
-    assert calls[0]["sub_byte"] == "04"
-    assert calls[1]["base_cmd"] == "109483"
-    assert calls[1]["sub_byte"] == "01"
-    assert calls[1]["command_range"].start == 0x70
-    assert calls[1]["command_range"].stop == 0x97
+    assert calls[0]["sub_byte"] == "01"
+    assert calls[0]["command_range"].start == 0x70
+    assert calls[0]["command_range"].stop == 0x97
 
 
 @pytest.mark.asyncio
@@ -396,10 +439,11 @@ async def test_dimmer_scan_total_registers_full_sweep_per_pass(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_switch_scan_two_pass_total_is_tuned_not_full_sweep(tmp_path):
-    """Switch two-pass total: 64 (sub=04 → 0x00..0x3F) + 39 (sub=01 →
-    0x70..0x96) = 103 registers. Pre-0.4.10 was 256 per pass; 0.5.5
-    re-enables sub=01 with the same tuned 0x70..0x96 band."""
+async def test_switch_vendor_scan_total_is_39_registers(tmp_path):
+    """0.16.0 vendor-aligned: 39 registers per switch module
+    (sub=01 0x70..0x96). Down from 103 in the pre-0.16.0 two-pass
+    scan. ``broad_scan=True`` adds back the 64-reg sub=04 0x00..0x3F
+    sweep for a total of 103 — see the broad_scan opt-in test."""
 
     coord = _make_coordinator()
     discovery = NikobusDiscovery(
@@ -427,12 +471,9 @@ async def test_switch_scan_two_pass_total_is_tuned_not_full_sweep(tmp_path):
 
     await discovery.query_module_inventory("4707")
 
-    assert len(calls) == 2
-    assert len(calls[0]["command_range"]) == 64
-    assert len(calls[1]["command_range"]) == 39
-    # Sanity bound: still well under a full 256-per-pass sweep.
-    total_regs = sum(len(c["command_range"]) for c in calls)
-    assert total_regs < 256
+    assert len(calls) == 1, f"expected 1 vendor-aligned pass, got {calls}"
+    assert len(calls[0]["command_range"]) == 39
+    assert calls[0]["sub_byte"] == "01"
 
 
 # ---------------------------------------------------------------------------

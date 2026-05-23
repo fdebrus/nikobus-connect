@@ -1,5 +1,63 @@
 # Changelog
 
+## 0.16.0
+
+**Vendor-aligned register-scan plan for switch / roller modules.**
+
+Niko's PC software (COM3 trace 2026-05-08, switch module 3D82) reads
+the link table from ``sub=01 0x70..0x96``. We were treating the
+``sub=04 0x00..0x3F`` band as the primary link-record bank and
+``sub=01`` as the secondary pass — the inverse of what the vendor
+does. Cross-checking against the trace and the diagnostic data on a
+real install showed:
+
+- The records we found on ``sub=04 0x00..0x3F`` were mostly residue
+  from previous installs or diagnostic-echo artifacts (cycling mode
+  bytes per channel), polluting the button store on unprogrammed
+  output channels.
+- The canonical link records all surface on ``sub=01 0x70..0x96``,
+  which we were already scanning as the "secondary" pass.
+
+**Default scan plan in 0.16.0:**
+
+| Module | Pre-0.16.0 | 0.16.0 default |
+|---|---|---|
+| Switch / Roller | sub=04 0x00..0x3F + sub=01 0x70..0x96 (103 regs) | sub=01 0x70..0x96 only (39 regs, **62 % faster**) |
+| Dimmer | sub=04 + sub=01 both full sweeps (512 regs) | unchanged (firmware revision capture 2026-05-04 showed records outside the vendor band on some dimmers) |
+| PC-Logic | sub=04 0x00..0xFF (256 regs) | unchanged (no vendor trace; defensive) |
+| PC-Link | 0xA3..0xFF (93 regs) | unchanged (already vendor-aligned per May 2024 trace) |
+
+**Safety net — opt-in legacy scan via ``broad_scan=True``:**
+
+If an install reports missing link records after upgrading, the
+discovery instance can be constructed with ``broad_scan=True`` to
+re-add the pre-0.16.0 ``sub=04 0x00..0x3F`` sweep as an *extra* pass
+after the vendor-aligned primary. Switch / roller fall back to the
+old 103-register total in that mode.
+
+**Plumbing changes:**
+
+- New ``_SCAN_SUBS_BY_MODULE_TYPE`` — vendor-aligned default plan
+  per module type.
+- New ``_BROAD_SCAN_EXTRA_SUBS_BY_MODULE_TYPE`` — extras added
+  under ``broad_scan=True``.
+- New ``_scan_subs_for_module_type(module_type, broad_scan=…)`` helper
+  that combines them with deduplication and vendor-first ordering.
+- New ``(switch_module, "04")`` and ``(roller_module, "04")``
+  entries in ``_SCAN_REGISTER_RANGE_BY_MODULE_TYPE_AND_SUB`` so the
+  broad-scan extra reads the historical 0x00..0x40 band (not the
+  vendor's narrow status band 0x65..0x6A).
+- ``NikobusDiscovery.__init__`` gains a ``broad_scan: bool = False``
+  keyword.
+
+**Mode-name tables and timer tables in ``mapping.py`` are unchanged**
+— this release only affects WHICH bytes we read from each module.
+
+Pinned in ``test_vendor_aligned_scan`` (17 tests covering the new
+plan-resolution helper, range-override dispatch, and broad-scan
+opt-in behaviour) and updated ``test_register_scan_range`` +
+``test_pc_logic_stage1`` to reflect the new defaults.
+
 ## 0.15.0
 
 Resolve BP-cell links from a **05-312 Easywave 52-key** remote into
