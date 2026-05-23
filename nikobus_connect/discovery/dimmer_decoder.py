@@ -6,7 +6,11 @@ import logging
 from typing import Any
 
 from .chunk_decoder import BaseChunkingDecoder
-from .mapping import DIMMER_MODE_MAPPING, DIMMER_TIMER_MAPPING
+from .mapping import (
+    DIMMER_MODE_MAPPING,
+    DIMMER_MODE_T1_LOOKUP,
+    DIMMER_T2_RAMP,
+)
 from .protocol import (
     _format_channel,
     _is_all_ff,
@@ -20,25 +24,37 @@ _LOGGER = logging.getLogger(__name__)
 EXPECTED_CHUNK_LEN = 16
 
 
-def _timer_value(mode_raw: int | None, t1_raw: int | None) -> tuple[str | None, str | None]:
-    """Return timer/preset values for dimmer modules based on mode and raw T1."""
+def _timer_value(
+    mode_raw: int | None, t1_raw: int | None, t2_raw: int | None = None
+) -> tuple[str | None, str | None]:
+    """Return per-mode T1 and T2 labels for a dimmer record.
 
-    if mode_raw is None or t1_raw is None:
+    Niko's product database has a distinct T1 parameter table per dimmer
+    mode (preset level for M11/M12, push time for M05/M06, delayed-off
+    duration for M07, on/off step config for M01/M02/M03). Dispatching
+    via ``DIMMER_MODE_T1_LOOKUP`` is the authoritative resolution. T2 is
+    the ramp/fade time (``DIMMER_T2_RAMP``) used by every dimmer mode.
+
+    ``t2_raw`` is accepted but currently unused — the dimmer chunk's T2
+    nibble extraction is not yet wired in this decoder (the previous
+    implementation set ``t2_raw=None`` unconditionally). Keeping the
+    signature ready for a follow-up that reads the T2 nibble from the
+    16-byte dimmer record.
+    """
+
+    if mode_raw is None:
         return None, None
 
-    timer_entry = DIMMER_TIMER_MAPPING.get(t1_raw)
-    if timer_entry is None:
-        return None, None
+    t1_val: str | None = None
+    t1_table = DIMMER_MODE_T1_LOOKUP.get(mode_raw)
+    if t1_table is not None and t1_raw is not None and 0 <= t1_raw < len(t1_table):
+        t1_val = t1_table[t1_raw]
 
-    # Preset level (voltage) for preset modes
-    if mode_raw in (8, 9):  # M11 Preset on/off, M12 Preset on
-        return timer_entry[0], None
+    t2_val: str | None = None
+    if t2_raw is not None and 0 <= t2_raw < len(DIMMER_T2_RAMP):
+        t2_val = DIMMER_T2_RAMP[t2_raw]
 
-    # Time value for timed modes
-    if mode_raw in (4, 5, 6, 7):  # M05-M08
-        return timer_entry[2], None
-
-    return None, None
+    return t1_val, t2_val
 
 
 def decode(payload_hex: str, raw_bytes: list[str], context) -> dict[str, Any] | None:

@@ -1,25 +1,45 @@
 # Changelog
 
-## 0.15.3
+## 0.15.4
 
-Surface the T1 paired-time value for roller modes **M06** ("Open with
-operating time") and **M07** ("Close with operating time"). These modes
-use a different T1 encoding than the regular operating-time modes
-(M01/M02/M03/M05): instead of one duration, the nibble selects a
-``"<long-press> / <short-press>"`` pair.
+Resolve dimmer T1 to its **per-mode** parameter table. Niko's product
+database has four distinct T1 tables for the dimmer module, dispatched
+by mode byte:
 
-Pre-fix, the shutter decoder used ``ROLLER_TIMER_MAPPING`` for every
-mode, so M06/M07 records reported ``None`` for T1 because the
-``ROLLER_TIMER_MAPPING`` rows are single-valued.
+* **M01/M02/M03** → 3-value on/off-step config (``DIMMER_T1_1``)
+* **M05/M06**     → 4-value push time (``DIMMER_T1_2``)
+* **M07**         → 16-value delayed-off duration (``DIMMER_T1_3``)
+* **M11/M12**     → 16-value preset dim level as % (``DIMMER_AMOUNT_PERCENT``)
 
-Now ``shutter_decoder._timer_value`` takes the mode byte too and
-dispatches to the new ``ROLLER_T3_MAPPING`` for M06/M07. The 16-entry
-table is sourced from Niko ParamBase ``S_DB_ROLLUIK_T3`` (product.mdb
-KP=6).
+Pre-change, ``dimmer_decoder._timer_value`` consulted a single
+positional table (``DIMMER_TIMER_MAPPING``) for every mode, which:
+- collapsed M01/M02/M03 silently to ``None`` (step config never surfaced)
+- conflated M05/M06 push times with the T2 ramp-time column (wrong value)
+- reported M11/M12 preset levels as voltages (``"5,0 V"`` etc.) rather
+  than the percentages the Niko PC software shows
+- always reported ``None`` for T2 because the T2 nibble was never wired
 
-Pinned in ``test_roller_t3_paired_times`` (5 tests covering the
-full table, the mode-dispatch behaviour, the structural quartet
-pattern, and back-compat for callers that don't pass ``mode_raw``).
+Now ``DIMMER_MODE_T1_LOOKUP`` dispatches to the correct table per
+mode, and ``_timer_value`` accepts a ``t2_raw`` parameter that, when
+provided, resolves T2 against the canonical ``DIMMER_T2_RAMP`` table
+(strictly monotonic 16-entry sequence, per Niko ``S_DB_DIMMER_T2``).
+
+Note on T2 wiring: the dimmer chunk's T2 nibble is not yet extracted
+in ``dimmer_decoder.decode`` (the previous implementation set
+``t2_raw=None`` unconditionally). The new ``_timer_value`` signature
+is ready for a follow-up that reads the T2 nibble from the 16-byte
+dimmer record, but the chunk-level extraction is unchanged in this
+release.
+
+Sourced from product.mdb ParamBase rows KP=11, 12, 13, 14, 15.
+
+Pinned in ``test_dimmer_per_mode_t1`` (10 tests).
+
+**Behaviour change for callers reading the T1 string of dimmer records:**
+- M11/M12 records now show ``"5%"`` instead of ``"5,0 V"`` etc.
+- M01/M02/M03 records now show step labels instead of ``None``
+- M05/M06 records with ``t1_raw > 3`` now show ``None`` (previously
+  showed a wrong-table ramp-time value)
 
 ## 0.15.0
 
