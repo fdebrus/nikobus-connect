@@ -6,7 +6,7 @@ import logging
 from typing import Any
 
 from .chunk_decoder import BaseChunkingDecoder
-from .mapping import ROLLER_MODE_MAPPING, ROLLER_TIMER_MAPPING
+from .mapping import ROLLER_MODE_MAPPING, ROLLER_T3_MAPPING, ROLLER_TIMER_MAPPING
 from .protocol import (
     _format_channel,
     _is_all_ff,
@@ -18,9 +18,21 @@ from .protocol import (
 _LOGGER = logging.getLogger(__name__)
 
 
-def _timer_value(t1_raw: int | None) -> tuple[str | None, str | None]:
+def _timer_value(
+    t1_raw: int | None, mode_raw: int | None = None
+) -> tuple[str | None, str | None]:
+    """Resolve the T1 nibble to its human-readable label.
+
+    Mode 0x05 (M06 "Open with operating time") and mode 0x06 (M07 "Close
+    with operating time") use ``ROLLER_T3_MAPPING`` — a paired
+    ``long-press / short-press`` duration. All other roller modes
+    (M01/M02/M03/M05) use ``ROLLER_TIMER_MAPPING`` — a single operating
+    time.
+    """
     if t1_raw is None:
         return None, None
+    if mode_raw in (0x05, 0x06):
+        return ROLLER_T3_MAPPING.get(t1_raw), None
     timer_entry = ROLLER_TIMER_MAPPING.get(t1_raw)
     return (timer_entry[0], None) if timer_entry else (None, None)
 
@@ -84,7 +96,7 @@ def decode(payload_hex: str, raw_bytes: list[str], context) -> dict[str, Any] | 
         coord_get_channels,
     )
 
-    t1_val, t2_val = _timer_value(t1_raw)
+    t1_val, t2_val = _timer_value(t1_raw, mode_raw)
 
     decoded = {
         "payload": payload_hex,

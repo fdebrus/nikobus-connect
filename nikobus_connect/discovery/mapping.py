@@ -514,23 +514,59 @@ ROLLER_MODE_MAPPING = {
 }
 
 ROLLER_TIMER_MAPPING = {
+    # T1-nibble → operating time per Niko ParamBase ``S_DB_ROLLUIK_T2``.
+    # 4-bit nibble, so exactly 16 entries (0..15).
+    #
+    # The pre-correction table had a duplicate "6 s" entry at index 6 that
+    # shifted every subsequent value down by one slot, so a roller with
+    # ``t1_raw=14`` showed "50 s" when the configured operating time was
+    # actually "60 s", and ``t1_raw=15`` showed "60 s" when the actual
+    # value was "90 s". Verified against Niko's product database (the
+    # canonical ``S_DB_ROLLUIK_T2`` parameter table in product.mdb).
     0: ["Turned off", None, None],
     1: ["0,4 s (impuls)", None, None],
     2: ["6 s", None, None],
     3: ["8 s", None, None],
     4: ["10 s", None, None],
     5: ["12 s", None, None],
-    6: ["6 s", None, None],
-    7: ["14 s", None, None],
-    8: ["16 s", None, None],
-    9: ["18 s", None, None],
-    10: ["20 s", None, None],
-    11: ["25 s", None, None],
-    12: ["30 s", None, None],
-    13: ["40 s", None, None],
-    14: ["50 s", None, None],
-    15: ["60 s", None, None],
-    16: ["90 s", None, None],
+    6: ["14 s", None, None],
+    7: ["16 s", None, None],
+    8: ["18 s", None, None],
+    9: ["20 s", None, None],
+    10: ["25 s", None, None],
+    11: ["30 s", None, None],
+    12: ["40 s", None, None],
+    13: ["50 s", None, None],
+    14: ["60 s", None, None],
+    15: ["90 s", None, None],
+}
+
+# Roller M06 ("Open with operating time") and M07 ("Close with operating
+# time") use the T1 nibble to encode a PAIRED duration rather than a
+# single operating time. Format is ``<long-press-time> / <short-press-time>``.
+#
+# Per Niko ParamBase ``S_DB_ROLLUIK_T3`` (product.mdb KP=6). Used only for
+# mode bytes 0x05 (M06) and 0x06 (M07) — the regular operating-time modes
+# (M01/M02/M03/M05) use ``ROLLER_TIMER_MAPPING`` instead.
+ROLLER_T3_MAPPING = {
+    0x0: "-  / 1s",
+    0x1: "-  / 1s",   # canonical Niko table has both slot 0 and slot 1 as
+                      # "-  / 1s" — keeping the duplication faithful to the
+                      # spec rather than de-duplicating.
+    0x2: "-  / 2s",
+    0x3: "-  / 3s",
+    0x4: "8s / 1s",
+    0x5: "8s / 2s",
+    0x6: "8s / 3s",
+    0x7: "16s / 1s",
+    0x8: "16s / 2s",
+    0x9: "16s / 3s",
+    0xA: "30s / 1s",
+    0xB: "30s / 2s",
+    0xC: "30s / 3s",
+    0xD: "90s / 1s",
+    0xE: "90s / 2s",
+    0xF: "90s / 3s",
 }
 
 # =============================================================================
@@ -562,8 +598,12 @@ DIMMER_TIMER_MAPPING = {
     7: ["4,5 V", None, "20 s"],
     8: ["5,0 V", None, "30 s"],
     9: ["5,5 V", None, "40 s"],
-    10: ["6,0 V", None, "1 m"],
-    11: ["6,5 V", None, "90 s"],
+    # Indices 10 and 11 had col[2] swapped pre-fix ("1 m" / "90 s"). The
+    # Niko ``S_DB_DIMMER_T2`` ramp-time table is monotonically increasing:
+    # 30 s, 40 s, 50 s, 1 m, 2 m, ... so slot 10 is "50 s" and slot 11 is
+    # "1 m". "90 s" is not a value in the official ramp-time table at all.
+    10: ["6,0 V", None, "50 s"],
+    11: ["6,5 V", None, "1 m"],
     12: ["7,0 V", None, "2 m"],
     13: ["7,5 V", None, "3 m"],
     14: ["8,0 V", None, "4 m"],
