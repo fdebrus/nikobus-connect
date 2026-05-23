@@ -1,5 +1,50 @@
 # Changelog
 
+## 0.16.3
+
+Fix discovery progress display during inventory + identity phases.
+Pre-0.16.3 the library only emitted accurate ``register_total`` /
+``registers_sent`` during PHASE_REGISTER_SCAN, leaving the earlier
+phases at the stale defaults. HA consumers fell back to a 240-register
+safety value, so a PC-Link scan that actually reads 96 registers per
+address appeared in the UI as "stuck at 96 / 240".
+
+**PHASE_IDENTITY** (per-address probe, ``0xA0..0xFF`` = 96 regs):
+
+- ``register_total`` now set to 96 per address before the scan starts
+- ``module_total`` set to the address-queue length, ``module_index``
+  incremented per address so the UI can show "module 2/3"
+- ``registers_sent`` increments per register read inside the loop and
+  resets to 0 between addresses, so each address's progress bar
+  starts fresh at 0/96 rather than carrying over the cumulative
+  count from the previous address
+- ``pass_index`` / ``pass_total`` set to ``1/1`` since identity is
+  always a single sub=04 sweep per address
+- A per-register ``_emit_progress`` is called inside the inner loop
+  with the current register byte, so the UI bar actually advances
+
+**PHASE_INVENTORY** (the ``#A`` bus broadcast):
+
+- ``register_total`` set to 1 (the ``#A`` broadcast is one unit of
+  work, not a register sweep)
+- ``registers_sent`` set to 1 once the command is on the wire
+- HA consumers no longer fall back to ``0 / 240``
+
+Both fixes set the per-module cumulative counters (``_progress_module_*``)
+AND the legacy single-pass counter (``_progress_register_total``) so
+both 0.16.1+ consumers and any pre-0.16.1 fallback paths see the
+correct values.
+
+Pinned with 5 new tests in ``test_inventory_identity_progress.py``:
+
+- identity-phase register_total = 96 per address
+- identity-phase registers_sent increments 1..96 per register
+- identity-phase counter resets between addresses
+- identity-phase module_index / module_total track the address queue
+- inventory-phase register_total = 1 (single unit of work)
+
+446 tests pass.
+
 ## 0.16.2
 
 **Vendor-exact ``mapping.py``.** Every Model number and Name in
