@@ -165,13 +165,14 @@ def test_device_type_0x23_maps_to_rf_wall_button_4ch():
     SKU wasn't determined from Niko's catalogue.
 
     0.16.2: vendor catalogue (product.mdb KP=53, ``S_DB_RF_WAND_4``)
-    pins this device-type byte to ``05-303-4*`` (current Niko code),
-    with ``05-304`` and ``410-00002`` as documented alternates. Both
-    the alt and legacy alt are recorded on the DEVICE_TYPES entry."""
+    pins this device-type byte to ``05-304`` (consumer-facing code
+    that matches Niko's product page niko.eu/en/article/05-304), with
+    the technical wildcard ``05-303-4*`` and legacy ``410-00002``
+    recorded as alternates."""
 
     entry = DEVICE_TYPES["23"]
-    assert entry["Model"] == "05-303-4*"
-    assert entry["ModelAlt"] == "05-304"
+    assert entry["Model"] == "05-304"
+    assert entry["ModelAlt"] == "05-303-4*"
     assert entry["ModelAltLegacy"] == "410-00002"
     assert entry["Channels"] == 4
     assert entry["Category"] == "Button"
@@ -212,13 +213,14 @@ def test_device_type_0x1f_maps_to_rf_wall_button_2ch():
     correct SKU.
 
     0.16.2: vendor catalogue (product.mdb KP=52, ``S_DB_RF_WAND_2``)
-    pins this device-type byte to ``05-301-4*`` (current Niko code),
-    with ``05-302`` and ``410-00001`` as documented alternates. Both
-    the alt and legacy alt are recorded on the DEVICE_TYPES entry."""
+    pins this device-type byte to ``05-302`` (consumer-facing code
+    that matches Niko's product page niko.eu/en/article/05-302), with
+    the technical wildcard ``05-301-4*`` and legacy ``410-00001``
+    recorded as alternates."""
 
     entry = DEVICE_TYPES["1F"]
-    assert entry["Model"] == "05-301-4*"
-    assert entry["ModelAlt"] == "05-302"
+    assert entry["Model"] == "05-302"
+    assert entry["ModelAlt"] == "05-301-4*"
     assert entry["ModelAltLegacy"] == "410-00001"
     assert entry["Channels"] == 2
     assert entry["Category"] == "Button"

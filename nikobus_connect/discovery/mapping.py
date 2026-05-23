@@ -231,13 +231,19 @@ DEVICE_TYPES = {
     "1F": {
         # 2-channel RF-bus push button per Niko's PMNikobus catalogue.
         # Battery-powered wall-mounted RF device that pairs with the
-        # 05-300 modular RF interface. Niko sells these as a base
-        # radio module + interchangeable face plates rather than under
-        # a single SKU; product.mdb tags this as ``S_DB_RF_WAND_2``
-        # (KP=52, NikoRefNr ``05-301-4*``).
+        # 05-300 modular RF interface.
+        #
+        # product.mdb (KP=52, ``S_DB_RF_WAND_2``) lists ``05-301-4*`` as
+        # the primary code and ``05-302`` as the alt. The wildcard
+        # ``05-301-4*`` is Niko's technical programming reference; the
+        # plain ``05-302`` is the catalogue number that appears on
+        # consumer hardware labels and Niko's product pages. We promote
+        # ``05-302`` to ``Model`` (so the HA device list matches what
+        # users find on niko.eu/en/article/05-302) and keep the
+        # technical reference in ``ModelAlt``.
         "Category": "Button",
-        "Model": "05-301-4*",
-        "ModelAlt": "05-302",
+        "Model": "05-302",
+        "ModelAlt": "05-301-4*",
         "ModelAltLegacy": "410-00001",
         "Channels": 2,
         "Name": "RF-bus push button, 2 channels",
@@ -246,13 +252,16 @@ DEVICE_TYPES = {
     "23": {
         # 4-channel RF-bus push button per Niko's PMNikobus catalogue.
         # Confirmed by fdebrus from physical hardware (devices at
-        # addresses 201250 and 204915 on his install). Niko sells
-        # these as a base radio module + interchangeable face
-        # plates; product.mdb tags this as ``S_DB_RF_WAND_4``
-        # (KP=53, NikoRefNr ``05-303-4*``).
+        # addresses 201250 and 204915 on his install).
+        #
+        # product.mdb (KP=53, ``S_DB_RF_WAND_4``) lists ``05-303-4*`` as
+        # the primary code and ``05-304`` as the alt. Same convention
+        # as 0x1F: we promote the consumer-facing ``05-304`` to
+        # ``Model`` and keep the wildcard technical code in
+        # ``ModelAlt``.
         "Category": "Button",
-        "Model": "05-303-4*",
-        "ModelAlt": "05-304",
+        "Model": "05-304",
+        "ModelAlt": "05-303-4*",
         "ModelAltLegacy": "410-00002",
         "Channels": 4,
         "Name": "RF-bus push button, 4 channels",

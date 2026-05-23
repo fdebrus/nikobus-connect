@@ -137,10 +137,15 @@ def test_specific_product_mdb_anchors() -> None:
     assert DEVICE_TYPES["12"]["Model"] == "4*-078"
     assert DEVICE_TYPES["12"]["VendorRef"] == "S_DB_KNOP_8_GRAFIET"
 
-    assert DEVICE_TYPES["1F"]["Model"] == "05-301-4*"
+    # 0x1F / 0x23 — consumer-facing model is primary (Niko's product
+    # pages use these codes); the technical wildcard reference from
+    # product.mdb (``05-301-4*`` / ``05-303-4*``) sits in ModelAlt.
+    assert DEVICE_TYPES["1F"]["Model"] == "05-302"
+    assert DEVICE_TYPES["1F"]["ModelAlt"] == "05-301-4*"
     assert DEVICE_TYPES["1F"]["VendorRef"] == "S_DB_RF_WAND_2"
 
-    assert DEVICE_TYPES["23"]["Model"] == "05-303-4*"
+    assert DEVICE_TYPES["23"]["Model"] == "05-304"
+    assert DEVICE_TYPES["23"]["ModelAlt"] == "05-303-4*"
     assert DEVICE_TYPES["23"]["VendorRef"] == "S_DB_RF_WAND_4"
 
     assert DEVICE_TYPES["28"]["Model"] == "05-7*5"
