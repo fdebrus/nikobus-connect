@@ -1,5 +1,43 @@
 # Changelog
 
+## 0.17.1
+
+Discovery speed regression fix for installs with feedback modules.
+
+**Problem.** 0.17.0's per-product profiles included a feedback-module
+scan (~912 register reads at sub=4/5/6/7 derived from
+Niko_05_207.dll). Real-world testing on a feedback module showed it
+**doesn't respond to a single one of those reads** — every read
+ACK-times-out (1.5 s × 2 attempts ≈ 3 s per register). Net cost:
+**~45 minutes wasted per feedback module** in the install.
+
+The give-up logic that should abort the pass after
+``MODULE_SCAN_CONSECUTIVE_GIVE_UP_LIMIT`` consecutive ACK timeouts
+did not fire — the abort log line is absent from the diagnostic log
+despite every register reading timing out. Tracked separately; the
+likely candidates are stale-ACK matching in ``_await_matching_ack``
+or a counter-reset path not yet identified. Until that's understood,
+the safe fix is to keep feedback out of the scan plan since the
+profile yields zero records anyway.
+
+**Fixes.**
+
+- ``feedback_module`` restored to ``NON_OUTPUT_MODULE_TYPES``. The
+  Niko_05_207.dll-derived profile is preserved as
+  ``_FEEDBACK_PROFILE_DEFAULT`` (data constant) for future firmware
+  variants that respond differently.
+- ``MODULE_SCAN_CONSECUTIVE_GIVE_UP_LIMIT`` lowered 16 → 8 as a
+  defensive measure for any future profile that walks into a
+  non-responsive section.
+
+**Scan-time impact** (user's 8-module install, log analysis):
+
+| Module | 0.17.0 | 0.17.1 |
+|---|---|---|
+| Feedback (966C) | ~45 min | skipped |
+| Switch / Roller / Dimmer / PC-Logic / PC-Link | ~3 min each | unchanged |
+| **Total** | ~65 min | ~20 min |
+
 ## 0.17.0
 
 Per-product scan plans derived from Niko's product DLLs. Restores

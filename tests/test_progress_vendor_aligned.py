@@ -114,14 +114,15 @@ def test_pc_link_plan_uses_dll_sections_not_legacy_band() -> None:
     assert "03" in subs_used
 
 
-def test_feedback_plan_dispatches_dll_sections() -> None:
-    """Feedback (Niko_05_207) is now scanned (was skipped pre-0.17.0).
-    Profile covers sub=4 0x00..0xFF + sub=5 0x00..0xFF + sub=6/7 bands."""
+def test_feedback_plan_is_skipped_post_017_1() -> None:
+    """0.17.1: feedback_module is in NON_OUTPUT_MODULE_TYPES (reverted
+    from 0.17.0). Real-world testing showed the DLL-derived scan wastes
+    ~45 min per module on ACK timeouts; feedback programming lives on
+    source modules' BP cells anyway."""
     plan = _scan_passes_for_module_type("feedback_module")
-    assert plan, "feedback profile missing"
-    subs_used = {sub for sub, _regs in plan}
-    assert "04" in subs_used
-    assert "06" in subs_used
+    assert plan == (), (
+        f"feedback should have no scan plan in 0.17.1+; got {plan}"
+    )
 
 
 def test_switch_plan_includes_legacy_safety_net() -> None:
@@ -140,12 +141,16 @@ def test_switch_plan_includes_legacy_safety_net() -> None:
     assert {0x00, 0x10, 0x20, 0x3F}.issubset(sub4_regs)
 
 
-def test_all_output_module_types_have_a_profile() -> None:
-    """Every module type we discover must have a non-empty scan profile.
-    Empty plans silently skip discovery for that family — guard against
-    accidental dispatcher-table omissions."""
+def test_all_scanned_module_types_have_a_profile() -> None:
+    """Every module type we scan must have a non-empty profile. Empty
+    plans silently skip discovery for that family — guard against
+    accidental dispatcher-table omissions.
+
+    Note: ``feedback_module`` is intentionally NOT in this list
+    (0.17.1 — see ``test_feedback_plan_is_skipped_post_017_1``).
+    """
     for mt in ("switch_module", "roller_module", "dimmer_module",
-               "pc_logic", "pc_link", "feedback_module"):
+               "pc_logic", "pc_link"):
         plan = _scan_passes_for_module_type(mt)
         assert plan, f"empty scan profile for {mt}"
         assert _MODULE_SCAN_PROFILES[mt] == plan

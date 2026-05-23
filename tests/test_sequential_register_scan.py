@@ -398,7 +398,9 @@ def test_consecutive_give_up_limit_default():
     walking the full 256-register range.
     """
 
-    assert const.MODULE_SCAN_CONSECUTIVE_GIVE_UP_LIMIT == 16
+    # 0.17.1: lowered 16 → 8 to abort unresponsive passes faster under
+    # the per-product profiles' variable-length sections.
+    assert const.MODULE_SCAN_CONSECUTIVE_GIVE_UP_LIMIT == 8
 
 
 @pytest.mark.asyncio
