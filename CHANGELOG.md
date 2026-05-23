@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.15.2
+
+Fix ``DIMMER_TIMER_MAPPING`` col[2] (T2 ramp time) slots 10 and 11
+which had their values swapped relative to Niko's canonical
+``S_DB_DIMMER_T2`` parameter table:
+
+    pre-fix:   slot 10 = "1 m"  slot 11 = "90 s"
+    post-fix:  slot 10 = "50 s" slot 11 = "1 m"
+
+The Niko ramp-time table is strictly monotonic (1 s, 2 s, 4 s,
+... 30 s, 40 s, 50 s, 1 m, 2 m, ...) and ``"90 s"`` is not a value
+in that table at all — it was leftover from a different parameter
+column that got mis-merged into col[2].
+
+Verified against Niko's product database (``product.mdb``,
+``ParamBase`` row KP=12 ``S_DB_DIMMER_T2``).
+
+Pinned in ``test_dimmer_timer_mapping`` which locks the full 16-entry
+table, enforces monotonicity, and asserts ``"90 s"`` cannot reappear.
+
 ## 0.15.0
 
 Resolve BP-cell links from a **05-312 Easywave 52-key** remote into
