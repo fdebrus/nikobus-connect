@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.15.1
+
+Fix ``ROLLER_TIMER_MAPPING`` off-by-one starting at index 6. The
+pre-existing table contained a duplicate ``"6 s"`` at index 6 (a
+direct repeat of index 2), shifting every subsequent operating-time
+value down by one slot. The visible effect on a real install: a
+roller with ``t1_raw=14`` (configured operating time "60 s")
+displayed "50 s" in HA, and ``t1_raw=15`` ("90 s") displayed "60 s".
+
+Cross-checked against Niko's own product database (the
+``S_DB_ROLLUIK_T2`` parameter table in product.mdb), the canonical
+16-entry table is:
+
+    0:'Turned off', 1:'0,4 s (impuls)', 2:'6 s', 3:'8 s',
+    4:'10 s', 5:'12 s', 6:'14 s', 7:'16 s', 8:'18 s',
+    9:'20 s', 10:'25 s', 11:'30 s', 12:'40 s', 13:'50 s',
+    14:'60 s', 15:'90 s'
+
+(``t1`` is a 4-bit nibble so exactly 16 entries are valid; the
+post-correction table no longer has a spurious 17th entry.)
+
+Pinned in a new ``test_roller_timer_mapping`` regression test that
+verifies the full table and that no two operating-time slots
+duplicate each other.
+
 ## 0.15.0
 
 Resolve BP-cell links from a **05-312 Easywave 52-key** remote into

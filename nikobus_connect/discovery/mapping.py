@@ -514,23 +514,31 @@ ROLLER_MODE_MAPPING = {
 }
 
 ROLLER_TIMER_MAPPING = {
+    # T1-nibble → operating time per Niko ParamBase ``S_DB_ROLLUIK_T2``.
+    # 4-bit nibble, so exactly 16 entries (0..15).
+    #
+    # The pre-correction table had a duplicate "6 s" entry at index 6 that
+    # shifted every subsequent value down by one slot, so a roller with
+    # ``t1_raw=14`` showed "50 s" when the configured operating time was
+    # actually "60 s", and ``t1_raw=15`` showed "60 s" when the actual
+    # value was "90 s". Verified against Niko's product database (the
+    # canonical ``S_DB_ROLLUIK_T2`` parameter table in product.mdb).
     0: ["Turned off", None, None],
     1: ["0,4 s (impuls)", None, None],
     2: ["6 s", None, None],
     3: ["8 s", None, None],
     4: ["10 s", None, None],
     5: ["12 s", None, None],
-    6: ["6 s", None, None],
-    7: ["14 s", None, None],
-    8: ["16 s", None, None],
-    9: ["18 s", None, None],
-    10: ["20 s", None, None],
-    11: ["25 s", None, None],
-    12: ["30 s", None, None],
-    13: ["40 s", None, None],
-    14: ["50 s", None, None],
-    15: ["60 s", None, None],
-    16: ["90 s", None, None],
+    6: ["14 s", None, None],
+    7: ["16 s", None, None],
+    8: ["18 s", None, None],
+    9: ["20 s", None, None],
+    10: ["25 s", None, None],
+    11: ["30 s", None, None],
+    12: ["40 s", None, None],
+    13: ["50 s", None, None],
+    14: ["60 s", None, None],
+    15: ["90 s", None, None],
 }
 
 # =============================================================================
