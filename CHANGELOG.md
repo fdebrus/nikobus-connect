@@ -1,5 +1,82 @@
 # Changelog
 
+## 0.16.0
+
+**Full vendor alignment for the scan plan — no firmware-specific
+exceptions, no defensive sweeps, every module reads exactly the 48
+registers Niko's PC software reads.**
+
+Niko's PC software (COM3 trace 2026-05-08, switch module 3D82) uses
+EXACTLY this per-module read sequence for every output module:
+
+| Sub-byte | Register list                    | Purpose                | Count |
+|----------|----------------------------------|------------------------|-------|
+| sub=00   | 0x05, 0x06, 0x07, 0x08, 0x09, 0x3E | module header / identity | 6 |
+| sub=01   | 0x70..0x93 + 0x96                 | link table              | 37 |
+| sub=04   | 0x65..0x69                        | status / state          | 5 |
+|          |                                   | **Total per module**    | **48** |
+
+0.16.0 applies this exact list to:
+
+- **Switch module** (05-000-02 / 05-002-02): was sub=04 0x00..0x3F + sub=01 0x70..0x96 = 103 regs → now 48 regs (vendor)
+- **Roller module** (05-001-02): was 103 regs → 48 regs (vendor)
+- **Dimmer module** (05-007-02 / 05-008-02): was sub=04 + sub=01 both 0x00..0xFF = **512 regs** → now 48 regs (vendor). The pre-0.16.0 firmware-specific full-sweep exception (2026-05-04 capture on modules 116D + 0E0A) is **gone**.
+- **PC-Logic** (05-201): was sub=04 0x00..0xFF = 256 regs → now 48 regs (vendor). The pre-0.16.0 defensive 0x00..0xFF override is **gone**.
+
+PC-Link keeps its existing 0xA3..0xFF inventory-band scan — that's the
+controller-side module-registry, a different operation from the
+per-module vendor link-table reads. Already vendor-aligned per the
+May 2024 capture; no change.
+
+**Safety net** — opt-in legacy scan via ``broad_scan=True`` on the
+discovery instance. Re-adds the pre-0.16.0 sub=04 0x00..0x3F sweep
+as an extra pass after the vendor primary. Switch / roller / dimmer
+/ PC-Logic all get the safety net. Use when a firmware revision
+stores its link table outside the vendor band:
+
+```python
+discovery = NikobusDiscovery(coordinator, ..., broad_scan=True)
+```
+
+**Plumbing changes:**
+
+- New ``_SCAN_SUBS_BY_MODULE_TYPE`` — module-type → ordered sub-byte plan
+- New ``_SCAN_REGISTERS_BY_SUB`` — sub-byte → exact register tuple (NOT a ``range``; preserves the non-contiguous 0x96 in the vendor's sub=01 list)
+- New ``_BROAD_SCAN_EXTRA_SUBS_BY_MODULE_TYPE`` + ``_BROAD_SCAN_LEGACY_REGISTERS`` — opt-in safety-net plumbing
+- New synthetic sub-byte tokens: ``"04_broad"`` (legacy 0x00..0x3F), ``"pc_link_inventory"`` (PC-Link's 0xA3..0xFF). Both collapse to ``"04"`` on the wire via ``_wire_sub_byte``.
+- New ``_scan_subs_for_module_type(module_type, broad_scan=…)`` helper
+- New ``_scan_registers_for_sub(sub_byte, module_type=…)`` helper
+- ``NikobusDiscovery.__init__`` gains ``broad_scan: bool = False``
+
+**Removed:**
+
+- ``_EXTRA_SCAN_SUBS_BY_MODULE_TYPE`` (replaced by ``_SCAN_SUBS_BY_MODULE_TYPE``)
+- ``_SCAN_REGISTER_RANGE_BY_SUB`` (replaced by ``_SCAN_REGISTERS_BY_SUB``)
+- ``_SCAN_REGISTER_RANGE_BY_MODULE_TYPE`` / ``_SCAN_REGISTER_RANGE_BY_MODULE_TYPE_AND_SUB`` (no per-module-type widening any more)
+- ``_PC_LOGIC_SCAN_RANGE_OVERRIDE`` / ``_PC_LINK_SCAN_RANGE_OVERRIDE`` constants (PC-Logic shares the vendor plan; PC-Link's range is inlined into ``_SCAN_REGISTERS_BY_SUB``)
+- ``_scan_range_for_sub`` helper (use ``_scan_registers_for_sub`` instead)
+
+**Net effect** on a typical install with one PC-Logic + one PC-Link +
+2-3 switch modules + 1 dimmer:
+- Pre-0.16.0: 256 + 93 + 3×103 + 512 = **1170 registers per discovery sweep**
+- 0.16.0:    48 + 93 + 3×48 + 48 = **333 registers per discovery sweep** (**~3.5× faster**)
+
+This is what "scan-time matches the vendor" looks like.
+
+**Mode-name and timer tables in mapping.py are unchanged** — this
+release only affects WHICH bytes we read from each module.
+
+Pinned in:
+- ``test_full_vendor_alignment`` (20 tests covering the vendor map,
+  the per-module plan, register-list exactness, wire-sub-byte
+  collapse, and broad_scan opt-in behaviour)
+- Updated ``test_register_scan_range`` (10 tests rewritten for the
+  new 3-pass-with-exact-register-list model)
+- Updated ``test_pc_logic_stage1`` (3 tests rewritten for the
+  vendor-aligned PC-Logic plan)
+- Updated ``test_pc_link_stage2`` (1 test pinned for the inventory
+  band unchanged)
+
 ## 0.15.4
 
 Resolve dimmer T1 to its **per-mode** parameter table. Niko's product
