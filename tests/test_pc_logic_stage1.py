@@ -112,14 +112,17 @@ def test_device_type_0x37_is_modular_interface():
 
 
 def test_audio_and_interface_buckets_are_excluded_from_scan_queue():
-    """0.17.0: ``NON_OUTPUT_MODULE_TYPES`` carries the three remaining
-    buckets we can't scan (audio/interface/other). ``feedback_module``
-    moved OUT — Niko_05_207.dll's GetDLLReadInfo gives it a real profile
-    so we now scan it like any other output module."""
+    """0.17.1: ``NON_OUTPUT_MODULE_TYPES`` carries the four buckets we
+    can't scan. ``feedback_module`` was briefly removed in 0.17.0 but
+    real-world testing showed feedback modules don't respond to the
+    DLL-derived scan (~45 min wasted per module on ACK timeouts), so
+    it's restored to this set. Feedback programming lives on source
+    modules' BP cells, not in the feedback module's own memory."""
 
     from nikobus_connect.discovery.discovery import NON_OUTPUT_MODULE_TYPES
 
     assert NON_OUTPUT_MODULE_TYPES == frozenset({
+        "feedback_module",
         "other_module",
         "interface_module",
         "audio_module",
@@ -456,11 +459,11 @@ def test_pc_logic_profile_is_dll_derived() -> None:
 
 
 def test_per_product_profiles_cover_all_output_modules() -> None:
-    """Every output module type + PC-Logic + PC-Link + feedback has a
-    DLL-derived scan profile. No empty plans (which would silently skip
-    discovery for that family)."""
+    """Every output module type + PC-Logic + PC-Link has a DLL-derived
+    scan profile. No empty plans (which would silently skip discovery
+    for that family). Feedback is intentionally excluded (0.17.1)."""
     for mt in ("switch_module", "roller_module", "dimmer_module",
-               "pc_logic", "pc_link", "feedback_module"):
+               "pc_logic", "pc_link"):
         plan = _scan_passes_for_module_type(mt)
         assert plan, f"missing scan profile for {mt}"
         assert _MODULE_SCAN_PROFILES[mt] == plan

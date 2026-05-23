@@ -182,9 +182,12 @@ async def test_roller_dispatches_per_product_profile(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_feedback_module_now_scanned(tmp_path):
-    """0.17.0: feedback_module (05-207) was previously skipped — now it
-    has a DLL-derived profile (sub=4 0x00..0xFF + sub=6 bands)."""
+async def test_feedback_module_is_skipped(tmp_path):
+    """0.17.1: feedback_module reverts to NON_OUTPUT_MODULE_TYPES — its
+    DLL-derived scan (912 reads) wastes ~45 min on ACK timeouts in the
+    real world. Feedback programming lives on source modules' BP cells,
+    not in the feedback module's own memory, so there are no records to
+    discover here anyway."""
 
     coord = _make_coordinator()
     discovery = NikobusDiscovery(
@@ -212,9 +215,9 @@ async def test_feedback_module_now_scanned(tmp_path):
 
     await discovery.query_module_inventory("FF00")
 
-    assert calls, "feedback scan should produce passes"
-    subs = {c["sub_byte"] for c in calls}
-    assert "04" in subs and "06" in subs
+    assert calls == [], (
+        "feedback module should not be scanned (no link records there)"
+    )
 
 
 @pytest.mark.asyncio

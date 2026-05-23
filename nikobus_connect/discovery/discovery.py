@@ -241,11 +241,17 @@ _PC_LINK_PROFILE_DEFAULT: tuple[ScanSection, ...] = _merge_passes((
 ))
 
 # --- FEEDBACK (Niko_05_207) ---
-# 3 main sections (in addition to the always-zero arg4=8 init):
-#   sec 1: offset=0x4000 length=0x2000 → sub=4 reg=0x00..0xFF (full 256 reads)
-#   sec 2: offset=0x6000 length=0x0100 → sub=6 reg=0x00..0x0F
-#   sec 3: offset=0x6100 length=0x0100 → sub=6 reg=0x10..0x1F
-#   sec 4: offset=0x6200 length=0x1700 → sub=6 reg=0x20..0x8F
+# DLL describes 5 sections totaling ~912 reads, but real-world testing
+# (2026-05-23) showed feedback modules don't respond to function-0x10
+# reads at any of those addresses — every read ACK-times-out, and the
+# scan wastes ~45 min per module to no benefit.
+#
+# Feedback module programming lives on SOURCE modules' BP cells (per
+# Niko docs), not in the feedback module's own memory. The DLL bands
+# we extracted are display/state config, not link records.
+#
+# Restored to NON_OUTPUT_MODULE_TYPES below. Profile left as data
+# constant in case future hardware variants need it.
 _FEEDBACK_PROFILE_DEFAULT: tuple[ScanSection, ...] = _merge_passes((
     *_regs_for_bytes(0x4000, 0x2000),
     *_regs_for_bytes(0x6000, 0x0100),
@@ -282,13 +288,20 @@ _SWITCH_PROFILE_DEFAULT: tuple[ScanSection, ...] = _merge_passes((
 
 # Final per-module-type scan plan. Keys are the canonical module types
 # from ``get_module_type_from_device_type``.
+#
+# Note: ``feedback_module`` is NOT in this map (0.17.1). Real-world
+# testing showed feedback modules don't respond to function-0x10 reads
+# at any of the DLL-derived sections — the scan wasted ~45 min per
+# module for zero records. Feedback programming lives on source
+# modules' BP cells. The profile constant ``_FEEDBACK_PROFILE_DEFAULT``
+# is preserved as a data constant for future use if firmware variants
+# differ.
 _MODULE_SCAN_PROFILES: dict[str, tuple[ScanSection, ...]] = {
     "switch_module":   _SWITCH_PROFILE_DEFAULT,
     "roller_module":   _ROLLER_PROFILE_DEFAULT,
     "dimmer_module":   _DIMMER_PROFILE_DEFAULT,
     "pc_logic":        _PC_LOGIC_PROFILE_DEFAULT,
     "pc_link":         _PC_LINK_PROFILE_DEFAULT,
-    "feedback_module": _FEEDBACK_PROFILE_DEFAULT,
 }
 
 # Broad-scan extras (the huge variable sections PC software skips when
@@ -303,10 +316,15 @@ _MODULE_SCAN_PROFILES_BROAD_EXTRA: dict[str, tuple[ScanSection, ...]] = {
 _DEFAULT_SCAN_REGISTERS: tuple[int, ...] = tuple(range(0x00, 0x100))
 
 # Module-type buckets whose per-module register scan is short-circuited.
-# 0.17.0: ``feedback_module`` moved OUT of this set — Niko_05_207.dll's
-# GetDLLReadInfo enumerates a 5-section profile (sub=4 0x00..0xFF + sub=6
-# bands), now driven by ``_FEEDBACK_PROFILE_DEFAULT``.
+# 0.17.1: ``feedback_module`` restored to this set after real-world
+# testing showed feedback modules don't respond to the DLL-derived
+# scan plan (~45 min wasted per module on ACK timeouts). Feedback
+# programming lives on source modules' BP cells, not in the feedback
+# module's own memory — there are no link records here to discover.
 #
+# - ``feedback_module`` (0x42, 05-207): doesn't respond to function-0x10
+#   reads on its memory-map sections. Its programming surface is the
+#   BP-cell tables on the source switch/dimmer/roller modules.
 # - ``other_module``: catch-all bucket — primarily Button-class devices
 #   (4-OP / 2-OP / RF / IR / Motion / Feedback Button) that carry no
 #   register memory, plus any Module-category device whose name fails
@@ -320,6 +338,7 @@ _DEFAULT_SCAN_REGISTERS: tuple[int, ...] = tuple(range(0x00, 0x100))
 #   button-link routing surface today; left as visibility-only until
 #   a real install validates the storage format.
 NON_OUTPUT_MODULE_TYPES: frozenset[str] = frozenset({
+    "feedback_module",
     "other_module",
     "interface_module",
     "audio_module",
