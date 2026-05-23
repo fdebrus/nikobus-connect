@@ -598,8 +598,12 @@ DIMMER_TIMER_MAPPING = {
     7: ["4,5 V", None, "20 s"],
     8: ["5,0 V", None, "30 s"],
     9: ["5,5 V", None, "40 s"],
-    10: ["6,0 V", None, "1 m"],
-    11: ["6,5 V", None, "90 s"],
+    # Indices 10 and 11 had col[2] swapped pre-fix ("1 m" / "90 s"). The
+    # Niko ``S_DB_DIMMER_T2`` ramp-time table is monotonically increasing:
+    # 30 s, 40 s, 50 s, 1 m, 2 m, ... so slot 10 is "50 s" and slot 11 is
+    # "1 m". "90 s" is not a value in the official ramp-time table at all.
+    10: ["6,0 V", None, "50 s"],
+    11: ["6,5 V", None, "1 m"],
     12: ["7,0 V", None, "2 m"],
     13: ["7,5 V", None, "3 m"],
     14: ["8,0 V", None, "4 m"],
