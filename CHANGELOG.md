@@ -1,29 +1,24 @@
 # Changelog
 
-## 0.15.1
+## 0.15.2
 
-Fix ``ROLLER_TIMER_MAPPING`` off-by-one starting at index 6. The
-pre-existing table contained a duplicate ``"6 s"`` at index 6 (a
-direct repeat of index 2), shifting every subsequent operating-time
-value down by one slot. The visible effect on a real install: a
-roller with ``t1_raw=14`` (configured operating time "60 s")
-displayed "50 s" in HA, and ``t1_raw=15`` ("90 s") displayed "60 s".
+Fix ``DIMMER_TIMER_MAPPING`` col[2] (T2 ramp time) slots 10 and 11
+which had their values swapped relative to Niko's canonical
+``S_DB_DIMMER_T2`` parameter table:
 
-Cross-checked against Niko's own product database (the
-``S_DB_ROLLUIK_T2`` parameter table in product.mdb), the canonical
-16-entry table is:
+    pre-fix:   slot 10 = "1 m"  slot 11 = "90 s"
+    post-fix:  slot 10 = "50 s" slot 11 = "1 m"
 
-    0:'Turned off', 1:'0,4 s (impuls)', 2:'6 s', 3:'8 s',
-    4:'10 s', 5:'12 s', 6:'14 s', 7:'16 s', 8:'18 s',
-    9:'20 s', 10:'25 s', 11:'30 s', 12:'40 s', 13:'50 s',
-    14:'60 s', 15:'90 s'
+The Niko ramp-time table is strictly monotonic (1 s, 2 s, 4 s,
+... 30 s, 40 s, 50 s, 1 m, 2 m, ...) and ``"90 s"`` is not a value
+in that table at all — it was leftover from a different parameter
+column that got mis-merged into col[2].
 
-(``t1`` is a 4-bit nibble so exactly 16 entries are valid; the
-post-correction table no longer has a spurious 17th entry.)
+Verified against Niko's product database (``product.mdb``,
+``ParamBase`` row KP=12 ``S_DB_DIMMER_T2``).
 
-Pinned in a new ``test_roller_timer_mapping`` regression test that
-verifies the full table and that no two operating-time slots
-duplicate each other.
+Pinned in ``test_dimmer_timer_mapping`` which locks the full 16-entry
+table, enforces monotonicity, and asserts ``"90 s"`` cannot reappear.
 
 ## 0.15.0
 
