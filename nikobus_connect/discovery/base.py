@@ -68,12 +68,34 @@ class DiscoveryProgress:
         Total number of modules queued for register scanning. 0 before
         the queue is built.
     register
-        Current register byte (``0x10..0xFF``) being read during a
-        module scan; ``None`` between modules or outside register_scan.
+        Current register byte being read during a module scan;
+        ``None`` between modules or outside register_scan. Since
+        0.16.1 (vendor-aligned scan), this can land anywhere in the
+        per-pass register list — it is NOT monotonically increasing
+        from 0x10 like it used to be, because the vendor plan reads
+        non-contiguous bytes (e.g. sub=00 reads 0x05..0x09 then
+        skips to 0x3E).
     register_total
-        Total number of registers in the scan range (240 at start,
-        drops to the actual sent count when a ``$18`` trailer
-        short-circuits the loop).
+        Total number of registers the scan plan will read for the
+        CURRENT MODULE across all passes (e.g. 48 for the vendor's
+        3-pass output-module plan). 0 before the scan starts. Drops
+        to the actual sent count when a ``$18`` trailer
+        short-circuits the loop.
+    registers_sent
+        Cumulative count of registers already sent for the current
+        module across all passes — the right value to compute a
+        per-module percentage. Starts at 0, increments by 1 per
+        register read, resets to 0 when a new module starts.
+    pass_index
+        1-based index of the current scan pass within the module's
+        plan (e.g. 1 of 3 for the vendor plan). 0 outside scans.
+    pass_total
+        Total number of scan passes the plan runs for the current
+        module (e.g. 3 for the vendor plan, 4 with ``broad_scan``).
+        0 outside scans.
+    sub_byte
+        The sub-byte of the current scan pass (``"00"``, ``"01"``,
+        ``"04"``). ``None`` outside scans.
     decoded_records
         Running total of successfully-decoded link records across the
         whole discovery run.
@@ -85,4 +107,8 @@ class DiscoveryProgress:
     module_total: int = 0
     register: int | None = None
     register_total: int = 0
+    registers_sent: int = 0
+    pass_index: int = 0
+    pass_total: int = 0
+    sub_byte: str | None = None
     decoded_records: int = 0

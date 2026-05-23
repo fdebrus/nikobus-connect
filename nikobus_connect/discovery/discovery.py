@@ -591,6 +591,18 @@ class NikobusDiscovery:
         self._progress_module_total = 0
         self._progress_register_total = 0
         self._progress_decoded_records = 0
+        # 0.16.1 vendor-aligned scan tracking. The pre-0.16.0 progress
+        # model assumed a single per-module register sweep starting at
+        # 0x10 — the new vendor plan reads non-contiguous bytes across
+        # multiple passes (e.g. sub=00 reads 0x05..0x09 then 0x3E).
+        # These counters give consumers a cumulative
+        # ``registers_sent / register_total`` ratio that's meaningful
+        # regardless of how many passes the plan runs.
+        self._progress_module_register_total: int = 0
+        self._progress_module_registers_sent: int = 0
+        self._progress_pass_index: int = 0
+        self._progress_pass_total: int = 0
+        self._progress_current_sub_byte: str | None = None
         # Set of unknown device-type bytes already warned about this
         # session. Pre-0.5.4 each scan logged the same WARNING N times
         # per type (one per record); the dedupe collapses that to a
@@ -791,12 +803,27 @@ class NikobusDiscovery:
             # We finalize explicitly from ``query_module_inventory``
             # once all passes complete.
             self._cancel_timeout()
-            # Progress: reset the register counter to the full scan range;
-            # it drops to ``registers_sent`` when a trailer short-circuits.
+            # Per-pass register total (legacy compatibility — kept so
+            # callers reading ``register_total`` get a non-zero value
+            # mid-pass even when the cumulative counters aren't set,
+            # e.g. forensic-mode scans that bypass the vendor plan).
             try:
-                self._progress_register_total = len(command_range)
+                pass_register_total = len(command_range)
             except TypeError:
-                self._progress_register_total = 0
+                pass_register_total = 0
+            # If the vendor plan didn't pre-populate the cumulative
+            # totals (e.g. forensic single-pass scan), fall back to
+            # the per-pass total so the progress UI still shows
+            # something meaningful.
+            if not self._progress_module_register_total:
+                self._progress_module_register_total = pass_register_total
+                self._progress_module_registers_sent = 0
+            self._progress_register_total = self._progress_module_register_total
+            # Cumulative count BEFORE this pass starts. The trailer /
+            # give-up adjustments below collapse the cumulative total
+            # to ``pre_pass_sent + this_pass_sent`` — the actual reads
+            # that completed — rather than the originally-planned total.
+            pre_pass_sent = self._progress_module_registers_sent
             try:
                 registers_sent = 0
                 consecutive_give_ups = 0
@@ -809,7 +836,16 @@ class NikobusDiscovery:
                             reg,
                             registers_sent,
                         )
-                        self._progress_register_total = registers_sent
+                        # Trailer short-circuits ONLY the current pass.
+                        # Collapse the cumulative total to "what was
+                        # actually sent" so the ratio reaches 100 %
+                        # naturally instead of getting stuck below.
+                        self._progress_module_register_total = (
+                            pre_pass_sent + registers_sent
+                        )
+                        self._progress_register_total = (
+                            self._progress_module_register_total
+                        )
                         break
                     partial_hex = f"{base_command}{reg:02X}{sub_byte}"
                     pc_link_command = make_pc_link_inventory_command(partial_hex)
@@ -821,6 +857,7 @@ class NikobusDiscovery:
                         connection,
                     )
                     registers_sent += 1
+                    self._progress_module_registers_sent += 1
                     await self._emit_progress(
                         PHASE_REGISTER_SCAN,
                         module_address=normalized_address,
@@ -845,7 +882,15 @@ class NikobusDiscovery:
                                 consecutive_give_ups,
                                 registers_sent,
                             )
-                            self._progress_register_total = registers_sent
+                            # Collapse the cumulative module total to
+                            # what was actually sent — same rationale as
+                            # the trailer-short-circuit branch above.
+                            self._progress_module_register_total = (
+                                pre_pass_sent + registers_sent
+                            )
+                            self._progress_register_total = (
+                                self._progress_module_register_total
+                            )
                             break
                     await asyncio.sleep(COMMAND_EXECUTION_DELAY)
                 else:
@@ -1067,6 +1112,10 @@ class NikobusDiscovery:
             module_total=self._progress_module_total,
             register=register,
             register_total=self._progress_register_total,
+            registers_sent=self._progress_module_registers_sent,
+            pass_index=self._progress_pass_index,
+            pass_total=self._progress_pass_total,
+            sub_byte=self._progress_current_sub_byte,
             decoded_records=self._progress_decoded_records,
         )
         try:
@@ -1495,6 +1544,15 @@ class NikobusDiscovery:
         self._module_found_data = False
         self._module_consecutive_empties = 0
         self._scan_response_index = 0
+        # Reset per-module progress counters. The vendor plan reads
+        # different totals per module type (e.g. switch = 48 vendor regs,
+        # PC-Link = 93 inventory regs), so each module's progress bar
+        # needs to start from 0/0 and rebuild its target.
+        self._progress_module_register_total = 0
+        self._progress_module_registers_sent = 0
+        self._progress_pass_index = 0
+        self._progress_pass_total = 0
+        self._progress_current_sub_byte = None
         self._coordinator.discovery_running = True
         self._coordinator.discovery_module = True
         self._coordinator.discovery_module_address = normalized_address
@@ -2172,20 +2230,36 @@ class NikobusDiscovery:
             await self._finalize_discovery(normalized_address)
             return
 
-        for sub_byte in scan_subs:
+        # Compute cumulative register total across all passes for this
+        # module — surfaced to ``on_progress`` so the UI can show
+        # one bar per module rather than one bar per pass.
+        per_pass_lists = [
+            _scan_registers_for_sub(sub, module_type=self._module_type)
+            for sub in scan_subs
+        ]
+        module_register_total = sum(len(regs) for regs in per_pass_lists)
+        self._progress_module_register_total = module_register_total
+        self._progress_module_registers_sent = 0
+        self._progress_pass_total = len(scan_subs)
+        self._progress_pass_index = 0
+
+        for pass_index, (sub_byte, register_list) in enumerate(
+            zip(scan_subs, per_pass_lists), start=1
+        ):
             function_code = base_command[:2]
-            register_list = _scan_registers_for_sub(
-                sub_byte, module_type=self._module_type
-            )
             wire_sub = _wire_sub_byte(sub_byte)
+            self._progress_pass_index = pass_index
+            self._progress_current_sub_byte = wire_sub
             _LOGGER.debug(
                 "Register scan pass starting | module=%s function=%s "
-                "sub=%s wire_sub=%s registers=%d",
+                "sub=%s wire_sub=%s registers=%d pass=%d/%d",
                 normalized_address,
                 function_code,
                 sub_byte,
                 wire_sub,
                 len(register_list),
+                pass_index,
+                len(scan_subs),
             )
             await self._scan_module_registers(
                 normalized_address,
@@ -2194,6 +2268,11 @@ class NikobusDiscovery:
                 sub_byte=wire_sub,
             )
 
+        # Clear per-module pass tracking so the finalize event doesn't
+        # carry stale pass info from the last pass.
+        self._progress_pass_index = 0
+        self._progress_pass_total = 0
+        self._progress_current_sub_byte = None
         await self._finalize_discovery(normalized_address)
 
     async def parse_inventory_response(self, payload) -> InventoryResult | None:

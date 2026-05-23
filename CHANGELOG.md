@@ -1,5 +1,70 @@
 # Changelog
 
+## 0.16.1
+
+Surface vendor-aligned scan progress in ``DiscoveryProgress`` so UI
+consumers can show an accurate per-module progress bar regardless of
+how many passes the plan runs or which register byte is currently
+being read.
+
+The pre-0.16.1 model assumed:
+  - registers start at 0x10
+  - one scan pass per module
+  - ``register_total`` = the length of that single pass
+
+None of those hold under the vendor plan (sub=00 reads 0x05..0x09 + 0x3E
+then sub=01 reads 0x70..0x93 + 0x96 then sub=04 reads 0x65..0x69). With
+just the per-pass length surfaced, an HA progress consumer that did
+``done = register - 0x10 + 1`` against ``register_total = 37`` would
+hit ``register = 0x70`` and compute 97/37 = 262 % progress on the first
+read.
+
+**New fields on ``DiscoveryProgress``:**
+
+- ``registers_sent`` — cumulative count across all passes for the
+  CURRENT module (resets to 0 on each new module). Use this for the
+  numerator of the progress percentage; ignore ``register`` for the
+  ratio.
+- ``pass_index`` / ``pass_total`` — 1-based pass position within the
+  module's plan (e.g. 2 of 3 means we're scanning the link table
+  pass after the header pass).
+- ``sub_byte`` — the wire sub-byte of the current pass (``"00"``,
+  ``"01"``, ``"04"``), useful for surfacing the scan phase verbosely
+  in diagnostic logs.
+
+**Changed semantics of existing fields:**
+
+- ``register_total`` — now the CUMULATIVE target for the current
+  module (e.g. 48 for the vendor plan, 112 with ``broad_scan=True``,
+  93 for PC-Link). Previously was the per-pass length. Falls back
+  to the per-pass length only when a caller bypasses the vendor
+  plan (e.g. forensic mode).
+- ``register`` — still the current byte being read, but no longer
+  monotonically increasing from 0x10. May jump between passes
+  (e.g. 0x09 → 0x3E → 0x70). UI consumers should NOT use this as
+  the progress numerator.
+
+**Existing trailer / give-up early-stop behaviour preserved:** when
+a scan pass ends early (``$18FFFF...`` trailer or
+``MODULE_SCAN_CONSECUTIVE_GIVE_UP_LIMIT`` consecutive ACK timeouts),
+the cumulative ``register_total`` collapses to the count of
+registers actually sent — so the ratio reaches 100 % naturally.
+
+**Reference numbers** for HA-side UI target tuning:
+
+| Module | Vendor plan target | broad_scan target |
+|---|---|---|
+| Switch / Roller / Dimmer / PC-Logic | 48 regs | 112 regs |
+| PC-Link | 93 regs | 93 regs (no broad-scan extras) |
+
+A typical install of PC-Link + PC-Logic + 3 switches + 1 dimmer
+totals **333 register reads** across the discovery sweep (down from
+~1170 pre-0.16.0).
+
+Pinned with new ``test_progress_vendor_aligned.py`` (8 tests covering
+the new fields, the per-module plan targets, and the typical-install
+headline number).
+
 ## 0.16.0
 
 **Full vendor alignment for the scan plan — no firmware-specific
