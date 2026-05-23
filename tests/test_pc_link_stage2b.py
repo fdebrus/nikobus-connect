@@ -498,7 +498,7 @@ def test_pc_link_decoder_emits_decoded_command_for_resolved_link_record():
 
     # channel_idx=0x21 → flat map idx 33 → ("C9A5", 10), a switch
     # channel. mode_byte=0x06 → SWITCH_MODE_MAPPING[6] = "M07
-    # (Delayed on (long up to 2h))". flag_byte=0x80, source button
+    # (Delayed on (up to 2h))". flag_byte=0x80, source button
     # 1843B4 has 4 channels → KEY_MAPPING_MODULE[4] reverse on "8"
     # = key_raw 1. payload bytes B44318 byte-swap to 1843B4.
     commands = decoder.decode_chunk("2100000006000080B443180018000000")
@@ -508,7 +508,7 @@ def test_pc_link_decoder_emits_decoded_command_for_resolved_link_record():
     assert cmd.module_type == "pc_link"
     assert cmd.metadata["module_address"] == "C9A5"
     assert cmd.metadata["channel"] == 10
-    assert cmd.metadata["M"] == "M07 (Delayed on (long up to 2h))"
+    assert cmd.metadata["M"] == "M07 (Delayed on (up to 2h))"
     assert cmd.metadata["button_address"] == "1843B4"
     assert cmd.metadata["push_button_address"] == "1843B4"
     assert cmd.metadata["key_raw"] == 1
