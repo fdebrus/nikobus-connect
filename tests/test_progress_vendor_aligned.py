@@ -112,17 +112,49 @@ def test_pc_logic_plan_dispatches_dll_sections() -> None:
     assert 100 <= total <= 200, total
 
 
-def test_pc_link_plan_uses_dll_sections_not_legacy_band() -> None:
-    """0.17.0: PC-Link scan replaced the empirical sub=4 0xA3..0xFF
-    sweep with the DLL-derived sections (sub=0 link table, sub=2/3
-    banks). Verify we no longer scan sub=4 0xA3..0xFF."""
+def test_pc_link_plan_matches_pc_software_com_trace() -> None:
+    """0.18.0: PC-Link scan restored to the empirically-validated band
+    captured from a real PC-software COM4 trace (24/05/2024, module
+    86F5) — 97 reg-reads across sub=00, sub=01, sub=04. The 0.17.0
+    DLL-derived plan (sub=00 long sweep, sub=02, sub=03) never
+    touched any of the bands the PC software actually uses; on the
+    2026-05-23 HA trace it returned 0 decoded records in 280 reads.
+    """
     plan = _scan_passes_for_module_type("pc_link")
     subs_used = {sub for sub, _regs in plan}
-    assert "04" not in subs_used, plan
-    # Should include sub=0 (link table band) and sub=2/3 (DLL bands).
-    assert "00" in subs_used
-    assert "02" in subs_used
-    assert "03" in subs_used
+    assert subs_used == {"00", "01", "04"}, subs_used
+    # Must NOT touch the bogus DLL-section sub-bytes.
+    assert "02" not in subs_used
+    assert "03" not in subs_used
+
+    sub4_regs = set()
+    for sub, regs in plan:
+        if sub == "04":
+            sub4_regs.update(regs)
+    # PC-Link module-registry band (the actual link records).
+    assert {0xA3, 0xC0, 0xD3}.issubset(sub4_regs), \
+        f"pc_link plan missing module-registry band sub=04 0xA3..0xD3: {sorted(sub4_regs)}"
+    # Vendor-aligned status probe.
+    assert {0x65, 0x69}.issubset(sub4_regs)
+
+    total = _total_reads("pc_link")
+    assert 90 <= total <= 110, total
+
+
+def test_pc_link_broad_scan_restores_dll_sections() -> None:
+    """``broad_scan=True`` re-adds the (likely unused) DLL-derived
+    sections plus extends the registry band to 0xFF, for installs that
+    want belt-and-braces coverage."""
+    plan = _scan_passes_for_module_type("pc_link", broad_scan=True)
+    subs_used = {sub for sub, _regs in plan}
+    # Broad scan re-introduces sub=02 and sub=03 from the DLL plan.
+    assert {"00", "01", "02", "03", "04"}.issubset(subs_used)
+    sub4_regs = set()
+    for sub, regs in plan:
+        if sub == "04":
+            sub4_regs.update(regs)
+    # Registry band extended to PC-Link's pre-0.16.0 ceiling.
+    assert 0xFF in sub4_regs
 
 
 def test_feedback_plan_is_skipped_post_017_1() -> None:

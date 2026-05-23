@@ -245,24 +245,44 @@ _PC_LOGIC_PROFILE_DEFAULT: tuple[ScanSection, ...] = _merge_passes((
 ))
 
 # --- PC-LINK (Niko_05_200) ---
-# Per the user's directive: replace the empirical sub=4 0xA3..0xFF scan
-# with the DLL-derived sections. Note that the PC-Link DLL may describe
-# host project-file structure rather than pure bus reads — the actual
-# bus behaviour will need empirical validation against PC software's
-# upload trace on a populated install.
-#   sec 2: offset=0x2EDE length=0x0002 → sub=2 reg=0xED
-#   sec 3: offset=0x3E80 length=0x00C0 → sub=3 reg=0xE8..0xF3
-#   sec 4: offset=0x2AF8 length=0x0280 → sub=2 reg=0xAF..0xD7
-#   sec 5: offset=0x03E6 length=variable (default 0xC82) — LINK TABLE
-#   sec 6: offset=0x03E6 length=0x0002
-#   sec 7: offset=0x0063 length=0x0181 → sub=0 reg=0x06..0x1E
+# 0.18.0: validated against a real PC-software COM4 trace
+# (24/05/2024 16:25:43) reading from address F586 (module 86F5).
+# The trace settles the question that 0.17.0 explicitly flagged
+# (see git history): the Niko_05_200.dll "sections" describe the
+# HOST's project-file layout, not bus reads.
+#
+# PC software reads (97 reg-reads, 3 sub-bytes):
+#   sub=00 0x05..0x09, 0x3E         (6  — vendor-aligned header)
+#   sub=01 0x70..0x93, 0x96         (37 — vendor-aligned secondary)
+#   sub=04 0x65..0x69                (5  — vendor-aligned status)
+#   sub=04 0xA3..0xD3                (49 — PC-Link MODULE REGISTRY)
+#
+# The 0xA3..0xD3 module-registry band is the same band pre-0.16.0
+# used, and the same band 0.16.0's vendor-aligned plan extended to
+# 0xA3..0xFF. The 0.17.0 DLL-derived plan (sub=00 long sweep + sub=02
+# + sub=03, total 280 reads) **never touches the bands the PC software
+# actually uses** — on the 2026-05-23 HA trace of 86F5, the 0.17.0
+# plan returned 0 decoded records across 280 reads. This profile fixes
+# that regression.
 _PC_LINK_PROFILE_DEFAULT: tuple[ScanSection, ...] = _merge_passes((
-    *_regs_for_bytes(0x0063, 0x0181),   # section 7
-    *_regs_for_bytes(0x03E6, 0x0002),   # section 6
-    *_regs_for_bytes(0x03E6, 0x0C82),   # section 5 (variable link table)
-    *_regs_for_bytes(0x2AF8, 0x0280),   # section 4
-    *_regs_for_bytes(0x2EDE, 0x0002),   # section 2
-    *_regs_for_bytes(0x3E80, 0x00C0),   # section 3
+    ("00", tuple(range(0x05, 0x0A)) + (0x3E,)),
+    ("01", tuple(range(0x70, 0x94)) + (0x96,)),
+    ("04", tuple(range(0x65, 0x6A)) + tuple(range(0xA3, 0xD4))),
+))
+
+# The 0.17.0 DLL-derived sections, preserved for broad_scan=True
+# coverage in case future firmware variants expose any of them on
+# the bus. The 24/05/2024 COM trace shows the PC software never
+# touches these regions on Niko_05_200.
+_PC_LINK_PROFILE_BROAD_EXTRA: tuple[ScanSection, ...] = _merge_passes((
+    *_regs_for_bytes(0x0063, 0x0181),
+    *_regs_for_bytes(0x03E6, 0x0002),
+    *_regs_for_bytes(0x03E6, 0x0C82),
+    *_regs_for_bytes(0x2AF8, 0x0280),
+    *_regs_for_bytes(0x2EDE, 0x0002),
+    *_regs_for_bytes(0x3E80, 0x00C0),
+    # Also stretch the registry band to PC-Link's pre-0.16.0 ceiling.
+    ("04", tuple(range(0xD4, 0x100))),
 ))
 
 # --- FEEDBACK (Niko_05_207) ---
@@ -381,6 +401,7 @@ _MODULE_SCAN_PROFILES_BROAD_EXTRA: dict[str, tuple[ScanSection, ...]] = {
     "switch_module":   _SWITCH_PROFILE_BROAD_EXTRA,
     "roller_module":   _ROLLER_PROFILE_BROAD_EXTRA,
     "dimmer_module":   _DIMMER_PROFILE_BROAD_EXTRA,
+    "pc_link":         _PC_LINK_PROFILE_BROAD_EXTRA,
 }
 
 # Conservative fallback when a caller hands us a sub-byte the plan

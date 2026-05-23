@@ -123,15 +123,20 @@ async def test_pc_link_module_runs_register_scan(tmp_path):
     await discovery.query_module_inventory("86F5")
 
     assert scan_calls, "PC-Link module was skipped instead of scanned"
-    # 0.17.0: PC-Link scan replaced the empirical sub=4 0xA3..0xFF sweep
-    # with the Niko_05_200.dll-derived profile (sub=0 link table band,
-    # sub=2/3 controller banks). Multiple passes across multiple sub-bytes.
+    # 0.18.0: PC-Link scan restored to the empirically-validated band
+    # from a real PC-software COM4 trace (24/05/2024) — vendor-aligned
+    # header/secondary/status + sub=4 0xA3..0xD3 module registry. The
+    # 0.17.0 DLL-derived plan (sub=00 long sweep + sub=02/sub=03) is
+    # held back for ``broad_scan=True``; the COM trace shows the PC
+    # software never touches those bands on Niko_05_200.
     subs = {c["sub_byte"] for c in scan_calls}
-    assert "04" not in subs, (
-        f"PC-Link should no longer scan sub=4 0xA3..0xFF (DLL says otherwise); "
-        f"got subs={subs}"
-    )
-    assert "00" in subs and "02" in subs, subs
+    assert subs == {"00", "01", "04"}, subs
+    sub4_regs = set()
+    for c in scan_calls:
+        if c["sub_byte"] == "04":
+            sub4_regs.update(c["command_range"])
+    assert {0xA3, 0xD3}.issubset(sub4_regs), \
+        "PC-Link plan must scan the module-registry band sub=4 0xA3..0xD3"
     assert all(c["base_cmd"].startswith("10") for c in scan_calls)
 
 
