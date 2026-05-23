@@ -1499,8 +1499,27 @@ class NikobusDiscovery:
         return
 
     async def _run_inventory_identity_queries(self, addresses: set[str]) -> None:
+        # The identity phase reads register 0xA0..0xFF (96 regs) on
+        # each address discovered during PHASE_INVENTORY. Surface a
+        # per-address total + cumulative counter so the HA progress
+        # bar tracks the actual work being done — otherwise consumers
+        # fall back to a stale ``register_total`` from the previous
+        # phase (typically 0) and either freeze or fly off-scale.
+        sorted_addresses = sorted(addresses)
+        identity_range = range(0xA0, 0x100)
+        per_address_total = len(identity_range)
+
+        self._progress_module_index = 0
+        self._progress_module_total = len(sorted_addresses)
+        self._progress_module_register_total = per_address_total
+        self._progress_register_total = per_address_total
+        self._progress_module_registers_sent = 0
+        self._progress_pass_index = 1
+        self._progress_pass_total = 1
+        self._progress_current_sub_byte = "04"
         await self._emit_progress(PHASE_IDENTITY)
-        for address in sorted(addresses):
+
+        for index, address in enumerate(sorted_addresses, start=1):
             bus_order_address = address[2:4] + address[:2]
 
             _LOGGER.debug(
@@ -1509,7 +1528,13 @@ class NikobusDiscovery:
                 bus_order_address,
             )
 
-            for reg in range(0xA0, 0x100):
+            # Reset per-address cumulative counter so each address's
+            # progress bar starts at 0/96 rather than carrying over the
+            # previous address's count.
+            self._progress_module_index = index
+            self._progress_module_registers_sent = 0
+
+            for reg in identity_range:
                 payload = f"10{bus_order_address}{reg:02X}04"
                 pc_link_command = make_pc_link_inventory_command(payload)
 
@@ -1520,6 +1545,18 @@ class NikobusDiscovery:
                     reg,
                 )
                 await self._coordinator.nikobus_command.queue_command(pc_link_command)
+                self._progress_module_registers_sent += 1
+                await self._emit_progress(
+                    PHASE_IDENTITY,
+                    module_address=address,
+                    register=reg,
+                )
+
+        # Reset per-module pass tracking so subsequent phases don't
+        # carry stale identity-phase state.
+        self._progress_pass_index = 0
+        self._progress_pass_total = 0
+        self._progress_current_sub_byte = None
 
     async def _start_next_register_scan(self) -> None:
         if not self._register_scan_queue:
@@ -1671,9 +1708,23 @@ class NikobusDiscovery:
         self._progress_module_total = 0
         self._progress_register_total = 0
         self._progress_decoded_records = 0
+        # PHASE_INVENTORY is the ``#A`` bus broadcast — one round-trip,
+        # not a register-by-register scan. Surface it as a single unit
+        # of work so the HA progress bar shows determinate progress
+        # rather than a misleading "0 / 240"-style fallback.
+        self._progress_module_register_total = 1
+        self._progress_register_total = 1
+        self._progress_module_registers_sent = 0
+        self._progress_pass_index = 1
+        self._progress_pass_total = 1
+        self._progress_current_sub_byte = None
         _LOGGER.info("PC Link inventory enumeration started")
         _LOGGER.debug("Queueing PC Link inventory command #A")
         await self._coordinator.nikobus_command.queue_command("#A")
+        # Mark the single unit as in-flight so the bar leaves 0 once
+        # the command is on the wire. Completion is signalled when
+        # PHASE_IDENTITY takes over.
+        self._progress_module_registers_sent = 1
         self._schedule_inventory_timeout()
         await self._emit_progress(PHASE_INVENTORY)
 
