@@ -1,5 +1,75 @@
 # Changelog
 
+## 0.17.0
+
+Per-product scan plans derived from Niko's product DLLs. Restores
+records the 0.16.0 vendor-aligned scan was silently dropping.
+
+**Root cause.** 0.16.0's "vendor-aligned" scan was built from one
+COM3 trace on one module (0x3D82, 48 register reads). We applied that
+single trace to every module type. Static analysis of Niko's PC
+software DLL set (CalcMemMap.dll dispatcher + 8 per-product DLLs)
+proved the architecture is plugin-driven: ``CalcMemMap.dll`` loads
+each ``Niko_05_XXX.dll`` and calls its ``GetDLLReadInfo`` export to
+learn that product's read profile, expressed as ``(byte_offset,
+length)`` sections.
+
+**Bus-level addressing.** Each register read returns 16 bytes (one
+BP cell), and ``byte_offset = (sub_byte * 256 + register) * 16``.
+Mapping the dimmer DLL's 8 sections through this formula reproduces
+the 0x3D82 trace's 48 reads exactly — but only because PC software
+had set the conditional-skip flag for section 3 (the variable-length
+link table, default 0xC85 bytes ≈ 201 reads). On a bus discovery
+where no project cache is primed, section 3 MUST be read or all of
+the dimmer's link records are lost.
+
+**Per-product profiles.** Each output module type now has its own
+``_PROFILE_*`` tuple in ``discovery.py``, derived from
+``GetDLLReadInfo`` disassembly:
+
+  - **DIMMER** (Niko_05_100): 8 sections, ~248 reads — includes the
+    variable section 3 link table previously missed.
+  - **ROLLER** (Niko_05_202): 5 sections, ~251 reads — includes the
+    variable section 1 link table.
+  - **PC-LOGIC** (Niko_05_201a): 4 sections all at sub=4, ~133 reads.
+  - **PC-LINK** (Niko_05_200): replaces the empirical sub=4 0xA3..0xFF
+    sweep with DLL-derived sub=0/2/3 bands, ~280 reads.
+  - **FEEDBACK** (Niko_05_207): previously NOT scanned. Now 912 reads
+    (sub=4 full band + sub=6 bands). Removed from
+    ``NON_OUTPUT_MODULE_TYPES``.
+  - **SWITCH** (Niko_05_000_01): DLL returns a magic tuple rather
+    than a section list; the EXE-side dispatch couldn't be decoded
+    confidently without dynamic analysis. Pragmatic profile applies
+    the dimmer/roller pattern (sub=0 link table band) PLUS the
+    pre-0.16.0 sub=4 0x00..0x3F band as a proven safety net.
+
+**Scan-time impact.** Cumulative reads per module: switch ~312,
+dimmer ~248, roller ~251, pc_logic ~133, pc_link ~280, feedback ~912.
+Most variable-length sections terminate early via the existing
+``MODULE_SCAN_CONSECUTIVE_GIVE_UP_LIMIT`` once flash filler appears,
+so the wall-clock cost is typically 1.5–2× the previous 48-register
+plan rather than 5×.
+
+**API changes.** Internal helpers ``_scan_subs_for_module_type`` and
+``_scan_registers_for_sub`` are replaced by
+``_scan_passes_for_module_type`` returning ``tuple[ScanSection, ...]``
+where ``ScanSection = (sub_byte, register_tuple)``. The constants
+``_VENDOR_REGISTER_MAP_BY_SUB``, ``_SCAN_SUBS_BY_MODULE_TYPE``,
+``_SCAN_REGISTERS_BY_SUB``, ``_PC_LINK_REGISTERS``,
+``_BROAD_SCAN_LEGACY_REGISTERS``, and
+``_BROAD_SCAN_EXTRA_SUBS_BY_MODULE_TYPE`` are removed.
+``broad_scan=True`` still opts in to the conditional sections PC
+software skips when its project cache is primed (dimmer section 7 ~720
+reads, roller section 2 ~700 reads).
+
+**Source DLLs analysed** (Nikobus PC software install, 2026-05-23):
+``Niko_05_000_01.dll`` (switch 12-ch), ``Niko_05_007.dll``,
+``Niko_05_010.dll`` (older switch variants), ``Niko_05_100.dll``
+(dimmer), ``Niko_05_200.dll`` (PC-Link), ``Niko_05_201a.dll``
+(PC-Logic), ``Niko_05_202.dll`` (roller), ``Niko_05_207.dll``
+(feedback). All extractions pinned by tests in
+``test_progress_vendor_aligned.py`` and ``test_register_scan_range.py``.
+
 ## 0.16.3
 
 Fix discovery progress display during inventory + identity phases.

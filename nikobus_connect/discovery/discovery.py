@@ -65,115 +65,248 @@ _LOGGER = logging.getLogger(__name__)
 _IR_BANK_CYCLE = ("C", "A", "D", "B")
 _IR_MAX_CHANNEL = 39
 
-# Vendor "load current installation" register map, captured from a
-# Niko PC software COM3 trace on 2026-05-08 against module 0x3D82.
-# The PC software does NOT bus-scan to discover modules — it reads
-# from a fixed list loaded from its saved project file. This is the
-# authoritative per-module read sequence used by the vendor:
+# ---------------------------------------------------------------------------
+# Per-product DLL-derived scan profiles
+# ---------------------------------------------------------------------------
 #
-#   sub=00 → 6 regs (module header / identity)
-#            0x05, 0x06, 0x07, 0x08, 0x09, 0x3E
-#   sub=01 → 37 regs (link table + checksum at 0x96)
-#            0x70..0x93 contiguous (36 regs), then 0x96
-#            (regs 0x94, 0x95 deliberately skipped)
-#   sub=04 → 5 regs (status / state)
-#            0x65, 0x66, 0x67, 0x68, 0x69
+# Niko's PC software ("nikobus.exe") drives per-module reads via a plugin
+# architecture: ``CalcMemMap.dll`` loads each product DLL (Niko_05_XXX.dll)
+# and calls its ``GetDLLReadInfo`` export to learn how to scan that family.
+# Each call returns one section, described as (byte_offset, length, ...).
+# PC software iterates section indexes 0, 1, 2, ... until the DLL returns
+# length 0.
 #
-# Total: 48 register reads per module. 0.16.0 wires this exact list
-# into the default scan plan for ALL output modules (switch, roller,
-# dimmer) AND PC-Logic — full alignment with vendor logic, no
-# install- or firmware-specific exceptions.
+# Memory-to-bus mapping (derived empirically by matching the captured
+# 0x3D82 trace against the dimmer DLL's section list — see CHANGELOG):
 #
-# Safety net: ``broad_scan=True`` on the discovery instance re-adds
-# the pre-0.16.0 sub=04 0x00..0x3F sweep as an extra pass after the
-# vendor primary, for installs that report missing records on a
-# firmware revision where the link table doesn't sit in the
-# vendor-canonical 0x70..0x96 band.
-_VENDOR_REGISTER_MAP_BY_SUB: dict[str, tuple[int, ...]] = {
-    "00": (0x05, 0x06, 0x07, 0x08, 0x09, 0x3E),
-    "01": tuple(range(0x70, 0x94)) + (0x96,),
-    "04": (0x65, 0x66, 0x67, 0x68, 0x69),
+#   byte_offset = (sub_byte * 256 + register) * 16
+#
+# Each register read returns 16 bytes (one BP cell). To cover a section
+# from ``offset`` of ``length`` bytes, we read registers
+# ``floor(offset/16)..ceil((offset+length)/16)`` at sub-byte
+# ``offset // 4096`` (with spillover into the next sub when the section
+# crosses a 4096-byte bank boundary).
+#
+# Each product DLL was disassembled and decoded into ``ScanSection``
+# tuples below. ``broad_scan=True`` opts into the heavy sections that
+# PC software conditionally skips when CalcMemoryMap has primed a
+# project-level cache (default lengths up to ~11KB).
+#
+# Source DLLs analysed (Nikobus PC software install, 2026-05-23):
+#   Niko_05_000_01.dll  (12-channel switch)
+#   Niko_05_007.dll     (older switch variant)
+#   Niko_05_010.dll     (older switch variant)
+#   Niko_05_100.dll     (dimmer)
+#   Niko_05_200.dll     (PC-Link)
+#   Niko_05_201a.dll    (PC-Logic)
+#   Niko_05_202.dll     (roller)
+#   Niko_05_207.dll     (feedback)
+
+# Each profile entry: (sub_byte_hex, register_tuple).
+# Iterated in order during the per-module scan.
+ScanSection = tuple[str, tuple[int, ...]]
+
+
+def _regs_for_bytes(offset: int, length: int) -> tuple[ScanSection, ...]:
+    """Translate a (byte_offset, length) section into one or more
+    (sub_byte, register_tuple) pairs, splitting at 4096-byte bank
+    boundaries.
+
+    Each register read returns 16 bytes (one BP cell), so a section
+    of ``length`` bytes starting at ``offset`` requires
+    ``ceil((offset+length)/16) - floor(offset/16)`` reads, distributed
+    across sub-bytes ``offset // 4096`` and any banks the section
+    crosses into.
+    """
+
+    if length <= 0:
+        return ()
+    first_reg = offset // 16
+    last_reg = (offset + length - 1) // 16
+    result: list[ScanSection] = []
+    cur_sub = first_reg // 256
+    cur_start = first_reg % 256
+    cur_end = first_reg % 256
+    for reg in range(first_reg + 1, last_reg + 1):
+        sub = reg // 256
+        if sub != cur_sub:
+            result.append((f"{cur_sub:02X}", tuple(range(cur_start, cur_end + 1))))
+            cur_sub = sub
+            cur_start = reg % 256
+        cur_end = reg % 256
+    result.append((f"{cur_sub:02X}", tuple(range(cur_start, cur_end + 1))))
+    return tuple(result)
+
+
+def _merge_passes(passes: tuple[ScanSection, ...]) -> tuple[ScanSection, ...]:
+    """Deduplicate and merge per-sub register sets while preserving order.
+
+    Re-reads of the same (sub, reg) are collapsed — the scan loop
+    doesn't gain anything by re-issuing identical commands. Multiple
+    sections that target the same sub-byte are kept as separate passes
+    (so the progress UI shows each section's discovery boundary).
+    """
+
+    merged: list[ScanSection] = []
+    seen: dict[str, set[int]] = {}
+    for sub, regs in passes:
+        bucket = seen.setdefault(sub, set())
+        new_regs = tuple(r for r in regs if r not in bucket)
+        if not new_regs:
+            continue
+        bucket.update(new_regs)
+        merged.append((sub, new_regs))
+    return tuple(merged)
+
+
+# --- DIMMER (Niko_05_100) ---
+# GetDLLReadInfo enumerates 8 sections (decoded from the case dispatch
+# at 0x100022f5):
+#   sec 0: offset=0x005A length=0x002E (header)
+#   sec 1: offset=0x0096 length=0x0004
+#   sec 2: offset=0x03E3 length=0x0002 (link-table config)
+#   sec 3: offset=0x03E3 length=0xC85 default (variable — LINK TABLE)
+#   sec 4: offset=0x170C length=0x0231 (secondary table)
+#   sec 5: offset=0x1960 length=0x0003
+#   sec 6: offset=0x4650 length=0x0041 (status)
+#   sec 7: offset=0x1962 length=0x2CF2 default (variable, project-only)
+#
+# The 0x3D82 trace captured PC software doing sections 0,1,2,4,5,6 (48 reads)
+# — sections 3 and 7 were conditionally skipped because CalcMemoryMap had
+# primed the project flag. For bus discovery (no project file) we MUST
+# read section 3 (the actual link table). Section 7 is left to broad_scan.
+_DIMMER_PROFILE_DEFAULT: tuple[ScanSection, ...] = _merge_passes((
+    *_regs_for_bytes(0x005A, 0x002E),   # section 0
+    *_regs_for_bytes(0x0096, 0x0004),   # section 1
+    *_regs_for_bytes(0x03E3, 0x0002),   # section 2 (config)
+    *_regs_for_bytes(0x03E3, 0x0C85),   # section 3 (variable link table)
+    *_regs_for_bytes(0x170C, 0x0231),   # section 4
+    *_regs_for_bytes(0x1960, 0x0003),   # section 5
+    *_regs_for_bytes(0x4650, 0x0041),   # section 6
+))
+
+# Section 7 (huge — 11506 bytes wrapping through sub=2 and sub=3). Skipped
+# unless broad_scan=True.
+_DIMMER_PROFILE_BROAD_EXTRA: tuple[ScanSection, ...] = _regs_for_bytes(0x1962, 0x2CF2)
+
+# --- ROLLER (Niko_05_202) ---
+# 5 sections from dispatch table at 0x10003ACC:
+#   sec 0: offset=0x03E6 length=0x0002 (config)
+#   sec 1: offset=0x03E8 length=0xE90 default (variable LINK TABLE)
+#   sec 2: offset=0x1388 length=0x2BB0 default (variable, project-only)
+#   sec 3: offset=0x1386 length=0x0002 (re-read)
+#   sec 4: offset=0x0064 length=0x00F1 default
+_ROLLER_PROFILE_DEFAULT: tuple[ScanSection, ...] = _merge_passes((
+    *_regs_for_bytes(0x0064, 0x00F1),   # section 4 (16 reads)
+    *_regs_for_bytes(0x03E6, 0x0002),   # section 0
+    *_regs_for_bytes(0x03E8, 0x0E90),   # section 1 (variable, ~234 reads)
+    *_regs_for_bytes(0x1386, 0x0002),   # section 3
+))
+
+# Section 2 — 11184 bytes from 0x1388. Skipped by default.
+_ROLLER_PROFILE_BROAD_EXTRA: tuple[ScanSection, ...] = _regs_for_bytes(0x1388, 0x2BB0)
+
+# --- PC-LOGIC (Niko_05_201a) ---
+# 4 sections at sub=4 (dispatch table at 0x10001A80):
+#   sec 0: offset=0x42CB length=0x0001
+#   sec 1: offset=0x4268 length=0x0104 default
+#   sec 2: offset=0x445C length=0x060E default
+#   sec 3: offset=0x4E20 length=0x0118 default
+_PC_LOGIC_PROFILE_DEFAULT: tuple[ScanSection, ...] = _merge_passes((
+    *_regs_for_bytes(0x42CB, 0x0001),
+    *_regs_for_bytes(0x4268, 0x0104),
+    *_regs_for_bytes(0x445C, 0x060E),
+    *_regs_for_bytes(0x4E20, 0x0118),
+))
+
+# --- PC-LINK (Niko_05_200) ---
+# Per the user's directive: replace the empirical sub=4 0xA3..0xFF scan
+# with the DLL-derived sections. Note that the PC-Link DLL may describe
+# host project-file structure rather than pure bus reads — the actual
+# bus behaviour will need empirical validation against PC software's
+# upload trace on a populated install.
+#   sec 2: offset=0x2EDE length=0x0002 → sub=2 reg=0xED
+#   sec 3: offset=0x3E80 length=0x00C0 → sub=3 reg=0xE8..0xF3
+#   sec 4: offset=0x2AF8 length=0x0280 → sub=2 reg=0xAF..0xD7
+#   sec 5: offset=0x03E6 length=variable (default 0xC82) — LINK TABLE
+#   sec 6: offset=0x03E6 length=0x0002
+#   sec 7: offset=0x0063 length=0x0181 → sub=0 reg=0x06..0x1E
+_PC_LINK_PROFILE_DEFAULT: tuple[ScanSection, ...] = _merge_passes((
+    *_regs_for_bytes(0x0063, 0x0181),   # section 7
+    *_regs_for_bytes(0x03E6, 0x0002),   # section 6
+    *_regs_for_bytes(0x03E6, 0x0C82),   # section 5 (variable link table)
+    *_regs_for_bytes(0x2AF8, 0x0280),   # section 4
+    *_regs_for_bytes(0x2EDE, 0x0002),   # section 2
+    *_regs_for_bytes(0x3E80, 0x00C0),   # section 3
+))
+
+# --- FEEDBACK (Niko_05_207) ---
+# 3 main sections (in addition to the always-zero arg4=8 init):
+#   sec 1: offset=0x4000 length=0x2000 → sub=4 reg=0x00..0xFF (full 256 reads)
+#   sec 2: offset=0x6000 length=0x0100 → sub=6 reg=0x00..0x0F
+#   sec 3: offset=0x6100 length=0x0100 → sub=6 reg=0x10..0x1F
+#   sec 4: offset=0x6200 length=0x1700 → sub=6 reg=0x20..0x8F
+_FEEDBACK_PROFILE_DEFAULT: tuple[ScanSection, ...] = _merge_passes((
+    *_regs_for_bytes(0x4000, 0x2000),
+    *_regs_for_bytes(0x6000, 0x0100),
+    *_regs_for_bytes(0x6100, 0x0100),
+    *_regs_for_bytes(0x6200, 0x1700),
+))
+
+# --- SWITCH ---
+# Niko_05_000_01.dll's GetDLLReadInfo returns a magic tuple
+# (offset=0x100, recsize=6, recs_per_unit=0x10, length=0) — NOT a
+# section enumeration. The EXE-side dispatch is too tangled to decode
+# confidently without dynamic analysis (the function at 0x40efa4 dispatches
+# the actual reads from a project-driven buffer).
+#
+# Pragmatic approach: apply the dimmer/roller pattern (link table at
+# sub=0 reg=0x3E variable, header at 0x05..0x09, secondary at
+# sub=1 0x70..0x96, status at sub=4 0x65..0x69) PLUS the pre-0.16.0
+# legacy sub=4 0x00..0x3F band as a proven safety net.
+# Validate against PC software's real switch trace once available.
+_SWITCH_PROFILE_DEFAULT: tuple[ScanSection, ...] = _merge_passes((
+    # Header (dimmer-style)
+    ("00", tuple(range(0x05, 0x0A))),
+    # Link-table band (dimmer-style; hypothesis)
+    ("00", tuple(range(0x3E, 0x100))),
+    ("01", tuple(range(0x00, 0x07))),
+    # Pre-0.16.0 vendor-aligned secondary band
+    ("01", tuple(range(0x70, 0x94)) + (0x96,)),
+    # Pre-0.16.0 sub=4 link records band — proven safety net
+    ("04", tuple(range(0x00, 0x40))),
+    # Vendor status band
+    ("04", tuple(range(0x65, 0x6A))),
+))
+
+
+# Final per-module-type scan plan. Keys are the canonical module types
+# from ``get_module_type_from_device_type``.
+_MODULE_SCAN_PROFILES: dict[str, tuple[ScanSection, ...]] = {
+    "switch_module":   _SWITCH_PROFILE_DEFAULT,
+    "roller_module":   _ROLLER_PROFILE_DEFAULT,
+    "dimmer_module":   _DIMMER_PROFILE_DEFAULT,
+    "pc_logic":        _PC_LOGIC_PROFILE_DEFAULT,
+    "pc_link":         _PC_LINK_PROFILE_DEFAULT,
+    "feedback_module": _FEEDBACK_PROFILE_DEFAULT,
 }
 
-# Source attribution for ``_VENDOR_REGISTER_MAP_BY_SUB``. Surfaced as
-# a constant so a regression-flagging test can pin the provenance
-# without re-stating the trace context inline.
-_VENDOR_REGISTER_MAP_TRACE_SOURCE = (
-    "Niko PC software COM3 trace, 2026-05-08, "
-    "addr 3D82, 'load current installation' operation"
-)
-
-# Pre-0.16.0 broad-scan extra: when ``broad_scan=True`` is set on the
-# discovery instance, add this contiguous sub=04 sweep as an *extra*
-# pass after the vendor-aligned primary. Safety net for firmware
-# revisions whose link table doesn't sit in the vendor's 0x70..0x96
-# band — e.g. a 2026-05-04 dimmer capture (116D + 0E0A) showed
-# records past 0x3F that the vendor map alone would miss.
-_BROAD_SCAN_LEGACY_REGISTERS: tuple[int, ...] = tuple(range(0x00, 0x40))
-
-
-# Sub-bytes scanned per module type, in order. Default plan is fully
-# vendor-aligned (sub=00 header, sub=01 link table, sub=04 status) for
-# every output module AND PC-Logic — no install-specific exceptions.
-# PC-Link uses a separate captured trace (module-registry band) keyed
-# off the synthetic ``"pc_link_inventory"`` sub-byte.
-_SCAN_SUBS_BY_MODULE_TYPE: dict[str, tuple[str, ...]] = {
-    "switch_module": ("00", "01", "04"),
-    "roller_module": ("00", "01", "04"),
-    "dimmer_module": ("00", "01", "04"),
-    "pc_logic":      ("00", "01", "04"),
-    "pc_link":       ("pc_link_inventory",),
+# Broad-scan extras (the huge variable sections PC software skips when
+# its CalcMemoryMap has primed a project-level cache).
+_MODULE_SCAN_PROFILES_BROAD_EXTRA: dict[str, tuple[ScanSection, ...]] = {
+    "dimmer_module":   _DIMMER_PROFILE_BROAD_EXTRA,
+    "roller_module":   _ROLLER_PROFILE_BROAD_EXTRA,
 }
 
-# Per-module-type sub=04 broad-scan extra registers (legacy band).
-# Adds the pre-0.16.0 sub=04 0x00..0x3F sweep ALONGSIDE the vendor
-# primary when ``broad_scan=True``. Switch/roller/dimmer all benefit
-# from the same extra band; PC-Logic too.
-_BROAD_SCAN_EXTRA_SUBS_BY_MODULE_TYPE: dict[str, tuple[str, ...]] = {
-    "switch_module": ("04_broad",),
-    "roller_module": ("04_broad",),
-    "dimmer_module": ("04_broad",),
-    "pc_logic":      ("04_broad",),
-}
-
-# Per-sub-byte register lists.
-#
-#   "00"/"01"/"04" → exact vendor register lists, applied to every
-#     output module AND PC-Logic. No approximation to contiguous ranges.
-#   "04_broad" → synthetic sub-byte used only by ``broad_scan=True``.
-#     Iterates the pre-0.16.0 sub=04 0x00..0x3F sweep; mapped back
-#     to sub=04 on the wire by ``_wire_sub_byte``.
-#   "pc_link_inventory" → PC-Link's module-registry band (0xA3..0xFF).
-#     Captured separately (May 2024 trace) since PC-Link doesn't have
-#     per-module link tables — only a controller-side module list.
-#     Mapped to sub=04 on the wire.
-_SCAN_REGISTERS_BY_SUB: dict[str, tuple[int, ...]] = {
-    "00": _VENDOR_REGISTER_MAP_BY_SUB["00"],
-    "01": _VENDOR_REGISTER_MAP_BY_SUB["01"],
-    "04": _VENDOR_REGISTER_MAP_BY_SUB["04"],
-    "04_broad": _BROAD_SCAN_LEGACY_REGISTERS,
-    "pc_link_inventory": tuple(range(0xA3, 0x100)),
-}
-
-# Conservative fallback when a caller hands us a sub-byte the trace
-# didn't cover (keeps future sub-bytes probeable without a silent skip).
+# Conservative fallback when a caller hands us a sub-byte the plan
+# didn't cover (keeps forensic mode probeable without a silent skip).
 _DEFAULT_SCAN_REGISTERS: tuple[int, ...] = tuple(range(0x00, 0x100))
 
-# PC-Link's scan profile is a separate captured trace — the controller
-# reads its OWN module-registry table from this band, not the per-module
-# link table the vendor map describes. Captured from a Nikobus PC
-# software serial trace on real hardware (May 2024) and aligned to
-# the 0xA3 start to skip the 0x00..0x07 dead-zone where PC Link's
-# consecutive-give-up early-stop fires.
-_PC_LINK_REGISTERS: tuple[int, ...] = tuple(range(0xA3, 0x100))
-
-# Module-type buckets whose addresses are NOT included in the
-# ``query_module_inventory("ALL")`` register-scan queue and whose
-# per-module dispatch path is short-circuited (no ``$1410…04`` reads
-# issued).
+# Module-type buckets whose per-module register scan is short-circuited.
+# 0.17.0: ``feedback_module`` moved OUT of this set — Niko_05_207.dll's
+# GetDLLReadInfo enumerates a 5-section profile (sub=4 0x00..0xFF + sub=6
+# bands), now driven by ``_FEEDBACK_PROFILE_DEFAULT``.
 #
-# - ``feedback_module`` (0x42): 05-207 doesn't expose a routable link
-#   table; its programming lives on the source modules' BP cells.
 # - ``other_module``: catch-all bucket — primarily Button-class devices
 #   (4-OP / 2-OP / RF / IR / Motion / Feedback Button) that carry no
 #   register memory, plus any Module-category device whose name fails
@@ -187,75 +320,49 @@ _PC_LINK_REGISTERS: tuple[int, ...] = tuple(range(0xA3, 0x100))
 #   button-link routing surface today; left as visibility-only until
 #   a real install validates the storage format.
 NON_OUTPUT_MODULE_TYPES: frozenset[str] = frozenset({
-    "feedback_module",
     "other_module",
     "interface_module",
     "audio_module",
 })
 
-def _scan_subs_for_module_type(
+def _scan_passes_for_module_type(
     module_type: str | None, *, broad_scan: bool = False
-) -> tuple[str, ...]:
-    """Return the ordered sequence of sub-bytes to scan for a module type.
+) -> tuple[ScanSection, ...]:
+    """Return the ordered per-module scan plan as (sub_byte, registers).
 
-    Default plan is fully vendor-aligned: every output module AND
-    PC-Logic gets the exact (sub=00, sub=01, sub=04) sequence the
-    PC software reads (Niko COM3 trace, 2026-05-08). No
-    install-specific or firmware-specific exceptions.
+    Each entry is one "pass" — a contiguous register range read against
+    a single sub-byte. The list is derived from the product DLL's
+    ``GetDLLReadInfo`` export (see ``_MODULE_SCAN_PROFILES``).
 
-    ``broad_scan=True`` appends the pre-0.16.0 sub=04 0x00..0x3F sweep
-    (synthetic ``"04_broad"`` token) as an extra pass after the
-    vendor primary — safety net for firmware revisions whose link
-    table doesn't sit in the vendor-canonical band.
+    ``broad_scan=True`` appends the conditional sections that PC software
+    skips when its in-memory project cache is primed (typically large
+    bands the vendor only reads on full project upload). For your install
+    these are usually empty — but the per-register give-up logic stops
+    each pass early when responses are flash filler.
 
-    PC-Link is NOT in the table — it has its own scan profile, see
-    ``_PC_LINK_REGISTERS``. Module types we don't scan at all (audio,
-    feedback, interface, other) return an empty tuple.
+    Module types not in the plan (audio, interface, other) return ``()``.
     """
 
-    if module_type not in _SCAN_SUBS_BY_MODULE_TYPE:
-        # PC-Link / unknown — leave to the caller's existing dispatch.
+    plan = _MODULE_SCAN_PROFILES.get(module_type) if module_type else None
+    if not plan:
         return ()
-    plan = _SCAN_SUBS_BY_MODULE_TYPE[module_type]
     if broad_scan:
-        extras = _BROAD_SCAN_EXTRA_SUBS_BY_MODULE_TYPE.get(module_type, ())
-        seen: set[str] = set()
-        combined: list[str] = []
-        for sub in (*plan, *extras):
-            if sub in seen:
-                continue
-            seen.add(sub)
-            combined.append(sub)
-        return tuple(combined)
+        extras = _MODULE_SCAN_PROFILES_BROAD_EXTRA.get(module_type, ())
+        if extras:
+            plan = _merge_passes((*plan, *extras))
     return plan
 
 
-def _scan_registers_for_sub(
-    sub_byte: str, module_type: str | None = None
-) -> tuple[int, ...]:
-    """Return the exact register list to scan for a given sub-byte.
-
-    Vendor-aligned: every module type uses the same per-sub register
-    list. No per-module-type widening — the whole point of 0.16.0 is
-    to stop deviating from the vendor's reads.
-
-    Unknown sub-bytes fall back to a full 0x00..0xFF sweep (defensive,
-    keeps future sub-bytes probeable for callers that bypass the plan).
-    """
-    return _SCAN_REGISTERS_BY_SUB.get(sub_byte, _DEFAULT_SCAN_REGISTERS)
-
-
 def _wire_sub_byte(sub_byte: str) -> str:
-    """Map a plan-time sub-byte to its on-the-wire form.
+    """Map a plan-time sub-byte token to its on-the-wire form.
 
-    The plan uses synthetic sub-byte tokens to keep register lists
-    distinct (``"04_broad"`` for the legacy sweep, ``"pc_link_inventory"``
-    for the PC-Link registry band), but on the wire they all map back
-    to ``"04"`` because that's the function code Niko's protocol uses
-    for ``read register`` regardless of which memory region the host
-    is interested in.
+    The bus protocol's "read register" command accepts sub-bytes 0x00..0xFF
+    directly. Plan-time tokens are uppercase hex strings ("00", "01", "02",
+    "03", "04", "06"), matching the wire byte one-for-one. This helper
+    exists as a hook for any future synthetic tokens the plan needs.
     """
-    return "04" if sub_byte in ("04_broad", "pc_link_inventory") else sub_byte
+
+    return sub_byte
 
 
 def decode_ir_channel(ir_slot_addr: str | None, key_raw: int | None, ir_base_byte: int = 0x80) -> str | None:
@@ -2210,16 +2317,13 @@ class NikobusDiscovery:
             None,
         )
 
-        if self._coordinator.discovery_module:
-            base_command = f"10{normalized_address[2:4] + normalized_address[:2]}"
-            if self._module_type == "dimmer_module":
-                base_command = f"22{normalized_address[2:4] + normalized_address[:2]}"
-            # Per-pass register range is picked below from
-            # _SCAN_REGISTER_RANGE_BY_SUB; this placeholder is only
-            # used by the non-output-module early-return path below.
-            command_range = None
-        else:
-            command_range = range(0xA4, 0x100)
+        # Per-module read uses function 0x10 ("read register"); the dimmer
+        # uses 0x22 instead because its longer 8-byte records are returned
+        # in a different response format. Address is byte-swapped on the
+        # wire (Niko convention: little-endian module address).
+        base_command = f"10{normalized_address[2:4] + normalized_address[:2]}"
+        if self._module_type == "dimmer_module":
+            base_command = f"22{normalized_address[2:4] + normalized_address[:2]}"
 
         # Forensic mode: user supplied an explicit register range.
         # Bypass the per-module-type tuning and the non-output-module
@@ -2271,31 +2375,26 @@ class NikobusDiscovery:
         # extra pass after the vendor primary — safety net for any
         # firmware revision whose link table doesn't sit in the
         # vendor band.
-        scan_subs = _scan_subs_for_module_type(
+        scan_passes = _scan_passes_for_module_type(
             self._module_type, broad_scan=self._broad_scan
         )
-        if not scan_subs:
-            # Module type not in the vendor plan (e.g. PC-Link is
-            # handled by its own branch, audio/feedback/interface
-            # have no link table at all). Fall through to finalize.
+        if not scan_passes:
+            # Module type not in the per-product plan (audio/interface/other
+            # have no link table). Fall through to finalize.
             await self._finalize_discovery(normalized_address)
             return
 
         # Compute cumulative register total across all passes for this
         # module — surfaced to ``on_progress`` so the UI can show
         # one bar per module rather than one bar per pass.
-        per_pass_lists = [
-            _scan_registers_for_sub(sub, module_type=self._module_type)
-            for sub in scan_subs
-        ]
-        module_register_total = sum(len(regs) for regs in per_pass_lists)
+        module_register_total = sum(len(regs) for _sub, regs in scan_passes)
         self._progress_module_register_total = module_register_total
         self._progress_module_registers_sent = 0
-        self._progress_pass_total = len(scan_subs)
+        self._progress_pass_total = len(scan_passes)
         self._progress_pass_index = 0
 
         for pass_index, (sub_byte, register_list) in enumerate(
-            zip(scan_subs, per_pass_lists), start=1
+            scan_passes, start=1
         ):
             function_code = base_command[:2]
             wire_sub = _wire_sub_byte(sub_byte)
@@ -2310,7 +2409,7 @@ class NikobusDiscovery:
                 wire_sub,
                 len(register_list),
                 pass_index,
-                len(scan_subs),
+                len(scan_passes),
             )
             await self._scan_module_registers(
                 normalized_address,

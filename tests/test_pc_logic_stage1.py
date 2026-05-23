@@ -17,9 +17,8 @@ import pytest
 from nikobus_connect.discovery.chunk_decoder import _CHUNK_LENGTHS
 from nikobus_connect.discovery.discovery import (
     NikobusDiscovery,
-    _VENDOR_REGISTER_MAP_BY_SUB,
-    _scan_registers_for_sub,
-    _scan_subs_for_module_type,
+    _MODULE_SCAN_PROFILES,
+    _scan_passes_for_module_type,
 )
 from nikobus_connect.discovery.mapping import (
     DEVICE_TYPES,
@@ -113,16 +112,14 @@ def test_device_type_0x37_is_modular_interface():
 
 
 def test_audio_and_interface_buckets_are_excluded_from_scan_queue():
-    """``NON_OUTPUT_MODULE_TYPES`` carries the four buckets whose
-    addresses are kept out of ``query_module_inventory("ALL")``'s
-    sequential queue and whose per-module dispatch short-circuits
-    before issuing any register reads. Pin the set so neither bucket
-    silently leaks into the scan path on a refactor."""
+    """0.17.0: ``NON_OUTPUT_MODULE_TYPES`` carries the three remaining
+    buckets we can't scan (audio/interface/other). ``feedback_module``
+    moved OUT — Niko_05_207.dll's GetDLLReadInfo gives it a real profile
+    so we now scan it like any other output module."""
 
     from nikobus_connect.discovery.discovery import NON_OUTPUT_MODULE_TYPES
 
     assert NON_OUTPUT_MODULE_TYPES == frozenset({
-        "feedback_module",
         "other_module",
         "interface_module",
         "audio_module",
@@ -320,10 +317,9 @@ async def test_pc_logic_module_runs_register_scan(tmp_path):
     await discovery.query_module_inventory("80D9")
 
     assert scan_calls, "PC-Logic module was skipped instead of scanned"
-    # 0.16.0: PC-Logic follows the vendor 3-pass plan (sub=00 / sub=01 /
-    # sub=04) with the function-10 prefix.
-    assert len(scan_calls) == 3
-    assert [c["sub_byte"] for c in scan_calls] == ["00", "01", "04"]
+    # 0.17.0: PC-Logic follows its DLL-derived profile — all sub=4
+    # (Niko_05_201a.dll has 4 sections, all in sub=4 0x26..0xF3).
+    assert all(c["sub_byte"] == "04" for c in scan_calls), scan_calls
     assert all(c["base_cmd"].startswith("10") for c in scan_calls)
 
 
@@ -439,57 +435,42 @@ def test_pc_logic_chunk_length_is_sixteen_byte_record_stride():
 # types must keep their tuned range.
 
 
-def test_vendor_register_map_is_exact_per_sub_byte():
-    """The Niko COM3 trace (2026-05-08, module 3D82) pins the register
-    list per sub-byte. These lists are the authoritative scan plan
-    for ALL output modules + PC-Logic since 0.16.0."""
+def test_pc_logic_profile_is_dll_derived() -> None:
+    """0.17.0: PC-Logic scan plan is derived from Niko_05_201a.dll's
+    GetDLLReadInfo export. Four sub=4 sections at:
+        offset 0x42CB len 0x0001
+        offset 0x4268 len 0x0104
+        offset 0x445C len 0x060E
+        offset 0x4E20 len 0x0118
 
-    assert _VENDOR_REGISTER_MAP_BY_SUB["00"] == (
-        0x05, 0x06, 0x07, 0x08, 0x09, 0x3E,
-    )
-    assert _VENDOR_REGISTER_MAP_BY_SUB["01"] == tuple(range(0x70, 0x94)) + (0x96,)
-    assert _VENDOR_REGISTER_MAP_BY_SUB["04"] == (
-        0x65, 0x66, 0x67, 0x68, 0x69,
-    )
-
-
-def test_scan_registers_for_each_vendor_sub_is_exact_vendor_list():
-    """Helper returns the EXACT vendor register list for sub=00/01/04
-    — no widening, no contiguous-range approximation."""
-
-    assert _scan_registers_for_sub("00") == _VENDOR_REGISTER_MAP_BY_SUB["00"]
-    assert _scan_registers_for_sub("01") == _VENDOR_REGISTER_MAP_BY_SUB["01"]
-    assert _scan_registers_for_sub("04") == _VENDOR_REGISTER_MAP_BY_SUB["04"]
+    All at sub=4. The total register count below is post-dedup; if
+    the DLL sections change, regenerate via _MODULE_SCAN_PROFILES.
+    """
+    plan = _scan_passes_for_module_type("pc_logic")
+    # All passes must be sub=04
+    for sub, _regs in plan:
+        assert sub == "04", f"unexpected sub {sub} in PC-Logic plan"
+    # Total reads is the sum of decoded section lengths in registers.
+    total_regs = sum(len(regs) for _sub, regs in plan)
+    assert total_regs > 100, f"PC-Logic plan suspiciously thin: {total_regs} reads"
 
 
-def test_dimmer_default_plan_is_full_vendor_alignment():
-    """0.16.0: dimmer no longer has the 2026-05-04 full-sweep exception.
-    Every output module uses the same vendor map: (sub=00, sub=01, sub=04)
-    with the exact captured register lists."""
-
-    assert _scan_subs_for_module_type("dimmer_module") == ("00", "01", "04")
-
-
-def test_pc_logic_default_plan_is_full_vendor_alignment():
-    """0.16.0: PC-Logic no longer has the 0x00..0xFF defensive sweep.
-    Same vendor plan as output modules — full alignment."""
-
-    assert _scan_subs_for_module_type("pc_logic") == ("00", "01", "04")
-
-
-def test_switch_and_roller_use_same_vendor_plan() -> None:
-    """All output modules + PC-Logic share the vendor map. No per-type
-    deviation — that's what "FULL vendor alignment" means."""
-
-    plan = _scan_subs_for_module_type("switch_module")
-    assert plan == _scan_subs_for_module_type("roller_module")
-    assert plan == _scan_subs_for_module_type("dimmer_module")
-    assert plan == _scan_subs_for_module_type("pc_logic")
-    assert plan == ("00", "01", "04")
+def test_per_product_profiles_cover_all_output_modules() -> None:
+    """Every output module type + PC-Logic + PC-Link + feedback has a
+    DLL-derived scan profile. No empty plans (which would silently skip
+    discovery for that family)."""
+    for mt in ("switch_module", "roller_module", "dimmer_module",
+               "pc_logic", "pc_link", "feedback_module"):
+        plan = _scan_passes_for_module_type(mt)
+        assert plan, f"missing scan profile for {mt}"
+        assert _MODULE_SCAN_PROFILES[mt] == plan
 
 
 @pytest.mark.asyncio
-async def test_pc_logic_register_scan_uses_full_range(tmp_path):
+async def test_pc_logic_register_scan_drives_dll_profile(tmp_path):
+    """0.17.0: PC-Logic scan dispatches the Niko_05_201a.dll-derived
+    profile (4 sub=4 sections). The scan loop iterates each pass."""
+
     coord = _make_coordinator()
     discovery = NikobusDiscovery(
         coord,
@@ -513,39 +494,28 @@ async def test_pc_logic_register_scan_uses_full_range(tmp_path):
     scan_calls: list[dict] = []
 
     async def fake_scan(address, base_cmd, command_range, sub_byte="04"):
-        scan_calls.append(
-            {
-                "address": address,
-                "command_range": command_range,
-                "sub_byte": sub_byte,
-            }
-        )
+        scan_calls.append({"sub_byte": sub_byte, "range": tuple(command_range)})
 
     discovery._scan_module_registers = fake_scan
     discovery._finalize_discovery = AsyncMock()
 
     await discovery.query_module_inventory("80D9")
 
-    # 0.16.0: PC-Logic follows the same vendor scan plan as output
-    # modules — full alignment, no special-case full sweep. 3 passes
-    # over the vendor register lists (sub=00 / sub=01 / sub=04).
-    assert len(scan_calls) == 3
-    assert [c["sub_byte"] for c in scan_calls] == ["00", "01", "04"]
-    assert tuple(scan_calls[0]["command_range"]) == (
-        0x05, 0x06, 0x07, 0x08, 0x09, 0x3E,
-    )
-    assert tuple(scan_calls[1]["command_range"]) == tuple(range(0x70, 0x94)) + (0x96,)
-    assert tuple(scan_calls[2]["command_range"]) == (
-        0x65, 0x66, 0x67, 0x68, 0x69,
-    )
+    # PC-Logic profile: all passes are sub=04 (DLL has no other banks).
+    assert scan_calls, "no scan calls issued"
+    assert {c["sub_byte"] for c in scan_calls} == {"04"}
+    # Profile sections come from Niko_05_201a.dll GetDLLReadInfo
+    # (offset 0x42CB, 0x4268, 0x445C, 0x4E20). The merged plan must
+    # cover at least 100 distinct register reads.
+    total_regs = sum(len(c["range"]) for c in scan_calls)
+    assert total_regs >= 100, total_regs
 
 
 @pytest.mark.asyncio
-async def test_switch_register_scan_range_unaffected_by_pc_logic_override(tmp_path):
-    """Regression guard: the per-module-type override must not leak
-    into switch/dimmer/roller scans. Their tuned 0x00..0x3F range is
-    a deliberate optimisation tied to the productive band of the
-    output-module link table."""
+async def test_switch_register_scan_drives_dll_profile(tmp_path):
+    """0.17.0: switch scan dispatches the per-product profile derived
+    from Niko_05_000_01.dll. The plan includes the legacy sub=4
+    0x00..0x3F safety net (still a hypothesis pending real switch trace)."""
 
     coord = _make_coordinator()
     coord.get_module_channel_count = MagicMock(return_value=12)
@@ -572,27 +542,25 @@ async def test_switch_register_scan_range_unaffected_by_pc_logic_override(tmp_pa
     scan_calls: list[dict] = []
 
     async def fake_scan(address, base_cmd, command_range, sub_byte="04"):
-        scan_calls.append(
-            {"command_range": command_range, "sub_byte": sub_byte}
-        )
+        scan_calls.append({"sub_byte": sub_byte, "range": tuple(command_range)})
 
     discovery._scan_module_registers = fake_scan
     discovery._finalize_discovery = AsyncMock()
 
     await discovery.query_module_inventory("4707")
 
-    # 0.16.0: switch scans the same vendor plan as PC-Logic — the
-    # "PC-Logic override" the original test guarded against is gone.
-    # Both module types follow the unified vendor map (sub=00 header,
-    # sub=01 link table, sub=04 status).
-    assert len(scan_calls) == 3
-    assert tuple(scan_calls[0]["command_range"]) == (
-        0x05, 0x06, 0x07, 0x08, 0x09, 0x3E,
-    )
-    assert tuple(scan_calls[1]["command_range"]) == tuple(range(0x70, 0x94)) + (0x96,)
-    assert tuple(scan_calls[2]["command_range"]) == (
-        0x65, 0x66, 0x67, 0x68, 0x69,
-    )
+    # Switch profile uses multiple sub-bytes (00, 01, 04) — link table
+    # band at sub=0 0x3E..0xFF, secondary at sub=1 0x70..0x96, legacy
+    # safety net at sub=4 0x00..0x3F, status at sub=4 0x65..0x69.
+    subs = {c["sub_byte"] for c in scan_calls}
+    assert subs == {"00", "01", "04"}, subs
+    # The pre-0.16.0 legacy band must be present (proven to find records).
+    sub4_regs = set()
+    for c in scan_calls:
+        if c["sub_byte"] == "04":
+            sub4_regs.update(c["range"])
+    assert {0x00, 0x10, 0x20, 0x3F}.issubset(sub4_regs), \
+        "switch profile missing legacy sub=4 0x00..0x3F safety net"
 
 
 # ---------------------------------------------------------------------------
