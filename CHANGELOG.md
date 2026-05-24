@@ -60,6 +60,33 @@ sweep are eliminated since no single pass exceeds 34 reads.
 switch and 2 roller traces. The dimmer / pc_logic / pc_link profiles
 are unchanged — no trace data yet to narrow them.
 
+## 0.18.1
+
+PC-Link profile restored to the empirically-validated bus scan plan.
+
+The 0.17.0 DLL-derived plan for PC-Link (280 reads across sub=00 long
+sweep + sub=01 + sub=02 + sub=03) was based on the
+``Niko_05_200.dll``'s ``GetDLLReadInfo`` section list — but a real
+PC-software COM4 trace captured 24/05/2024 against pc_link module
+86F5 shows the DLL sections describe the **host's project-file
+layout, not bus reads**. The PC software never touches sub=02 or
+sub=03, never sweeps sub=00 0x3F..0xFF, and the actual scan plan is:
+
+  sub=00 0x05..0x09, 0x3E         (6 — vendor-aligned header)
+  sub=01 0x70..0x93, 0x96         (37 — vendor-aligned secondary)
+  sub=04 0x65..0x69                (5 — vendor-aligned status)
+  sub=04 0xA3..0xD3                (49 — PC-Link module registry)
+
+Total: 97 reads.
+
+The 2026-05-23 HA trace of 86F5 corroborates this — the 0.17.0 plan
+returned **0 decoded records across 280 reads** on real hardware,
+because every band it scans is empty/unused on PC-Link bus memory.
+
+The 0.17.0 DLL plan is preserved as ``_PC_LINK_PROFILE_BROAD_EXTRA``
+behind ``broad_scan=True`` for any future firmware variant that
+might expose those regions.
+
 ## 0.17.1
 
 Discovery speed regression fix for installs with feedback modules.
