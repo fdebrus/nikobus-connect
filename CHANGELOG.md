@@ -57,12 +57,12 @@ records), but sub=01 0x70..0x96 was a near-subset of sub=04
 sweep are eliminated since no single pass exceeds 34 reads.
 
 **Validation status.** Anchored profiles are validated against 3
-switch and 2 roller traces. The dimmer / pc_logic profiles
+switch and 2 roller traces. The dimmer / pc_logic / pc_link profiles
 are unchanged — no trace data yet to narrow them.
 
----
+## 0.18.1
 
-**PC-Link profile restored to the empirically-validated band.**
+PC-Link profile restored to the empirically-validated bus scan plan.
 
 The 0.17.0 DLL-derived plan for PC-Link (280 reads across sub=00 long
 sweep + sub=01 + sub=02 + sub=03) was based on the
