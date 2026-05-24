@@ -320,9 +320,14 @@ async def test_pc_logic_module_runs_register_scan(tmp_path):
     await discovery.query_module_inventory("80D9")
 
     assert scan_calls, "PC-Logic module was skipped instead of scanned"
-    # 0.17.0: PC-Logic follows its DLL-derived profile — all sub=4
-    # (Niko_05_201a.dll has 4 sections, all in sub=4 0x26..0xF3).
-    assert all(c["sub_byte"] == "04" for c in scan_calls), scan_calls
+    # 0.19.0: PC-Logic scan restored to the empirically-validated band
+    # captured from a real PC-software COM7 trace (24/05/2026, module
+    # 940C). The 0.17.0 DLL-derived plan used sub=04, but the PC
+    # software actually reads PC-Logic at sub=00, sub=02, and sub=03.
+    # That explains why 940C returned 0 decoded records on the
+    # 2026-05-23 HA trace running the 0.17.0 plan.
+    subs = {c["sub_byte"] for c in scan_calls}
+    assert subs == {"00", "02", "03"}, scan_calls
     assert all(c["base_cmd"].startswith("10") for c in scan_calls)
 
 
@@ -438,24 +443,24 @@ def test_pc_logic_chunk_length_is_sixteen_byte_record_stride():
 # types must keep their tuned range.
 
 
-def test_pc_logic_profile_is_dll_derived() -> None:
-    """0.17.0: PC-Logic scan plan is derived from Niko_05_201a.dll's
-    GetDLLReadInfo export. Four sub=4 sections at:
-        offset 0x42CB len 0x0001
-        offset 0x4268 len 0x0104
-        offset 0x445C len 0x060E
-        offset 0x4E20 len 0x0118
-
-    All at sub=4. The total register count below is post-dedup; if
-    the DLL sections change, regenerate via _MODULE_SCAN_PROFILES.
+def test_pc_logic_profile_matches_pc_software_com_trace() -> None:
+    """0.19.0: PC-Logic profile derived from a real PC-software COM7
+    trace (24/05/2026, module 940C). The 0.17.0 DLL-section dispatch
+    interpreted ``Niko_05_201a.dll``'s offsets as bus reads at sub=04;
+    the COM trace shows that's wrong — the PC software actually reads
+    at sub=00 (main band), sub=02 (secondary), and sub=03 (tertiary),
+    never at sub=04. This explains why 940C returned 0 decoded records
+    on the 2026-05-23 HA trace.
     """
     plan = _scan_passes_for_module_type("pc_logic")
-    # All passes must be sub=04
-    for sub, _regs in plan:
-        assert sub == "04", f"unexpected sub {sub} in PC-Logic plan"
-    # Total reads is the sum of decoded section lengths in registers.
+    subs_used = {sub for sub, _regs in plan}
+    assert subs_used == {"00", "02", "03"}, subs_used
+    # The DLL-bogus sub=04 must NOT appear in the default plan.
+    assert "04" not in subs_used
     total_regs = sum(len(regs) for _sub, regs in plan)
-    assert total_regs > 100, f"PC-Logic plan suspiciously thin: {total_regs} reads"
+    # COM trace observed 76 reads; profile is slightly wider to allow
+    # for more populated installs, with parser-driven early-stop.
+    assert 100 <= total_regs <= 160, f"PC-Logic plan size unexpected: {total_regs}"
 
 
 def test_per_product_profiles_cover_all_output_modules() -> None:
@@ -504,25 +509,22 @@ async def test_pc_logic_register_scan_drives_dll_profile(tmp_path):
 
     await discovery.query_module_inventory("80D9")
 
-    # PC-Logic profile: all passes are sub=04 (DLL has no other banks).
+    # 0.19.0 COM-trace-aligned: PC software reads PC-Logic at sub=00,
+    # sub=02, sub=03 — never sub=04. The 0.17.0 DLL-derived plan was
+    # scanning the wrong sub-byte entirely.
     assert scan_calls, "no scan calls issued"
-    assert {c["sub_byte"] for c in scan_calls} == {"04"}
-    # Profile sections come from Niko_05_201a.dll GetDLLReadInfo
-    # (offset 0x42CB, 0x4268, 0x445C, 0x4E20). The merged plan must
-    # cover at least 100 distinct register reads.
+    assert {c["sub_byte"] for c in scan_calls} == {"00", "02", "03"}
     total_regs = sum(len(c["range"]) for c in scan_calls)
-    assert total_regs >= 100, total_regs
+    assert 100 <= total_regs <= 160, total_regs
 
 
 @pytest.mark.asyncio
-async def test_switch_register_scan_uses_anchored_profile(tmp_path):
-    """0.18.0: switch scan defaults to the anchored productive band
-    derived from three live switch traces (2026-05-23 on modules C9A5
-    and 4707). Reads cluster tightly at sub=00 reg ~0x90 and sub=04
-    reg ~0x10. The empty sub=01 band, the sub=00 pre-anchor sweep
-    (0x3E..0x8E, also implicated in module-exhaustion failures), and
-    the dead status probes are dropped from the default plan but
-    restored when ``broad_scan=True``."""
+async def test_switch_register_scan_uses_com_aligned_profile(tmp_path):
+    """0.19.0: switch scan defaults to the PC-software COM-trace
+    profile — sub=00 reg=0x10..0x3F, with parser-driven early-stop
+    on the trailing-FF terminator. Validated against the 24/05/2026
+    full-session capture which showed the PC reads 5B05 0x10..0x17,
+    4707 0x10..0x19, and C9A5 0x10..0x27 at sub=00 only."""
 
     coord = _make_coordinator()
     coord.get_module_channel_count = MagicMock(return_value=12)
@@ -556,39 +558,31 @@ async def test_switch_register_scan_uses_anchored_profile(tmp_path):
 
     await discovery.query_module_inventory("4707")
 
-    # Anchored profile drops sub=01 entirely.
+    # COM-aligned profile uses sub=00 only.
     subs = {c["sub_byte"] for c in scan_calls}
-    assert subs == {"00", "04"}, subs
+    assert subs == {"00"}, subs
 
     sub0_regs = set()
-    sub4_regs = set()
     for c in scan_calls:
         if c["sub_byte"] == "00":
             sub0_regs.update(c["range"])
-        elif c["sub_byte"] == "04":
-            sub4_regs.update(c["range"])
 
-    # sub=00 anchor cluster (observed 0x8F..0xA7) with margin.
-    assert {0x8F, 0x90, 0x9A, 0xA7}.issubset(sub0_regs), \
-        f"sub=00 anchor cluster not covered: {sorted(sub0_regs)}"
-    # Pre-anchor sweep dropped (was 0x3E..0x8E).
-    assert 0x3E not in sub0_regs
-    assert 0x70 not in sub0_regs
-    # sub=04 anchor cluster (observed 0x00, 0x10..0x27) with margin.
-    assert {0x00, 0x10, 0x16, 0x27}.issubset(sub4_regs), \
-        f"sub=04 anchor cluster not covered: {sorted(sub4_regs)}"
-    # Dead tail dropped (was 0x28..0x3F).
-    assert 0x3F not in sub4_regs
-    # Status probe dropped.
-    assert 0x65 not in sub4_regs
+    # Link-table band starts at 0x10 (per COM trace) and extends to
+    # 0x3F as safety ceiling — parser-driven early-stop trims in practice.
+    assert {0x10, 0x17, 0x27, 0x3F}.issubset(sub0_regs), \
+        f"sub=00 0x10..0x3F band not covered: {sorted(sub0_regs)}"
+    # Anchored bands from 0.18.0 dropped from default.
+    assert 0x8E not in sub0_regs
+    # No sub=04 reads in default plan.
+    assert all(c["sub_byte"] != "04" for c in scan_calls)
 
 
 @pytest.mark.asyncio
-async def test_switch_register_scan_broad_restores_full_profile(tmp_path):
-    """``broad_scan=True`` restores the dropped bands so installs that
-    want the full DLL-derived sweep can opt back in. The combined
-    plan must reach the legacy sub=4 0x3F register and the sub=01
-    secondary band, plus probe sub=00 0x05..0x09."""
+async def test_switch_register_scan_broad_widens_default_band(tmp_path):
+    """``broad_scan=True`` widens the default sub=00 0x10..0x3F band
+    to a full 0x00..0xFF sweep of the same sub-byte, for diagnostic
+    use on firmware variants that place records outside the
+    PC-software-observed band."""
 
     coord = _make_coordinator()
     coord.get_module_channel_count = MagicMock(return_value=12)
@@ -624,14 +618,14 @@ async def test_switch_register_scan_broad_restores_full_profile(tmp_path):
     await discovery.query_module_inventory("4707")
 
     subs = {c["sub_byte"] for c in scan_calls}
-    assert subs == {"00", "01", "04"}, subs
+    assert subs == {"00"}, subs
 
-    sub4_regs = set()
+    sub0_regs = set()
     for c in scan_calls:
-        if c["sub_byte"] == "04":
-            sub4_regs.update(c["range"])
-    assert {0x00, 0x10, 0x20, 0x3F}.issubset(sub4_regs), \
-        "broad_scan must restore legacy sub=4 0x00..0x3F safety net"
+        if c["sub_byte"] == "00":
+            sub0_regs.update(c["range"])
+    assert {0x00, 0x10, 0x3F, 0xFF}.issubset(sub0_regs), \
+        "broad_scan must widen sub=00 to the full 0x00..0xFF sweep"
 
 
 # ---------------------------------------------------------------------------
