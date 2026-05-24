@@ -74,42 +74,58 @@ def _total_reads(module_type: str, *, broad_scan: bool = False) -> int:
     ))
 
 
-def test_dimmer_plan_includes_link_table_band() -> None:
-    """Dimmer scan covers the variable section 3 link table (default
-    0xC85 bytes from offset 0x3E3 ≈ 201 register reads at sub=0/1).
-    This is the band the original 48-register vendor trace SKIPPED — it
-    must be present in 0.17.0."""
+def test_dimmer_default_uses_com_aligned_band() -> None:
+    """0.19.0: dimmer default scans the PC-software COM-trace bands —
+    sub=00 0x20..0x3F (main link table), sub=00 0xF8..0xFF (timer
+    config), sub=01 0x20..0x2F (secondary). ~56 reads vs the old
+    245-read DLL plan, with parser-driven early-stop trimming further.
+    Validated against module 0E6C in the 24/05/2026 capture."""
     total = _total_reads("dimmer_module")
-    # Header (4+1) + config (1) + link table (193 at sub=0 + 7 at sub=1) +
-    # secondary (36+1) + status (5). Allow a small tolerance for dedup.
-    assert 240 <= total <= 260, total
+    assert 40 <= total <= 80, total
+    plan = _scan_passes_for_module_type("dimmer_module")
+    subs_used = {sub for sub, _regs in plan}
+    assert subs_used == {"00", "01"}, subs_used
 
 
-def test_roller_default_uses_anchored_band() -> None:
-    """0.18.0: roller default scans the anchored productive band
-    (sub=00 link cluster around 0x90 + master slot at 0xF0, plus
-    sub=01 0x00..0x27 state mirror). ~68 reads vs the 251-read full
-    profile, validated against two live rollers (9105, 8394)."""
+def test_roller_default_uses_com_aligned_band() -> None:
+    """0.19.0: roller default uses the PC-software COM-trace band —
+    sub=00 0x10..0x3F, parser-driven early-stop on FF terminator.
+    Validated against 9105 (stop at 0x1C) and 8394 (stop at 0x16)."""
     total = _total_reads("roller_module")
-    assert 50 <= total <= 90, total
+    assert 30 <= total <= 80, total
+    plan = _scan_passes_for_module_type("roller_module")
+    subs_used = {sub for sub, _regs in plan}
+    assert subs_used == {"00"}, subs_used
 
 
 def test_roller_broad_scan_restores_full_link_table() -> None:
-    """``broad_scan=True`` reaches the rest of section 1's link-table
-    range, the sec 4 mirror, sec 0/3 sentinels, and the huge sec 2
-    variable band."""
+    """``broad_scan=True`` reaches the 0.18.0 anchored bands, the
+    rest of section 1's link-table range, the sec 4 mirror, sec 0/3
+    sentinels, and the huge sec 2 variable band."""
     total = _total_reads("roller_module", broad_scan=True)
-    # Full (251) + sec 2 (~700 regs) = ~950+. Generous bounds.
+    # Full (251) + sec 2 (~700 regs) + 0.18.0 anchored = ~1000+.
     assert total >= 900, total
 
 
-def test_pc_logic_plan_dispatches_dll_sections() -> None:
-    """PC-Logic profile aggregates 4 sub=4 sections from Niko_05_201a.dll
-    (offsets 0x42CB, 0x4268, 0x445C, 0x4E20). Total post-dedup is 133."""
+def test_pc_logic_default_uses_com_aligned_band() -> None:
+    """0.19.0: PC-Logic default uses sub=00 / sub=02 / sub=03 per the
+    real PC-software COM trace (24/05/2026, module 940C) — NOT sub=04
+    as the 0.17.0 DLL-derived plan assumed. The wrong-sub-byte plan
+    was why 940C returned 0 decoded records on the 2026-05-23 HA trace."""
     plan = _scan_passes_for_module_type("pc_logic")
-    assert all(sub == "04" for sub, _regs in plan), plan
+    subs_used = {sub for sub, _regs in plan}
+    assert subs_used == {"00", "02", "03"}, subs_used
+    assert "04" not in subs_used
     total = _total_reads("pc_logic")
-    assert 100 <= total <= 200, total
+    assert 100 <= total <= 160, total
+
+
+def test_pc_logic_broad_scan_restores_dll_plan() -> None:
+    """``broad_scan=True`` restores the 0.17.0 DLL-derived sub=04 plan
+    so installs with firmware variants that respond there can opt in."""
+    plan = _scan_passes_for_module_type("pc_logic", broad_scan=True)
+    subs_used = {sub for sub, _regs in plan}
+    assert "04" in subs_used
 
 
 def test_pc_link_plan_matches_pc_software_com_trace() -> None:
@@ -168,27 +184,24 @@ def test_feedback_plan_is_skipped_post_017_1() -> None:
     )
 
 
-def test_switch_default_uses_anchored_band() -> None:
-    """0.18.0: switch default scans only the anchored productive band
-    (sub=00 link cluster around 0x90, sub=04 legacy cluster around
-    0x10). Validated against three switch traces; reduces ~312 → ~82
-    reads per switch and eliminates the long-sweep exhaustion mode."""
+def test_switch_default_uses_com_aligned_band() -> None:
+    """0.19.0: switch default uses the PC-software COM-trace band —
+    sub=00 0x10..0x3F, parser-driven early-stop on the FF terminator.
+    Validated against C9A5 (stop at 0x27), 4707 (stop at 0x19), and
+    5B05 (stop at 0x17) in the 24/05/2026 full-session trace."""
     plan = _scan_passes_for_module_type("switch_module")
     subs_used = {sub for sub, _regs in plan}
-    # sub=01 dropped from default — empirical overlap with sub=04
-    # rendered it nearly redundant.
-    assert subs_used == {"00", "04"}, subs_used
+    assert subs_used == {"00"}, subs_used
     total = _total_reads("switch_module")
-    assert 60 <= total <= 100, total
+    assert 40 <= total <= 80, total
 
 
-def test_switch_broad_scan_restores_full_dll_profile() -> None:
-    """``broad_scan=True`` restores the bands dropped from the anchored
-    default — sub=01 secondary, sub=00 pre-anchor sweep, sub=04 dead
-    tail and status probes — for installs that want full coverage."""
+def test_switch_broad_scan_restores_anchored_and_dll_plans() -> None:
+    """``broad_scan=True`` re-adds the 0.18.0 anchored bands AND the
+    full DLL-derived plan for belt-and-braces coverage."""
     plan = _scan_passes_for_module_type("switch_module", broad_scan=True)
     subs_used = {sub for sub, _regs in plan}
-    assert subs_used == {"00", "01", "04"}, subs_used
+    assert {"00", "01", "04"}.issubset(subs_used)
     sub4_regs = set()
     for sub, regs in plan:
         if sub == "04":

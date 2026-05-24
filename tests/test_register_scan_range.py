@@ -60,12 +60,11 @@ def _capture_scan_calls():
 
 
 @pytest.mark.asyncio
-async def test_switch_dispatches_anchored_profile(tmp_path):
-    """0.18.0: switch scan defaults to the anchored productive band
-    — sub=00 link cluster around 0x90, sub=04 cluster around 0x10.
-    sub=01 is dropped (empirically duplicates sub=04 content); the
-    plan still uses the switch wire function code (10) and the
-    byte-swapped address."""
+async def test_switch_dispatches_com_aligned_profile(tmp_path):
+    """0.19.0: switch scan walks the PC-software COM-trace band —
+    sub=00 only, register range 0x10..0x3F with parser-driven
+    early-stop on the FF terminator. Validated against C9A5, 4707,
+    5B05 in the 24/05/2026 capture."""
 
     coord = _make_coordinator()
     discovery = NikobusDiscovery(
@@ -95,7 +94,7 @@ async def test_switch_dispatches_anchored_profile(tmp_path):
     await discovery.query_module_inventory("4707")
 
     subs = {c["sub_byte"] for c in calls}
-    assert subs == {"00", "04"}, subs
+    assert subs == {"00"}, subs
     assert all(c["base_cmd"] == "100747" for c in calls)
 
 
@@ -135,13 +134,12 @@ async def test_dimmer_dispatches_per_product_profile(tmp_path):
 
     # Dimmer-specific function code "22" on the wire.
     assert all(c["base_cmd"].startswith("22") for c in calls)
-    # Profile includes the variable link table band (sub=0 reg=0x3E..0xFF).
-    # Cumulative reads must exceed the pre-0.17.0 48-register plan.
+    # 0.19.0 COM-aligned profile: sub=00 0x20..0x3F + sub=00 0xF8..0xFF
+    # + sub=01 0x20..0x2F = ~56 reads, with parser-driven early-stop.
+    subs = {c["sub_byte"] for c in calls}
+    assert subs == {"00", "01"}, subs
     total_regs = sum(len(c["command_range"]) for c in calls)
-    assert total_regs >= 240, (
-        f"dimmer profile too thin: {total_regs} reads "
-        "(must include the variable section 3 link table)"
-    )
+    assert 40 <= total_regs <= 80, total_regs
 
 
 @pytest.mark.asyncio
@@ -177,11 +175,10 @@ async def test_roller_dispatches_per_product_profile(tmp_path):
 
     assert all(c["base_cmd"] == "109483" for c in calls)
     subs = {c["sub_byte"] for c in calls}
-    assert "00" in subs and "01" in subs
-    # 0.18.0 anchored default: ~68 reads (productive band only). Full
-    # 251-read DLL plan re-enabled by ``broad_scan=True``.
+    # 0.19.0 COM-aligned: roller uses sub=00 only (PC software trace).
+    assert subs == {"00"}
     total_regs = sum(len(c["command_range"]) for c in calls)
-    assert 50 <= total_regs <= 90, total_regs
+    assert 30 <= total_regs <= 80, total_regs
 
 
 @pytest.mark.asyncio

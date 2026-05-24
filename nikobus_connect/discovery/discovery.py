@@ -189,6 +189,20 @@ _DIMMER_PROFILE_DEFAULT: tuple[ScanSection, ...] = _merge_passes((
 # unless broad_scan=True.
 _DIMMER_PROFILE_BROAD_EXTRA: tuple[ScanSection, ...] = _regs_for_bytes(0x1962, 0x2CF2)
 
+# COM-trace-aligned dimmer profile — 0.19.0. Captured against 0E6C
+# (Niko 05-007-02) on 24/05/2026: the PC software reads three bands
+# at function=0x22:
+#   sub=00 0x20..0x3F (main link table; stops at 0x3F when full)
+#   sub=00 0xF8..0xFF (timer/config band; stops at 0xFF terminator)
+#   sub=01 0x20..0x2F (secondary link band; stopped at 0x2A on 0E6C)
+# Dimmer chunks are 8 bytes (not 16) so the early-stop tolerates a
+# 3-byte trailing FF terminator instead of 6.
+_DIMMER_PROFILE_COM_ALIGNED: tuple[ScanSection, ...] = (
+    ("00", tuple(range(0x20, 0x40))),
+    ("00", tuple(range(0xF8, 0x100))),
+    ("01", tuple(range(0x20, 0x30))),
+)
+
 # --- ROLLER (Niko_05_202) ---
 # 5 sections from dispatch table at 0x10003ACC:
 #   sec 0: offset=0x03E6 length=0x0002 (config)
@@ -231,18 +245,46 @@ _ROLLER_PROFILE_BROAD_EXTRA: tuple[ScanSection, ...] = _merge_passes((
     *_regs_for_bytes(0x1388, 0x2BB0),
 ))
 
+# COM-trace-aligned roller profile — 0.19.0. Same band as switches
+# per the PC software trace: sub=00 starting at 0x10, parser-driven
+# early-stop on the trailing-FF terminator. Observed on 9105 (5/6
+# programmed channels, 13 reads to 0x1C) and 8394 (3/6 programmed,
+# 7 reads to 0x16).
+_ROLLER_PROFILE_COM_ALIGNED: tuple[ScanSection, ...] = (
+    ("00", tuple(range(0x10, 0x40))),
+)
+
 # --- PC-LOGIC (Niko_05_201a) ---
 # 4 sections at sub=4 (dispatch table at 0x10001A80):
 #   sec 0: offset=0x42CB length=0x0001
 #   sec 1: offset=0x4268 length=0x0104 default
 #   sec 2: offset=0x445C length=0x060E default
 #   sec 3: offset=0x4E20 length=0x0118 default
-_PC_LOGIC_PROFILE_DEFAULT: tuple[ScanSection, ...] = _merge_passes((
+_PC_LOGIC_PROFILE_FULL: tuple[ScanSection, ...] = _merge_passes((
     *_regs_for_bytes(0x42CB, 0x0001),
     *_regs_for_bytes(0x4268, 0x0104),
     *_regs_for_bytes(0x445C, 0x060E),
     *_regs_for_bytes(0x4E20, 0x0118),
 ))
+
+# COM-trace-aligned PC-Logic profile — 0.19.0. CRITICAL FIX: the
+# previous DLL-derived plan scanned sub=04 (because the DLL section
+# offsets land in the 0x4000+ range, mapping to sub=04 in the
+# byte-offset-to-(sub,reg) translation). But the PC software COM7
+# trace shows PC-Logic uses sub=00, sub=02, sub=03 — NOT sub=04.
+# This explains why module 940C returned 0 decoded records on the
+# 2026-05-23 HA trace: every read was sent to the wrong sub-byte.
+#
+# Per the 24/05/2026 trace (module 940C):
+#   sub=00 0x06..0x1E + 0x3E       (main records, ~25 reads)
+#   sub=02 0xAF..0xEE              (secondary band, ~40 reads)
+#   sub=03 0xE8..0xF4              (tertiary band, 13 reads)
+# Parser-driven early-stop handles the per-pass terminator.
+_PC_LOGIC_PROFILE_COM_ALIGNED: tuple[ScanSection, ...] = (
+    ("00", tuple(range(0x06, 0x40))),
+    ("02", tuple(range(0xAF, 0xEF))),
+    ("03", tuple(range(0xE8, 0xF5))),
+)
 
 # --- PC-LINK (Niko_05_200) ---
 # 0.18.0: validated against a real PC-software COM4 trace
@@ -361,6 +403,23 @@ _SWITCH_PROFILE_ANCHORED: tuple[ScanSection, ...] = _merge_passes((
     ("04", tuple(range(0x00, 0x30))),
 ))
 
+# COM-trace-aligned switch profile — 0.19.0. The Nikobus PC software
+# COM7 capture (24/05/2026 full session) showed that across three
+# switches (C9A5 12-ch, 4707 12-ch, 5B05 4-ch compact) the PC reads
+# ONLY at sub=00 starting at register 0x10, with the scan length
+# varying by programming density (5B05 stopped at 0x17, 4707 at
+# 0x1B, C9A5 at 0x27). The terminator is a chunk whose trailing
+# 6 bytes are 0xFF — detected by the parser-driven early-stop in
+# ``_scan_module_registers`` so we don't read past the table end.
+#
+# Upper bound of 0x40 is a safety ceiling; the early-stop almost
+# always fires well before that. This profile is therefore "scan
+# the band, parser tells us when to stop" — same model the PC
+# software uses.
+_SWITCH_PROFILE_COM_ALIGNED: tuple[ScanSection, ...] = (
+    ("00", tuple(range(0x10, 0x40))),
+)
+
 # Bands trimmed from the anchored profile, restorable via
 # ``broad_scan=True``. Reconstitutes the full _SWITCH_PROFILE_FULL
 # plan when set, modulo the deduplicated overlap with the anchored
@@ -386,27 +445,57 @@ _SWITCH_PROFILE_BROAD_EXTRA: tuple[ScanSection, ...] = _merge_passes((
 # is preserved as a data constant for future use if firmware variants
 # differ.
 _MODULE_SCAN_PROFILES: dict[str, tuple[ScanSection, ...]] = {
-    "switch_module":   _SWITCH_PROFILE_ANCHORED,
-    "roller_module":   _ROLLER_PROFILE_ANCHORED,
-    "dimmer_module":   _DIMMER_PROFILE_DEFAULT,
-    "pc_logic":        _PC_LOGIC_PROFILE_DEFAULT,
+    "switch_module":   _SWITCH_PROFILE_COM_ALIGNED,
+    "roller_module":   _ROLLER_PROFILE_COM_ALIGNED,
+    "dimmer_module":   _DIMMER_PROFILE_COM_ALIGNED,
+    "pc_logic":        _PC_LOGIC_PROFILE_COM_ALIGNED,
     "pc_link":         _PC_LINK_PROFILE_DEFAULT,
 }
 
-# Broad-scan extras. For switch/roller these restore the full
-# DLL-derived plan (anchored bands' dropped sections); for dimmer
-# they add the huge variable section PC software skips when its
-# CalcMemoryMap is project-primed.
+# Broad-scan extras. Re-add the bands trimmed from the COM-trace
+# default — the 0.18.0 anchored ranges (for switch/roller), the full
+# DLL-derived plans (for dimmer/pc_logic/pc_link), and the huge
+# variable sections (for dimmer/roller).
 _MODULE_SCAN_PROFILES_BROAD_EXTRA: dict[str, tuple[ScanSection, ...]] = {
-    "switch_module":   _SWITCH_PROFILE_BROAD_EXTRA,
-    "roller_module":   _ROLLER_PROFILE_BROAD_EXTRA,
-    "dimmer_module":   _DIMMER_PROFILE_BROAD_EXTRA,
+    "switch_module":   _merge_passes((*_SWITCH_PROFILE_ANCHORED, *_SWITCH_PROFILE_BROAD_EXTRA)),
+    "roller_module":   _merge_passes((*_ROLLER_PROFILE_ANCHORED, *_ROLLER_PROFILE_BROAD_EXTRA)),
+    "dimmer_module":   _merge_passes((*_DIMMER_PROFILE_DEFAULT, *_DIMMER_PROFILE_BROAD_EXTRA)),
+    "pc_logic":        _PC_LOGIC_PROFILE_FULL,
     "pc_link":         _PC_LINK_PROFILE_BROAD_EXTRA,
 }
 
 # Conservative fallback when a caller hands us a sub-byte the plan
 # didn't cover (keeps forensic mode probeable without a silent skip).
 _DEFAULT_SCAN_REGISTERS: tuple[int, ...] = tuple(range(0x00, 0x100))
+
+# Parser-driven early-stop — 0.19.0. The Nikobus PC software COM7
+# trace (24/05/2026) shows the PC stops a register-scan pass after
+# reading a register whose response payload ends with N trailing 0xFF
+# bytes — the "no further records" terminator. N depends on chunk size:
+#
+#   switch/roller (6-byte records, 12-hex chunks): tail of 6 bytes
+#       (12 hex chars). The PC stopped at C9A5 reg=0x27 (tail=6),
+#       4707 reg=0x1B (tail=13), 5B05 reg=0x17 (tail=15), 8394
+#       reg=0x16 (tail=16), 9105 reg=0x1C (tail=11).
+#   dimmer (8-byte chunks): tail of 3 bytes (6 hex chars). Smaller
+#       because the 8-byte chunk has less room for both a partial
+#       record and a terminator. PC stopped at 0E6C 0x3F (8/8 FF),
+#       0x2A (8/8 FF), 0xFF (last 4 bytes FF).
+#   pc_link / pc_logic (16-byte chunks, 32-hex): same 6-byte tail
+#       rule — the 940C 0x1E stop had 12 trailing FF.
+#
+# When the terminator fires, the current pass aborts and the scanner
+# moves to the next pass / next module. Existing chunks-already-read
+# are still decoded; this is "stop AFTER processing this register",
+# not "discard this register". Matches the PC software's behaviour
+# byte-for-byte.
+_FF_TERMINATOR_TAIL_HEX: dict[str, int] = {
+    "switch_module": 12,
+    "roller_module": 12,
+    "pc_link":       12,
+    "pc_logic":      12,
+    "dimmer_module":  6,
+}
 
 # Module-type buckets whose per-module register scan is short-circuited.
 # 0.17.1: ``feedback_module`` restored to this set after real-world
@@ -2790,6 +2879,26 @@ class NikobusDiscovery:
 
             if decoded_commands:
                 await self._handle_decoded_commands(address, decoded_commands)
+
+            # COM-trace-aligned early-stop: if the response's full data
+            # region ends with the per-module-type FF terminator tail,
+            # this is the last-record-in-the-table sentinel. Stop the
+            # current pass (the register loop checks ``_scan_trailer_seen``
+            # at the top of each iteration). Existing chunks for this
+            # register were already decoded above.
+            tail_len = _FF_TERMINATOR_TAIL_HEX.get(self._module_type)
+            if tail_len:
+                data_region = analysis.get("payload_region", "")
+                if len(data_region) >= tail_len and data_region[-tail_len:] == "F" * tail_len:
+                    _LOGGER.debug(
+                        "Register scan FF-tail terminator detected | module=%s "
+                        "response_index=%d tail_len=%d data_region=%s",
+                        address,
+                        response_index,
+                        tail_len,
+                        data_region,
+                    )
+                    self._scan_trailer_seen = True
 
             if await self._check_early_termination(address, bool(decoded_commands)):
                 return

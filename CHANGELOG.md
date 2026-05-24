@@ -1,5 +1,67 @@
 # Changelog
 
+## 0.19.0
+
+All module scan profiles realigned to the Nikobus PC software's
+own bus behaviour, captured from a real COM7 monitoring session
+(24/05/2026 full-session trace, both TX and RX directions).
+
+**The DLL-derived plans were partially wrong.** PR #87 already
+established this for PC-Link: the ``Niko_05_XXX.dll`` ``GetDLLReadInfo``
+sections describe the **host's project-file layout**, not the bus
+reads. This PR extends that finding to every other module type by
+comparing the PC software's actual register-read sequence against
+each module type's profile.
+
+**Per-module changes (default plans, COM-trace-aligned):**
+
+| Module type | Old default | New default | Sub-bytes |
+|---|---|---|---|
+| switch_module | 82 reads (anchored sub=00 0x8E..0xAF + sub=04 0x00..0x2F) | **48 reads** (sub=00 0x10..0x3F, parser-driven early-stop) | sub=00 only |
+| roller_module | 68 reads (anchored) | **48 reads** (sub=00 0x10..0x3F) | sub=00 only |
+| dimmer_module | 245 reads (DLL-derived) | **56 reads** (sub=00 0x20..0x3F + 0xF8..0xFF, sub=01 0x20..0x2F) | sub=00, sub=01 |
+| pc_logic | 133 reads at **sub=04** (DLL-derived, wrong sub-byte) | **135 reads at sub=00, sub=02, sub=03** | sub=00/02/03 |
+| pc_link | 97 reads (PR #87) | unchanged | sub=00/01/04 |
+
+**The pc_logic fix is critical**: the 0.17.0 DLL-derived plan
+scanned PC-Logic at sub=04, but the PC software actually reads at
+sub=00, sub=02, and sub=03 — never sub=04. That's why module 940C
+returned 0 decoded records on the 2026-05-23 HA trace: every read
+was sent to a sub-byte the module doesn't use. The COM trace shows
+the PC software reads PC-Logic at 3 distinct bands across 76 unique
+register reads.
+
+**Parser-driven early-stop on the trailing-FF terminator.** The PC
+software's per-register stop condition (analyzed from the COM trace):
+after reading register N, if the response payload's trailing N bytes
+are all ``0xFF``, the table-end terminator has been reached and the
+scan moves to the next pass / module. Tail length depends on chunk
+size:
+
+  - switch/roller/pc_link/pc_logic (16-byte chunks): trailing 6 bytes
+  - dimmer (8-byte chunks): trailing 3 bytes
+
+Implemented in ``_scan_module_registers`` by setting
+``_scan_trailer_seen`` from the new ``_FF_TERMINATOR_TAIL_HEX`` table.
+On the 24/05/2026 trace the early-stop fires at register 0x16 (8394
+roller, 7 reads), 0x17 (5B05 4-ch switch, 8 reads), 0x1B (4707
+12-ch switch, 12 reads), 0x1C (9105 roller, 13 reads), 0x27 (C9A5
+12-ch switch, 24 reads), 0x3F (0E6C dimmer sub=00, 32 reads), and
+the equivalent boundaries on pc_link and pc_logic.
+
+**Effective per-module scan sizes on a populated install** (early-stop
+fires before the safety ceiling):
+
+  switch: 8-24 reads (vs 312 in 0.17.x, 82 in 0.18.x)
+  roller: 7-13 reads (vs 251 in 0.17.x, 68 in 0.18.x)
+  dimmer: ~50 reads (vs 245 in 0.17.x, unchanged 0.18.x)
+  pc_logic: ~76 reads (vs 133 in 0.17.x, but now at the CORRECT sub-bytes)
+  pc_link: ~97 reads (unchanged from 0.18.1)
+
+``broad_scan=True`` re-adds the 0.18.x anchored bands and the
+0.17.x DLL-derived plans on top of the COM-aligned default for
+belt-and-braces coverage.
+
 ## 0.18.0
 
 Anchored productive-band scan for switch and roller modules.
