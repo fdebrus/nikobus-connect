@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.19.1
+
+Progress-bar fixes for the discovery state machine.
+
+**"First step shows 96/96 = 100%" bug.** The identity phase scans 96
+registers per address (sub=4 0xA0..0xFF) and ends with
+``_progress_register_total = 96`` and ``_progress_module_registers_sent``
+at the last per-address count. The library reset
+``_progress_module_register_total`` and ``_progress_module_registers_sent``
+in ``_start_next_register_scan`` but **not** ``_progress_register_total``,
+so the first ``PHASE_REGISTER_SCAN`` emit for the first module carried
+the stale ``register_total = 96`` from identity. Fixed by resetting
+``_progress_register_total``, ``_progress_module_register_total``, and
+``_progress_module_registers_sent`` at the END of the identity loop
+AND at the START of every ``_start_next_register_scan`` (defence in
+depth).
+
+**Cumulative ratio > 100% on multi-pass modules.** When the FF-tail
+early-stop fired inside pass N of a multi-pass module (dimmer,
+pc_logic, pc_link), the previous code collapsed
+``_progress_module_register_total`` to ``pre_pass_sent + registers_sent``
+— losing the remaining-pass budget. Pass N+1 then ran with
+``_progress_module_registers_sent`` incrementing past
+``_progress_module_register_total``, producing ratios > 100% during
+the second and third passes. Fixed by subtracting only the UNUSED
+portion of the early-stopped pass from the cumulative total, so
+the budget for remaining passes is preserved. Single-pass modules
+still collapse to ``registers_sent`` naturally.
+
 ## 0.19.0
 
 All module scan profiles realigned to the Nikobus PC software's

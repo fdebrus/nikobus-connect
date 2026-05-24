@@ -821,11 +821,18 @@ class NikobusDiscovery:
                             registers_sent,
                         )
                         # Trailer short-circuits ONLY the current pass.
-                        # Collapse the cumulative total to "what was
-                        # actually sent" so the ratio reaches 100 %
-                        # naturally instead of getting stuck below.
-                        self._progress_module_register_total = (
-                            pre_pass_sent + registers_sent
+                        # Subtract the unused portion of THIS pass from
+                        # the cumulative total — preserves the remaining
+                        # passes' planned budget so the ratio stays in
+                        # bounds across multi-pass modules (dimmer,
+                        # pc_logic, pc_link). For single-pass modules
+                        # this collapses naturally to registers_sent.
+                        unused_this_pass = max(
+                            0, pass_register_total - registers_sent
+                        )
+                        self._progress_module_register_total = max(
+                            pre_pass_sent + registers_sent,
+                            self._progress_module_register_total - unused_this_pass,
                         )
                         self._progress_register_total = (
                             self._progress_module_register_total
@@ -866,11 +873,16 @@ class NikobusDiscovery:
                                 consecutive_give_ups,
                                 registers_sent,
                             )
-                            # Collapse the cumulative module total to
-                            # what was actually sent — same rationale as
-                            # the trailer-short-circuit branch above.
-                            self._progress_module_register_total = (
-                                pre_pass_sent + registers_sent
+                            # Subtract the unused portion of THIS pass
+                            # — same rationale as the trailer-short-circuit
+                            # branch above (preserve remaining-pass budget
+                            # for multi-pass modules).
+                            unused_this_pass = max(
+                                0, pass_register_total - registers_sent
+                            )
+                            self._progress_module_register_total = max(
+                                pre_pass_sent + registers_sent,
+                                self._progress_module_register_total - unused_this_pass,
                             )
                             self._progress_register_total = (
                                 self._progress_module_register_total
@@ -1536,11 +1548,19 @@ class NikobusDiscovery:
                     register=reg,
                 )
 
-        # Reset per-module pass tracking so subsequent phases don't
-        # carry stale identity-phase state.
+        # Reset per-module pass tracking AND register counters so the
+        # next phase doesn't show stale identity-phase totals before
+        # its own first emit arrives. Without these resets the HA UI
+        # briefly shows "96/96 = 100%" (the identity per-address total)
+        # at the start of the register-scan phase, because the library
+        # emits PHASE_REGISTER_SCAN once at module-scan entry before
+        # the per-pass loop overwrites these fields.
         self._progress_pass_index = 0
         self._progress_pass_total = 0
         self._progress_current_sub_byte = None
+        self._progress_module_register_total = 0
+        self._progress_register_total = 0
+        self._progress_module_registers_sent = 0
 
     async def _start_next_register_scan(self) -> None:
         if not self._register_scan_queue:
@@ -1565,12 +1585,17 @@ class NikobusDiscovery:
         self._module_found_data = False
         self._module_consecutive_empties = 0
         self._scan_response_index = 0
-        # Reset per-module progress counters. The vendor plan reads
-        # different totals per module type (e.g. switch = 48 vendor regs,
-        # PC-Link = 93 inventory regs), so each module's progress bar
-        # needs to start from 0/0 and rebuild its target.
+        # Reset per-module progress counters. Each module's progress
+        # bar needs to start from 0/0 and rebuild its target — different
+        # module types have different per-module totals (switch ~48,
+        # dimmer ~56, pc_logic ~135, pc_link ~97). Including
+        # ``_progress_register_total`` here so the first PHASE_REGISTER_SCAN
+        # emit for this module (which fires before the per-pass loop
+        # populates the real total) shows 0/0 rather than the previous
+        # module's collapsed total.
         self._progress_module_register_total = 0
         self._progress_module_registers_sent = 0
+        self._progress_register_total = 0
         self._progress_pass_index = 0
         self._progress_pass_total = 0
         self._progress_current_sub_byte = None
