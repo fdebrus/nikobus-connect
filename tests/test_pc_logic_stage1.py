@@ -578,11 +578,11 @@ async def test_switch_register_scan_uses_com_aligned_profile(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_switch_register_scan_broad_restores_full_profile(tmp_path):
-    """``broad_scan=True`` restores the dropped bands so installs that
-    want the full DLL-derived sweep can opt back in. The combined
-    plan must reach the legacy sub=4 0x3F register and the sub=01
-    secondary band, plus probe sub=00 0x05..0x09."""
+async def test_switch_register_scan_broad_widens_default_band(tmp_path):
+    """``broad_scan=True`` widens the default sub=00 0x10..0x3F band
+    to a full 0x00..0xFF sweep of the same sub-byte, for diagnostic
+    use on firmware variants that place records outside the
+    PC-software-observed band."""
 
     coord = _make_coordinator()
     coord.get_module_channel_count = MagicMock(return_value=12)
@@ -618,14 +618,14 @@ async def test_switch_register_scan_broad_restores_full_profile(tmp_path):
     await discovery.query_module_inventory("4707")
 
     subs = {c["sub_byte"] for c in scan_calls}
-    assert subs == {"00", "01", "04"}, subs
+    assert subs == {"00"}, subs
 
-    sub4_regs = set()
+    sub0_regs = set()
     for c in scan_calls:
-        if c["sub_byte"] == "04":
-            sub4_regs.update(c["range"])
-    assert {0x00, 0x10, 0x20, 0x3F}.issubset(sub4_regs), \
-        "broad_scan must restore legacy sub=4 0x00..0x3F safety net"
+        if c["sub_byte"] == "00":
+            sub0_regs.update(c["range"])
+    assert {0x00, 0x10, 0x3F, 0xFF}.issubset(sub0_regs), \
+        "broad_scan must widen sub=00 to the full 0x00..0xFF sweep"
 
 
 # ---------------------------------------------------------------------------

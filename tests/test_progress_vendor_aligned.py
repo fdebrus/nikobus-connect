@@ -98,13 +98,13 @@ def test_roller_default_uses_com_aligned_band() -> None:
     assert subs_used == {"00"}, subs_used
 
 
-def test_roller_broad_scan_restores_full_link_table() -> None:
-    """``broad_scan=True`` reaches the 0.18.0 anchored bands, the
-    rest of section 1's link-table range, the sec 4 mirror, sec 0/3
-    sentinels, and the huge sec 2 variable band."""
+def test_roller_broad_scan_widens_to_full_sub00_sweep() -> None:
+    """``broad_scan=True`` widens the default sub=00 0x10..0x3F band
+    to a full sub=00 0x00..0xFF sweep, so installs with firmware
+    variants outside the PC-software-observed band can still be
+    diagnosed."""
     total = _total_reads("roller_module", broad_scan=True)
-    # Full (251) + sec 2 (~700 regs) + 0.18.0 anchored = ~1000+.
-    assert total >= 900, total
+    assert total == 256, total
 
 
 def test_pc_logic_default_uses_com_aligned_band() -> None:
@@ -120,12 +120,15 @@ def test_pc_logic_default_uses_com_aligned_band() -> None:
     assert 100 <= total <= 160, total
 
 
-def test_pc_logic_broad_scan_restores_dll_plan() -> None:
-    """``broad_scan=True`` restores the 0.17.0 DLL-derived sub=04 plan
-    so installs with firmware variants that respond there can opt in."""
+def test_pc_logic_broad_scan_widens_to_full_sweep() -> None:
+    """``broad_scan=True`` widens each pc_logic pass to a full
+    0x00..0xFF sweep of its sub-byte. Sub-byte set stays the same
+    as the COM-aligned default (sub=00/02/03)."""
     plan = _scan_passes_for_module_type("pc_logic", broad_scan=True)
     subs_used = {sub for sub, _regs in plan}
-    assert "04" in subs_used
+    assert subs_used == {"00", "02", "03"}, subs_used
+    total = sum(len(regs) for _sub, regs in plan)
+    assert total == 3 * 256, total
 
 
 def test_pc_link_plan_matches_pc_software_com_trace() -> None:
@@ -157,19 +160,17 @@ def test_pc_link_plan_matches_pc_software_com_trace() -> None:
     assert 90 <= total <= 110, total
 
 
-def test_pc_link_broad_scan_restores_dll_sections() -> None:
-    """``broad_scan=True`` re-adds the (likely unused) DLL-derived
-    sections plus extends the registry band to 0xFF, for installs that
-    want belt-and-braces coverage."""
+def test_pc_link_broad_scan_widens_to_full_sweep() -> None:
+    """``broad_scan=True`` widens each pc_link pass to a full
+    0x00..0xFF sweep of the same sub-bytes the default uses."""
     plan = _scan_passes_for_module_type("pc_link", broad_scan=True)
     subs_used = {sub for sub, _regs in plan}
-    # Broad scan re-introduces sub=02 and sub=03 from the DLL plan.
-    assert {"00", "01", "02", "03", "04"}.issubset(subs_used)
+    assert subs_used == {"00", "01", "04"}, subs_used
     sub4_regs = set()
     for sub, regs in plan:
         if sub == "04":
             sub4_regs.update(regs)
-    # Registry band extended to PC-Link's pre-0.16.0 ceiling.
+    # Full sweep reaches 0xFF.
     assert 0xFF in sub4_regs
 
 
@@ -196,17 +197,18 @@ def test_switch_default_uses_com_aligned_band() -> None:
     assert 40 <= total <= 80, total
 
 
-def test_switch_broad_scan_restores_anchored_and_dll_plans() -> None:
-    """``broad_scan=True`` re-adds the 0.18.0 anchored bands AND the
-    full DLL-derived plan for belt-and-braces coverage."""
+def test_switch_broad_scan_widens_to_full_sub00_sweep() -> None:
+    """``broad_scan=True`` widens the default sub=00 0x10..0x3F band
+    to a full sub=00 0x00..0xFF sweep for diagnostic use on firmware
+    variants outside the PC-software-observed band."""
     plan = _scan_passes_for_module_type("switch_module", broad_scan=True)
     subs_used = {sub for sub, _regs in plan}
-    assert {"00", "01", "04"}.issubset(subs_used)
-    sub4_regs = set()
+    assert subs_used == {"00"}, subs_used
+    sub0_regs = set()
     for sub, regs in plan:
-        if sub == "04":
-            sub4_regs.update(regs)
-    assert {0x00, 0x10, 0x20, 0x3F}.issubset(sub4_regs)
+        if sub == "00":
+            sub0_regs.update(regs)
+    assert {0x00, 0x10, 0x3F, 0xFF}.issubset(sub0_regs)
 
 
 def test_all_scanned_module_types_have_a_profile() -> None:

@@ -58,9 +58,20 @@ fires before the safety ceiling):
   pc_logic: ~76 reads (vs 133 in 0.17.x, but now at the CORRECT sub-bytes)
   pc_link: ~97 reads (unchanged from 0.18.1)
 
-``broad_scan=True`` re-adds the 0.18.x anchored bands and the
-0.17.x DLL-derived plans on top of the COM-aligned default for
-belt-and-braces coverage.
+``broad_scan=True`` widens each default pass to a full 0x00..0xFF
+sweep of the same sub-bytes (diagnostic mode for firmware variants
+that place records outside the PC-software-observed band).
+
+**Cleanup.** With every profile now COM-trace-validated, the
+intermediate DLL-derived (``_*_PROFILE_FULL``) and HA-anchored
+(``_*_PROFILE_ANCHORED``) profile constants are no longer needed
+and have been removed, along with the long DLL-section comment
+blocks, the ``_regs_for_bytes`` byte-offset translator, the
+``_FEEDBACK_PROFILE_DEFAULT`` dormant data constant, the unused
+``_DEFAULT_SCAN_REGISTERS`` fallback, and stale docstring
+references to ``_EXTRA_SCAN_SUBS_BY_MODULE_TYPE`` and
+``_scan_range_for_sub`` (helpers that no longer exist). The
+profile section of ``discovery.py`` is ~320 lines smaller.
 
 ## 0.18.0
 

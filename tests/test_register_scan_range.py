@@ -255,10 +255,10 @@ async def test_other_modules_still_skipped(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_broad_scan_opt_in_adds_extra_passes(tmp_path):
-    """``broad_scan=True`` appends the conditional sections PC software
-    skips when its in-memory project cache is primed (dimmer section 7,
-    roller section 2 — both 11KB+ blocks)."""
+async def test_broad_scan_widens_default_band_to_full_sweep(tmp_path):
+    """``broad_scan=True`` widens each default pass to a full
+    0x00..0xFF sweep of the same sub-byte — diagnostic mode for
+    firmware variants that place records outside the COM-trace band."""
 
     coord = _make_coordinator()
     discovery = NikobusDiscovery(
@@ -288,12 +288,12 @@ async def test_broad_scan_opt_in_adds_extra_passes(tmp_path):
 
     await discovery.query_module_inventory("0E6C")
 
-    # broad_scan adds dimmer section 7 (offset 0x1962 length 0x2CF2)
-    # — wraps across sub=2 and sub=3. Verify those banks are scanned.
+    # Same sub-bytes as the default plan (sub=00 + sub=01).
     subs = {c["sub_byte"] for c in calls_broad}
-    assert "02" in subs or "03" in subs, (
-        f"broad_scan should add section 7 reads in sub=2/sub=3, got subs={subs}"
-    )
+    assert subs == {"00", "01"}, subs
+    # Each sub-byte sweeps the full 0x00..0xFF range under broad_scan.
+    total = sum(len(c["command_range"]) for c in calls_broad)
+    assert total == 2 * 256, total
 
 
 # ---------------------------------------------------------------------------
