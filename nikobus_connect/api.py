@@ -91,7 +91,17 @@ class NikobusAPI:
         current_brightness: int = 0,
         completion_handler: Callable | None = None,
     ) -> None:
-        """Turn on a dimmer output to a specific brightness."""
+        """Turn on a dimmer output to a specific brightness.
+
+        ``led_on`` is a bus-address broadcast that simulates a wall-button
+        press; the receiving button toggles its LED on press. Firing it
+        on every command (brightness changes while already on) would
+        therefore flip the LED into the wrong state. Only emit the
+        trigger when transitioning from off (0) to non-zero brightness.
+        Callers MUST pass the actual previous bus-reflected brightness;
+        leaving it at the default 0 reproduces the legacy
+        "fire-every-time" behaviour for backward compat.
+        """
         brightness = max(0, min(255, int(brightness)))
         chan_info = self._get_channel_info("dimmer_module", address, channel)
 
@@ -106,12 +116,26 @@ class NikobusAPI:
             _LOGGER.error("API Dimmer Action failed for %s: %s", address, err)
             raise
 
-    async def turn_off_light(self, address: str, channel: int, completion_handler: Callable | None = None) -> None:
-        """Turn off a dimmer output."""
+    async def turn_off_light(
+        self,
+        address: str,
+        channel: int,
+        current_brightness: int = 1,
+        completion_handler: Callable | None = None,
+    ) -> None:
+        """Turn off a dimmer output.
+
+        Mirrors :meth:`turn_on_light`: ``led_off`` is a toggle-on-press
+        broadcast and must only fire when the light is actually
+        transitioning on → off. Default ``current_brightness=1`` keeps
+        legacy callers firing the trigger (matches pre-fix behaviour)
+        while new callers passing 0 correctly suppress it on
+        already-off → off no-ops.
+        """
         chan_info = self._get_channel_info("dimmer_module", address, channel)
 
         try:
-            if led_off := chan_info.get("led_off"):
+            if current_brightness > 0 and (led_off := chan_info.get("led_off")):
                 await self._send_bus_command(led_off)
 
             await self._command_handler.set_output_state(
