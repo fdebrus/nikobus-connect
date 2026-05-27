@@ -2574,10 +2574,20 @@ class NikobusDiscovery:
 
             device_type_hex = f"{payload_bytes[7]:02X}"
 
-            if device_type_hex == "FF":
+            # 0xFF = empty register slot. 0xFE has been observed on at
+            # least one install (PR following the May 2026 boot-time log
+            # audit) as PC-Link inventory padding — the surrounding
+            # bytes are FF, the address slot reverses to FFxxxx, and the
+            # record is plainly synthetic. Treat both as
+            # end-of-inventory / padding sentinels so we don't emit a
+            # spurious "Unknown device, please open an issue" WARNING
+            # and a phantom "Discovered Unknown" device entry.
+            if device_type_hex in ("FE", "FF"):
                 _LOGGER.debug(
-                    "Discovery skipped | type=inventory module=%s reason=empty_register",
+                    "Discovery skipped | type=inventory module=%s "
+                    "reason=empty_register raw_type=%s",
                     self._module_address,
+                    device_type_hex,
                 )
                 return result
 
@@ -2595,7 +2605,15 @@ class NikobusDiscovery:
             )
 
             # --- FIX: Skip deleted or uninitialized memory slots ---
-            if converted_address in ("FFFF", "FFFFFF"):
+            # Real Nikobus device addresses have a non-FF high byte
+            # (observed range: 0x05-0xC9 across product families). An
+            # address that normalizes to FFxxxx — including the
+            # specific FFFF / FFFFFF "all bits set" patterns — is
+            # padding from an empty PC-Link inventory slot, not a
+            # real module. Filter on the high-byte prefix so we catch
+            # variants like FF0CED (seen in the May 2026 log audit)
+            # in addition to the exact FFFF / FFFFFF matches.
+            if converted_address.startswith("FF"):
                 _LOGGER.debug(
                     "Discovery skipped | reason=deleted_or_empty_address address=%s type=%s",
                     converted_address,
@@ -2647,7 +2665,15 @@ class NikobusDiscovery:
             else:
                 result.modules.append(device_entry)
 
-            # Store device directly
+            # Some buttons — notably the RF-bus push buttons (05-302 /
+            # 05-304) — emit one inventory response per programmed
+            # channel, which used to log "Discovered Button - ..."
+            # 2-3 times for the same address within a single
+            # enumeration pass. The repeat is benign (the device entry
+            # is idempotent in ``discovered_devices``) but reads as a
+            # duplicate-discovery bug to anyone scanning the log.
+            # Check membership BEFORE storing so the first sight wins.
+            first_sight = converted_address not in self.discovered_devices
             self.discovered_devices[converted_address] = device_entry
 
             _LOGGER.debug(
@@ -2662,13 +2688,21 @@ class NikobusDiscovery:
                 payload_bytes[11:slice_end].hex().upper() if len(payload_bytes) >= slice_end else "",
             )
 
-            _LOGGER.info(
-                "Discovered %s - %s, Model: %s, at Address: %s",
-                category,
-                name,
-                model,
-                converted_address,
-            )
+            if first_sight:
+                _LOGGER.info(
+                    "Discovered %s - %s, Model: %s, at Address: %s",
+                    category,
+                    name,
+                    model,
+                    converted_address,
+                )
+            else:
+                _LOGGER.debug(
+                    "Discovery duplicate (already seen this pass) | "
+                    "category=%s address=%s",
+                    category,
+                    converted_address,
+                )
             return result
         except Exception:
             _LOGGER.error("Failed to parse Nikobus payload", exc_info=True)

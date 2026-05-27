@@ -1376,17 +1376,11 @@ def merge_linked_modules(button_data, command_mapping):
             any_updates = True
 
     # merge_linked_modules is called per decoded-record batch during
-    # discovery, so no-op runs are the common case. Keep the zero-change
-    # path at DEBUG; surface at INFO only when something actually changed.
-    if not any_updates:
-        _LOGGER.debug(
-            "Button store merge ran: changes=0 (updated_buttons=%d, "
-            "links_added=%d, outputs_added=%d)",
-            updated_buttons,
-            links_added,
-            outputs_added,
-        )
-    else:
+    # discovery, so no-op runs are the common case (~100+ per full
+    # scan on a typical install). Only log when something actually
+    # changed — the zero-change line carried no useful signal and just
+    # crowded the DEBUG stream.
+    if any_updates:
         _LOGGER.debug(
             "Button store merge summary: updated_buttons=%d, links_added=%d, "
             "outputs_added=%d",
