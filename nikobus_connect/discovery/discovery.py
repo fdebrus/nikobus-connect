@@ -3,6 +3,8 @@ import inspect
 import json
 import logging
 import os
+import re
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 from .base import (
@@ -539,6 +541,77 @@ def _is_inventory_trailer(message: str) -> bool:
     return all(ch == "F" for ch in body.upper())
 
 
+# ---------------------------------------------------------------------------
+# CF (Central Function) broadcast classification
+# ---------------------------------------------------------------------------
+#
+# Nikobus PC-Logic emits each user-defined Central Function on a
+# deterministic bus address when the CF is activated. Output modules
+# that participate in the CF carry normal link records pointing back
+# to that address. Two prefix patterns are known from a labelled-
+# dataset analysis (.nkb file paired with the bus scan log):
+#
+#   38 41 XX   — switch-pair CFs (Alles-uit, "AAN"/"UIT" pairs).
+#   38 80 XX   — roller/sunshade-pair CFs (OP/NEER pairs).
+#
+# In both patterns the trailing byte (``XX``) is the CF index assigned
+# by the PC software. The address is the "trigger" the user-facing
+# scene maps to: when HA sends this bus address (the same way a wall
+# button or remote would), every output module with a matching link
+# record fires in unison — single-frame atomic scene activation, no
+# round-trip-per-channel.
+
+_CF_BROADCAST_PATTERNS: tuple[tuple[re.Pattern, str], ...] = (
+    (re.compile(r"^3841[0-9A-F]{2}$"), "switch_pair"),
+    (re.compile(r"^3880[0-9A-F]{2}$"), "roller_pair"),
+)
+
+
+def _classify_cf_pattern(addr: str) -> str | None:
+    """Return the CF broadcast pattern label for ``addr`` or ``None``.
+
+    ``addr`` is a 6-hex bus address. Matching is exact (no substring,
+    no case sensitivity beyond the canonical uppercase). Returns one
+    of ``"switch_pair"`` / ``"roller_pair"`` when a known prefix
+    matches, else ``None`` — the address is then left in the unmatched
+    set for the existing remote-transmitter cluster pass to consider.
+    """
+    if not isinstance(addr, str):
+        return None
+    upper = addr.upper()
+    for pat, label in _CF_BROADCAST_PATTERNS:
+        if pat.match(upper):
+            return label
+    return None
+
+
+@dataclass(frozen=True, slots=True)
+class CFOutputMember:
+    """One output channel driven by a CF activation broadcast."""
+
+    module_address: str
+    channel: int
+    mode: str
+    t1: str | None = None
+    t2: str | None = None
+
+
+@dataclass
+class CFBroadcast:
+    """A classified CF activation broadcast and its target outputs.
+
+    Built by :meth:`NikobusDiscovery._classify_cf_broadcasts_from_unmatched`
+    once per discovery scan and surfaced on
+    ``NikobusDiscovery.discovered_cf_broadcasts``. Consumers (e.g. the
+    Home Assistant integration) treat each entry as a scene whose
+    activation = send the bus frame to ``bus_address``.
+    """
+
+    bus_address: str
+    pattern: str
+    outputs: list[CFOutputMember] = field(default_factory=list)
+
+
 class NikobusDiscovery:
     def __init__(
         self,
@@ -631,6 +704,10 @@ class NikobusDiscovery:
         # passthrough children for clusters above the threshold.
         self._accumulated_unmatched: set[str] = set()
         self._accumulated_command_mapping: dict = {}
+        # CF (Central Function) activation broadcasts classified from
+        # unmatched link-record source addresses. Populated at end of
+        # discovery by ``_classify_cf_broadcasts_from_unmatched``.
+        self.discovered_cf_broadcasts: dict[str, "CFBroadcast"] = {}
         self.reset_state()
 
     def reset_state(self, *, update_flags: bool = True):
@@ -654,6 +731,7 @@ class NikobusDiscovery:
         self._decoded_buffer: dict | None = None
         self._accumulated_unmatched = set()
         self._accumulated_command_mapping = {}
+        self.discovered_cf_broadcasts = {}
         if update_flags:
             self._coordinator.discovery_running = False
             self._coordinator.discovery_module = False
@@ -1298,6 +1376,122 @@ class NikobusDiscovery:
     # parent device.
     REMOTE_TRANSMITTER_PREFIX: str = "RT-"
 
+    def _classify_cf_broadcasts_from_unmatched(self) -> None:
+        """Pull CF activation broadcasts out of the unmatched accumulator.
+
+        PC-Logic emits each Central Function (CF) on a deterministic
+        bus address of the form ``38 41 XX`` (switch-pair CFs like
+        ``Alles-uit``) or ``38 80 XX`` (roller/sunshade-pair CFs).
+        Output modules carry normal link records pointing back to that
+        address, so the per-module decoders see them as link-record
+        SOURCES; ``_resolve_operation_point`` then fails because no
+        button exists at the CF broadcast address, and the merge layer
+        adds the address to ``_accumulated_unmatched``.
+
+        This method walks that set, classifies each entry matching the
+        known CF-broadcast shape, looks up its (module, channel, mode)
+        outputs from ``_accumulated_command_mapping``, builds a
+        :class:`CFBroadcast` record, and removes the address from the
+        unmatched set so the subsequent remote-transmitter cluster
+        pass doesn't mis-synthesise it as an RF transmitter.
+
+        Validated on a 36-CF residential install whose .nkb-derived
+        target set matches the bus link records 100 % for every
+        multi-output CF address. The classifier is conservative — it
+        only consumes addresses matching the two known prefix
+        patterns. Unknown patterns are left in the unmatched set for
+        the existing RT cluster path.
+        """
+
+        if not self._accumulated_unmatched:
+            return
+
+        consumed: set[str] = set()
+        found: dict[str, CFBroadcast] = {}
+
+        for addr in sorted(self._accumulated_unmatched):
+            pattern = _classify_cf_pattern(addr)
+            if pattern is None:
+                continue
+            outputs = self._extract_cf_outputs(addr)
+            if not outputs:
+                # Address matches the pattern shape but no link record
+                # targets it — keep in unmatched, leave classification
+                # to the RT path or to manual triage.
+                continue
+            found[addr] = CFBroadcast(
+                bus_address=addr, pattern=pattern, outputs=outputs
+            )
+            consumed.add(addr)
+
+        if not found:
+            return
+
+        self.discovered_cf_broadcasts.update(found)
+        self._accumulated_unmatched -= consumed
+
+        for addr, cf in sorted(found.items()):
+            _LOGGER.info(
+                "CF activation broadcast | address=%s pattern=%s "
+                "outputs=%d sample_members=%s",
+                addr,
+                cf.pattern,
+                len(cf.outputs),
+                [(o.module_address, o.channel, o.mode) for o in cf.outputs[:5]],
+            )
+        _LOGGER.info(
+            "CF classification | total_broadcasts=%d consumed_unmatched=%d "
+            "remaining_unmatched=%d",
+            len(found),
+            len(consumed),
+            len(self._accumulated_unmatched),
+        )
+
+    def _extract_cf_outputs(self, addr: str) -> list["CFOutputMember"]:
+        """Pull (module, channel, mode) members for a CF broadcast
+        address out of the accumulated command mapping.
+
+        The command-mapping key is a ``(push_button_address, key_raw,
+        ir_code)`` tuple; the CF address sits in the first slot.
+        Multiple keys may share the same push address (different keys
+        of the source), and outputs may be emitted multiple times
+        across module re-scans — we dedup on the ``(module, channel,
+        mode)`` tuple. Output order is preserved (insertion order of
+        first sighting).
+        """
+
+        upper = addr.upper()
+        seen: set[tuple[str, int, str]] = set()
+        members: list[CFOutputMember] = []
+        for mapping_key, outputs in self._accumulated_command_mapping.items():
+            if isinstance(mapping_key, tuple) and mapping_key:
+                push_addr = mapping_key[0]
+            else:
+                push_addr = mapping_key
+            if not isinstance(push_addr, str) or push_addr.upper() != upper:
+                continue
+            for output in outputs:
+                if not isinstance(output, dict):
+                    continue
+                mod = output.get("module_address")
+                ch = output.get("channel")
+                mode = output.get("mode")
+                if not (isinstance(mod, str) and isinstance(ch, int)
+                        and isinstance(mode, str)):
+                    continue
+                key = (mod.upper(), ch, mode)
+                if key in seen:
+                    continue
+                seen.add(key)
+                members.append(CFOutputMember(
+                    module_address=mod.upper(),
+                    channel=ch,
+                    mode=mode,
+                    t1=output.get("t1") if isinstance(output.get("t1"), str) else None,
+                    t2=output.get("t2") if isinstance(output.get("t2"), str) else None,
+                ))
+        return members
+
     def _synthesize_remote_transmitters_from_unmatched(self) -> None:
         """Synthesise virtual transmitters from clusters of unmatched
         button references collected across module scans.
@@ -1624,6 +1818,15 @@ class NikobusDiscovery:
         # cluster meeting the threshold, and re-run the merges so
         # the previously-skipped link records resolve.
         if self._button_data is not None and self._accumulated_unmatched:
+            # CF activation broadcasts (PC-Logic-emitted ``38xxxx``
+            # addresses) come through link-record decoding as unmatched
+            # source addresses — the merge layer drops them because no
+            # button at that address exists. Classify them BEFORE the
+            # remote-transmitter cluster pass so they don't get
+            # mis-synthesised as RF transmitters: each ``38 41 XX`` /
+            # ``38 80 XX`` address is a single CF, not 8+ siblings of
+            # one remote.
+            self._classify_cf_broadcasts_from_unmatched()
             pre_synth_count = len(self.discovered_devices)
             self._synthesize_remote_transmitters_from_unmatched()
             synthesised = len(self.discovered_devices) - pre_synth_count
