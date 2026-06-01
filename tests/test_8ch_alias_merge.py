@@ -67,29 +67,36 @@ def _eight_channel_button() -> dict:
     }
 
 
-def test_canonical_plus_one_resolves_to_8ch_physical_button():
-    """The +1 alias of an 8-ch physical address must resolve back to
-    the physical button. ``1D3253`` decoded from a roller scan is the
-    raw form for keys 4-7 of physical button ``1D3252``."""
+def test_canonical_plus_one_resolves_to_8ch_1x_half():
+    """The +1 sibling of an 8-ch physical address always resolves back
+    to the physical button's ``1X`` half (1A/1B/1C/1D).
+
+    An 8-control-point button occupies two consecutive addresses: the
+    even base ``N`` carries the ``2X`` half and the odd sibling ``N+1``
+    carries the ``1X`` half. The sibling's records are therefore ALWAYS
+    the 1X half, regardless of which raw key index the firmware encoded
+    them with — two encodings are observed in the wild:
+      * keys 4-7 (2026-05-04 install ``1D3252``/``1D3253``), and
+      * keys 0-3 (fdebrus PC-Link install, sibling ``12932B``).
+    Both normalise to the same four 1X labels via ``(key_raw % 4) + 4``.
+    """
 
     buttons = _eight_channel_button()
     bus_to_op = _build_bus_to_op_index(buttons)
     ir_base = _build_ir_base_lookup(buttons)
 
-    # KEY_MAPPING_MODULE[8] is {0:"0", 1:"8", 2:"4", 3:"C",
-    #                          4:"2", 5:"A", 6:"6", 7:"E"}
-    # KEY_MAPPING[8] inverse: 1A↔A, 1B↔E, 1C↔2, 1D↔6, 2A↔8, 2B↔C, 2C↔0, 2D↔4
-    # _key_raw_to_label(8, key_raw) finds the label whose KEY_MAPPING
-    # entry matches KEY_MAPPING_MODULE[8][key_raw].
-    expected_labels = {0: "2C", 1: "2A", 2: "2D", 3: "2B",
-                       4: "1C", 5: "1A", 6: "1D", 7: "1B"}
+    # raw 4..7 = 1C/1A/1D/1B; raw 0..3 normalise to the same set.
+    expected_labels = {
+        4: "1C", 5: "1A", 6: "1D", 7: "1B",
+        0: "1C", 1: "1A", 2: "1D", 3: "1B",
+    }
 
     for key_raw, expected_label in expected_labels.items():
         resolved = _resolve_operation_point(
             "1D3253", key_raw, buttons, bus_to_op, ir_base
         )
         assert resolved is not None, (
-            f"key_raw={key_raw}: +1 alias 1D3253 must fold back to physical 1D3252"
+            f"key_raw={key_raw}: +1 sibling 1D3253 must fold back to physical 1D3252"
         )
         phys_addr, key_label, op_point = resolved
         assert phys_addr == "1D3252"
@@ -154,6 +161,57 @@ def test_2ch_button_plus_one_does_not_fold():
             )
             is None
         )
+
+
+def test_sibling_keys_0_to_3_resolve_to_1x_half():
+    """Real-world regression (fdebrus PC-Link install, 12 eight-buttons).
+
+    Here the firmware encodes the ``1X`` half on the ``N+1`` sibling at
+    raw key indices 0-3 (not 4-7). Each must fold back to the parent's
+    1X op-points. Before the ``(key_raw % 4) + 4`` normalisation these
+    collided with the 2X labels and the 1X half stayed unlinked, so all
+    twelve 8-buttons linked only their 2A/2B/2C/2D keys.
+    """
+
+    buttons = {
+        "12932A": {
+            "type": "Push button, 8 control buttons (graphite)",
+            "model": "4*-078",
+            "channels": 8,
+            "operation_points": {
+                "1A": {"bus_address": "B53252"},
+                "1B": {"bus_address": "F53252"},
+                "1C": {"bus_address": "353252"},
+                "1D": {"bus_address": "753252"},
+                "2A": {"bus_address": "953252"},
+                "2B": {"bus_address": "D53252"},
+                "2C": {"bus_address": "153252"},
+                "2D": {"bus_address": "553252"},
+            },
+        }
+    }
+    bus_to_op = _build_bus_to_op_index(buttons)
+    ir_base = _build_ir_base_lookup(buttons)
+
+    # Sibling 12932B keys 0-3 → the parent's 1X half (1C/1A/1D/1B).
+    expected = {0: "1C", 1: "1A", 2: "1D", 3: "1B"}
+    for key_raw, label in expected.items():
+        resolved = _resolve_operation_point(
+            "12932B", key_raw, buttons, bus_to_op, ir_base
+        )
+        assert resolved is not None, f"sibling key_raw={key_raw} must resolve"
+        phys_addr, key_label, _op = resolved
+        assert phys_addr == "12932A"
+        assert key_label == label
+
+    # The parent (even base) still owns the 2X half.
+    parent = {0: "2C", 1: "2A", 2: "2D", 3: "2B"}
+    for key_raw, label in parent.items():
+        resolved = _resolve_operation_point(
+            "12932A", key_raw, buttons, bus_to_op, ir_base
+        )
+        assert resolved is not None
+        assert resolved[1] == label
 
 
 def test_direct_physical_match_takes_precedence_over_alias_fallback():

@@ -961,15 +961,24 @@ def _resolve_operation_point(
             if isinstance(op_point, dict):
                 return normalized, key_label, op_point
 
-    # 1a) 8-channel +1 alias fallback. Link records on dimmer / switch /
-    # roller modules encode the button address as ``physical + 1`` for
-    # raw key indices 4-7 of an 8-channel button. The decoder accepts
-    # those via ``is_known_button_canonical``'s sibling check, but the
-    # decoded ``button_address`` (and the fallback ``push_button_address``
-    # in ``add_to_command_mapping`` when the channel-count lookup
-    # returned None) is the +1 form. ``buttons`` is keyed by physical
-    # address, so the direct match above misses; resolve to the
-    # canonical-1 sibling when it's an 8-channel button.
+    # 1a) 8-channel +1 alias fallback. An 8-control-point button occupies
+    # TWO consecutive bus addresses: the even base ``N`` carries the
+    # ``2X`` half (2A/2B/2C/2D) and the odd sibling ``N+1`` carries the
+    # ``1X`` half (1A/1B/1C/1D). The button store only holds the physical
+    # at ``N`` (with all 8 op-points), so output-module link records
+    # decoded under ``N+1`` miss the direct match above. They belong to
+    # the ``N`` physical's ``1X`` half regardless of which raw key index
+    # the firmware encoded them with — two encodings have been observed:
+    #   * keys 4-7 (2026-05-04 install ``1D3252``/``1D3253`` on roller
+    #     5538), and
+    #   * keys 0-3 (fdebrus PC-Link install, 12 eight-buttons — e.g.
+    #     sibling ``12932B`` key0→353252=1C, key1→B53252=1A on parent
+    #     ``12932A``).
+    # Both map to the same four ``1X`` labels (raw 4..7 = 1C/1A/1D/1B),
+    # so normalise the sibling key into the ``1X`` range with
+    # ``(key_raw % 4) + 4``. (Path 1 above already claimed ``N+1`` if it
+    # were a real button in its own right, so here it is only ever the
+    # sibling — its records are never the ``2X`` half.)
     try:
         sibling_minus1 = f"{(int(normalized, 16) - 1) & 0xFFFFFF:06X}"
     except ValueError:
@@ -980,7 +989,15 @@ def _resolve_operation_point(
             isinstance(candidate, dict)
             and candidate.get("channels") == 8
         ):
-            key_label = _key_raw_to_label(8, key_raw)
+            try:
+                sibling_key_raw = (int(key_raw) % 4) + 4
+            except (TypeError, ValueError):
+                sibling_key_raw = None
+            key_label = (
+                _key_raw_to_label(8, sibling_key_raw)
+                if sibling_key_raw is not None
+                else None
+            )
             if key_label:
                 op_point = (candidate.get("operation_points") or {}).get(
                     key_label
