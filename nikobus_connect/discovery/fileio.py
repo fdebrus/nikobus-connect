@@ -1033,6 +1033,66 @@ def _resolve_operation_point(
                     if isinstance(op_point, dict):
                         return base_addr, key_label, op_point
 
+    # 4) convert() fallback for no-PC-Link inventories. PC-Link keys the
+    # button store by the RAW canonical address the register scan also
+    # decodes, so path 1 matches directly. But a store built from manual
+    # config files (consolidated #N op-point addresses) keys each button
+    # by its ``convert_nikobus_address`` form instead — so the scan's raw
+    # address (e.g. ``1CC09C``) misses every lookup above even though the
+    # button IS present under its converted key (``0E40CE``). Bridge the
+    # two representations: convert the decoded address and retry the
+    # physical match, including the 8-channel ``+1`` sibling (whose
+    # converted form is the ``1X``-half physical). Verified on a real
+    # no-PC-Link install (Jan Sennesael): every decoded scan address
+    # convert()s exactly onto a store physical key.
+    if len(normalized) == 6:
+        from .protocol import convert_nikobus_address  # local: avoid cycle
+
+        try:
+            converted = _normalize_address(convert_nikobus_address(normalized))
+        except Exception:  # pragma: no cover - defensive
+            converted = ""
+        if converted and converted != normalized:
+            physical = buttons.get(converted)
+            if isinstance(physical, dict):
+                key_label = _key_raw_to_label(physical.get("channels"), key_raw)
+                if key_label:
+                    op_point = (physical.get("operation_points") or {}).get(
+                        key_label
+                    )
+                    if isinstance(op_point, dict):
+                        return converted, key_label, op_point
+
+            # 8-channel +1 sibling: the raw decoded address is the odd
+            # ``N+1`` carrying the 1X half. Its converted form is the
+            # 1X-half physical key; normalise the sibling key into the
+            # 1X range (see path 1a).
+            try:
+                sib_raw = f"{(int(normalized, 16) - 1) & 0xFFFFFF:06X}"
+                sib_converted = _normalize_address(
+                    convert_nikobus_address(sib_raw)
+                )
+            except Exception:  # pragma: no cover - defensive
+                sib_converted = ""
+            if sib_converted:
+                candidate = buttons.get(sib_converted)
+                if isinstance(candidate, dict) and candidate.get("channels") == 8:
+                    try:
+                        sib_key = (int(key_raw) % 4) + 4
+                    except (TypeError, ValueError):
+                        sib_key = None
+                    key_label = (
+                        _key_raw_to_label(8, sib_key)
+                        if sib_key is not None
+                        else None
+                    )
+                    if key_label:
+                        op_point = (
+                            candidate.get("operation_points") or {}
+                        ).get(key_label)
+                        if isinstance(op_point, dict):
+                            return sib_converted, key_label, op_point
+
     return None
 
 
