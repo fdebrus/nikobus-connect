@@ -623,6 +623,16 @@ def merge_discovered_buttons(
             pc_logic_mapping = PC_LOGIC_KEY_MAPPING.get(num_channels)
             if pc_logic_mapping is not None:
                 mapping = pc_logic_mapping
+        else:
+            # Device-type-specific override: some products share a
+            # channel count with others but emit their keys at different
+            # first-nibble offsets (e.g. 0x10 / 4*-082 uses +0 / +4, not
+            # the +8 / +C of the 05-060 / 05-056 2-channel devices).
+            from .mapping import DEVICE_TYPE_KEY_MAPPING
+            device_type = str(device.get("device_type") or "").upper()
+            dt_mapping = DEVICE_TYPE_KEY_MAPPING.get(device_type)
+            if dt_mapping is not None:
+                mapping = dt_mapping
         converted_address = convert_nikobus_address(physical_addr)
         try:
             original_nibble = int(converted_address[0], 16)

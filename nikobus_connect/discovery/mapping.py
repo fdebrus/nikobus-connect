@@ -467,6 +467,27 @@ PC_LOGIC_KEY_MAPPING = {
 }
 
 
+# Device-type-specific op-point key mappings that override the
+# channel-count-keyed ``KEY_MAPPING`` default. Needed when two products
+# share a channel count but emit their keys at DIFFERENT first-nibble
+# offsets.
+#
+# 0x10 (4*-082, 2 control buttons): hardware capture (fdebrus install,
+# 10 units) shows its two faces fire at first-nibble offsets +0 / +4 —
+# the same layout as keys 1C/1D of the 4-button — NOT the +8 / +C used
+# by the other 2-channel devices (05-060 0x04, 05-056 0x21 interface).
+# Confirmed against the user's own legacy descriptions: physical 130078
+# → faces 078032 (nibble 0) and 478032 (nibble 4). Without this override
+# 0x10 op-points were generated at the wrong addresses (8/C) and its
+# link records (decoded at key indices 0/2) never matched.
+#
+# Keyed by the on-bus device-type byte; ``merge_discovered_buttons``
+# consults this before falling back to ``KEY_MAPPING[num_channels]``.
+DEVICE_TYPE_KEY_MAPPING = {
+    "10": {"1A": "0", "1B": "4"},
+}
+
+
 # Niko 05-312 Easywave 52-key hand-held remote.
 #
 # Unlike the 1/2/4/8-channel wall buttons (where each key's bus
@@ -540,7 +561,15 @@ KEY_MAPPING_FIRST_BYTE = {
 
 KEY_MAPPING_MODULE = {
     1: {1: "8"},
-    2: {1: "8", 3: "C"},
+    # 2-channel devices come in two key-index families that the link
+    # resolver must both handle: the 05-060 (0x04) / 05-056 (0x21)
+    # interface emit keys 1/3 (nibbles 8/C), while the 4*-082 (0x10)
+    # 2-button emits keys 0/2 (nibbles 0/4 — same slots as a 4-button's
+    # 1C/1D). The resolver only sees the channel count, not the device
+    # type, so this table carries ALL FOUR indices. That is safe because
+    # a physical device only ever emits its own two key indices; the
+    # extra entries are never hit for a device that doesn't use them.
+    2: {0: "0", 1: "8", 2: "4", 3: "C"},
     4: {0: "0", 1: "8", 2: "4", 3: "C"},
     8: {0: "0", 1: "8", 2: "4", 3: "C", 4: "2", 5: "A", 6: "6", 7: "E"},
 }
