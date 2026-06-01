@@ -162,6 +162,32 @@ DEVICE_TYPES = {
         "Name": "Push button, 8 control buttons (graphite)",
         "VendorRef": "S_DB_KNOP_8_GRAFIET",
     },
+    # 0x10 / 0x11 — the 2- and 4-control-point siblings of the 0x12
+    # 8-button (4*-078). Confirmed from a real install (Nikobus-HA user
+    # fdebrus): the original 20-year-old hardware order listed
+    # ``47-082`` (2 buttons), ``47-084`` (4 buttons) and ``47-088``
+    # (8 buttons), in quantities 9 / 10 / 11. A PC-Link inventory on
+    # that install reported exactly 9 devices of device-type 0x10 and
+    # 10 of 0x11 (the 8-button 47-088 reports as the already-catalogued
+    # 0x12). Per-key decode evidence corroborates the channel counts:
+    # 0x10 records only ever decode keys 0/2 (a 2-point button), 0x11
+    # decodes keys 0..3 (a 4-point button). Without these entries both
+    # variants fell through as ``Category="Unknown"`` and were dropped
+    # by ``merge_discovered_buttons``.
+    "10": {
+        "Category": "Button",
+        "Model": "4*-082",
+        "Channels": 2,
+        "Name": "Bus push button, 2 control buttons",
+        "VendorRef": "S_DB_BUSDRUKKNOP_2",
+    },
+    "11": {
+        "Category": "Button",
+        "Model": "4*-084",
+        "Channels": 4,
+        "Name": "Bus push button, 4 control buttons",
+        "VendorRef": "S_DB_BUSDRUKKNOP_4",
+    },
     # ------------------------------------------------------------------
     # Bus push buttons — feedback-LED variants (graphite series).
     # ------------------------------------------------------------------

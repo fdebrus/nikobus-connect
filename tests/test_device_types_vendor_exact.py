@@ -137,6 +137,17 @@ def test_specific_product_mdb_anchors() -> None:
     assert DEVICE_TYPES["12"]["Model"] == "4*-078"
     assert DEVICE_TYPES["12"]["VendorRef"] == "S_DB_KNOP_8_GRAFIET"
 
+    # 0x10 / 0x11 — the 2- and 4-control-point siblings of the 0x12
+    # 8-button (47-08x series). Catalogued from a real install where the
+    # original hardware order was 9× 47-082 / 10× 47-084 / 11× 47-088
+    # and PC-Link inventory reported exactly 9× 0x10 and 10× 0x11.
+    assert DEVICE_TYPES["10"]["Model"] == "4*-082"
+    assert DEVICE_TYPES["10"]["Channels"] == 2
+    assert DEVICE_TYPES["10"]["VendorRef"] == "S_DB_BUSDRUKKNOP_2"
+    assert DEVICE_TYPES["11"]["Model"] == "4*-084"
+    assert DEVICE_TYPES["11"]["Channels"] == 4
+    assert DEVICE_TYPES["11"]["VendorRef"] == "S_DB_BUSDRUKKNOP_4"
+
     # 0x1F / 0x23 — consumer-facing model is primary (Niko's product
     # pages use these codes); the technical wildcard reference from
     # product.mdb (``05-301-4*`` / ``05-303-4*``) sits in ModelAlt.
