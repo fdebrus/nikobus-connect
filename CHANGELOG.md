@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.20.8
+
+**DIAGNOSTIC build — not for release.** Widen CF classification to a
+catch-all so the discovery log surfaces *every* ``38 XX XX`` CF-space
+address an output-module link record actually points at, letting us
+learn this install's real CF family layout from the log.
+
+Added a third, lowest-priority pattern ``^38[0-9A-F]{4}$`` labelled
+``cf_other``. The known specific labels (``switch_pair`` 0x3840..0x3847,
+``roller_pair`` 0x3880) still win where they match; anything else in the
+0x38 space now falls through to ``cf_other`` instead of being dropped.
+Still safe in principle because the classifier only emits/logs a CF when
+real module link records target the address — but this is intentionally
+over-broad for log inspection and must be narrowed before any release.
+
 ## 0.20.7
 
 Recognise the full switch-CF family range when classifying Central

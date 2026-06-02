@@ -44,10 +44,20 @@ class TestCFPatternMatcher(unittest.TestCase):
                 _classify_cf_pattern(addr), "switch_pair", addr
             )
 
-    def test_switch_pair_rejects_out_of_range_families(self):
-        """0x3848+ and 0x383F- are outside the proven switch-CF grid."""
-        self.assertIsNone(_classify_cf_pattern("384800"))
-        self.assertIsNone(_classify_cf_pattern("383F00"))
+    def test_out_of_range_families_fall_through_to_cf_other(self):
+        """DIAGNOSTIC: 0x3848+ and 0x383F- are outside the proven
+        switch-CF grid, so they are NOT labelled switch_pair — but the
+        catch-all still classifies them as cf_other so the log captures
+        every 38xx address the modules reference."""
+        self.assertEqual(_classify_cf_pattern("384800"), "cf_other")
+        self.assertEqual(_classify_cf_pattern("383F00"), "cf_other")
+
+    def test_catch_all_classifies_any_38_address(self):
+        """DIAGNOSTIC catch-all: any 38xxxx that isn't switch/roller
+        classifies as cf_other."""
+        self.assertEqual(_classify_cf_pattern("38FFCA"), "cf_other")
+        self.assertEqual(_classify_cf_pattern("3800CA"), "cf_other")
+        self.assertEqual(_classify_cf_pattern("388800"), "cf_other")
 
     def test_roller_pair_prefix_is_recognised(self):
         self.assertEqual(_classify_cf_pattern("3880CA"), "roller_pair")
@@ -59,13 +69,10 @@ class TestCFPatternMatcher(unittest.TestCase):
         self.assertEqual(_classify_cf_pattern("3841ab"), "switch_pair")
 
     def test_non_cf_addresses_return_none(self):
-        # Real wall-button bus address
+        # Real wall-button bus address (not 38xx)
         self.assertIsNone(_classify_cf_pattern("1C4AA0"))
-        # 52-key Easywave remote base
+        # 52-key Easywave remote base (not 38xx)
         self.assertIsNone(_classify_cf_pattern("0E31C0"))
-        # Same 38xx prefix but wrong second byte
-        self.assertIsNone(_classify_cf_pattern("38FFCA"))
-        self.assertIsNone(_classify_cf_pattern("3800CA"))
         # Too short / too long
         self.assertIsNone(_classify_cf_pattern("3880C"))
         self.assertIsNone(_classify_cf_pattern("3880CAB"))

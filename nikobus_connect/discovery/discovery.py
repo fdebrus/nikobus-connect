@@ -578,9 +578,19 @@ def _is_inventory_trailer(message: str) -> bool:
 # the "in use vs empty" discrimination, sourced entirely from the
 # module link tables (no user input, no .nkb project file).
 
+# DIAGNOSTIC WIDENING (not for release): the final catch-all classifies
+# ANY ``38 XX XX`` bus address as a CF so that the discovery log surfaces
+# every CF-space address an output-module link record actually points at,
+# letting us learn this install's real family layout from the log. It is
+# ordered LAST so the known specific labels (switch/roller) still win
+# where they match. This stays safe because
+# ``_classify_cf_broadcasts_from_unmatched`` only ever emits / logs a CF
+# when real module link records target the address (see
+# ``_extract_cf_outputs``) — empty CF-space slots are never surfaced.
 _CF_BROADCAST_PATTERNS: tuple[tuple[re.Pattern, str], ...] = (
     (re.compile(r"^384[0-7][0-9A-F]{2}$"), "switch_pair"),
     (re.compile(r"^3880[0-9A-F]{2}$"), "roller_pair"),
+    (re.compile(r"^38[0-9A-F]{4}$"), "cf_other"),
 )
 
 
@@ -590,8 +600,11 @@ def _classify_cf_pattern(addr: str) -> str | None:
     ``addr`` is a 6-hex bus address. Matching is exact (no substring,
     no case sensitivity beyond the canonical uppercase). Returns one
     of ``"switch_pair"`` / ``"roller_pair"`` when a known prefix
-    matches, else ``None`` — the address is then left in the unmatched
-    set for the existing remote-transmitter cluster pass to consider.
+    matches. DIAGNOSTIC: any other ``38 XX XX`` address falls through to
+    the ``"cf_other"`` catch-all so the log captures the full CF-space
+    layout this install actually uses. Non-``38`` addresses return
+    ``None`` and are left in the unmatched set for the existing
+    remote-transmitter cluster pass to consider.
     """
     if not isinstance(addr, str):
         return None
