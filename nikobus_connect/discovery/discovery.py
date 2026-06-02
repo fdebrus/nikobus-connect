@@ -615,6 +615,43 @@ def _classify_cf_pattern(addr: str) -> str | None:
     return None
 
 
+# Output-mode markers that identify a link record as a Central Function /
+# light-scene member. When a wall button / IR input is connected to outputs
+# in PC-software mode "MCF (Activate light scene / Central Function)", the
+# output modules store the member records in a light-scene / preset output
+# mode. Those mode strings are the only on-bus fingerprint of an MCF link:
+#
+#   dimmer : "M03 (Light scene on/off)", "M04 (Light scene on)",
+#            "M11 (Preset on/off)",      "M12 (Preset on)"
+#   switch : "M14 (Light scene on)",     "M15 (Light scene on / off)"
+#
+# (Rollers have no light-scene mode of their own; a roller member of a CF
+# carries a plain Open/Close mode and is pulled in by sharing the CF's
+# source address — see ``_classify_cf_scenes_from_command_mapping``.)
+#
+# Validated against a real install (Nikobus-HA, "waterloo"): a serial trace
+# of the PC software writing CF6 "Scene - Dinner" showed the dimmer member
+# stored as M04/M12 while the switch/shutter members stored plain M02. Across
+# the whole install these markers appeared for exactly the three Central
+# Functions and zero ordinary buttons.
+_CF_SCENE_MODE_MARKERS: tuple[str, ...] = ("light scene", "preset")
+
+
+def _is_cf_scene_mode(mode: object) -> bool:
+    """True if ``mode`` is a light-scene / preset output mode string.
+
+    Matching is substring + case-insensitive against
+    ``_CF_SCENE_MODE_MARKERS`` so it survives the module-type-specific
+    mode wording ("Light scene on", "Light scene on / off",
+    "Preset on", "Preset on/off") without enumerating every variant.
+    """
+
+    return isinstance(mode, str) and any(
+        marker in mode.lower() for marker in _CF_SCENE_MODE_MARKERS
+    )
+
+
+
 @dataclass(frozen=True, slots=True)
 class CFOutputMember:
     """One output channel driven by a CF activation broadcast."""
@@ -1523,6 +1560,109 @@ class NikobusDiscovery:
                 ))
         return members
 
+    def _classify_cf_scenes_from_command_mapping(self) -> None:
+        """Classify IR/button-sourced light scenes (Central Functions).
+
+        Complements :meth:`_classify_cf_broadcasts_from_unmatched`,
+        which handles PC-Logic CFs that broadcast on a ``38xx`` address
+        with no real button behind them. This method handles the other
+        CF mechanism: a wall button or IR input connected to its
+        outputs in PC-software mode "MCF (Activate light scene /
+        Central Function)". There the source IS a valid button address
+        (so it never lands in the unmatched set), but the output
+        modules store the member records in a light-scene / preset
+        mode.
+
+        Algorithm — purely from ``_accumulated_command_mapping``:
+
+        1. Group every decoded output by its source ``button_address``
+           (the bus address that triggers it, e.g. an IR channel like
+           ``0D1C9E`` = "30B").
+        2. A source is a Central Function iff **any** of its members
+           uses a light-scene / preset mode (``_is_cf_scene_mode``).
+        3. The CF's members = **all** outputs sharing that source —
+           including roller/switch members stored in plain
+           Open/Close/On modes, which belong to the scene by virtue of
+           sharing its trigger.
+
+        Each detected CF is surfaced as a :class:`CFBroadcast` (pattern
+        ``"light_scene"``) on ``discovered_cf_broadcasts`` so the same
+        consumer path the ``38xx`` CFs use picks it up. Addresses
+        already classified by the unmatched path are left untouched.
+        """
+
+        if not self._accumulated_command_mapping:
+            return
+
+        by_source: dict[str, list[CFOutputMember]] = {}
+        seen: dict[str, set[tuple[str, int, str]]] = {}
+        scene_sources: set[str] = set()
+
+        for outputs in self._accumulated_command_mapping.values():
+            if not isinstance(outputs, list):
+                continue
+            for output in outputs:
+                if not isinstance(output, dict):
+                    continue
+                src = output.get("button_address")
+                mod = output.get("module_address")
+                ch = output.get("channel")
+                mode = output.get("mode")
+                if not (
+                    isinstance(src, str)
+                    and isinstance(mod, str)
+                    and isinstance(ch, int)
+                    and isinstance(mode, str)
+                ):
+                    continue
+                src = src.upper()
+                dedupe = (mod.upper(), ch, mode)
+                bucket_seen = seen.setdefault(src, set())
+                if dedupe in bucket_seen:
+                    continue
+                bucket_seen.add(dedupe)
+                by_source.setdefault(src, []).append(
+                    CFOutputMember(
+                        module_address=mod.upper(),
+                        channel=ch,
+                        mode=mode,
+                        t1=output.get("t1") if isinstance(output.get("t1"), str) else None,
+                        t2=output.get("t2") if isinstance(output.get("t2"), str) else None,
+                    )
+                )
+                if _is_cf_scene_mode(mode):
+                    scene_sources.add(src)
+
+        found: dict[str, CFBroadcast] = {}
+        for src in scene_sources:
+            # Don't shadow a 38xx CF already classified from the
+            # unmatched accumulator (different mechanism, same address
+            # space is impossible here anyway, but keep it explicit).
+            if src in self.discovered_cf_broadcasts:
+                continue
+            members = by_source.get(src)
+            if not members:
+                continue
+            found[src] = CFBroadcast(
+                bus_address=src, pattern="light_scene", outputs=members
+            )
+
+        if not found:
+            return
+
+        self.discovered_cf_broadcasts.update(found)
+
+        for addr, cf in sorted(found.items()):
+            _LOGGER.info(
+                "CF light-scene | source=%s outputs=%d sample_members=%s",
+                addr,
+                len(cf.outputs),
+                [(o.module_address, o.channel, o.mode) for o in cf.outputs[:5]],
+            )
+        _LOGGER.info(
+            "CF light-scene classification | total_scenes=%d", len(found)
+        )
+
     def _synthesize_remote_transmitters_from_unmatched(self) -> None:
         """Synthesise virtual transmitters from clusters of unmatched
         button references collected across module scans.
@@ -1858,6 +1998,11 @@ class NikobusDiscovery:
             # ``38 80 XX`` address is a single CF, not 8+ siblings of
             # one remote.
             self._classify_cf_broadcasts_from_unmatched()
+            # Light-scene CFs sit on real button/IR source addresses, so
+            # they never reach the unmatched set. Classify them straight
+            # from the command mapping by their light-scene/preset member
+            # mode (the on-bus fingerprint of an "MCF" link).
+            self._classify_cf_scenes_from_command_mapping()
             pre_synth_count = len(self.discovered_devices)
             self._synthesize_remote_transmitters_from_unmatched()
             synthesised = len(self.discovered_devices) - pre_synth_count
