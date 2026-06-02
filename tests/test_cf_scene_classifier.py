@@ -20,8 +20,11 @@ member plus a switch and a shutter member in plain M02.
 
 from __future__ import annotations
 
+import asyncio
 import unittest
+from unittest.mock import AsyncMock, MagicMock, patch
 
+from nikobus_connect.discovery import discovery as discovery_mod
 from nikobus_connect.discovery.discovery import (
     CFBroadcast,
     NikobusDiscovery,
@@ -160,6 +163,44 @@ class TestSceneClassifier(unittest.TestCase):
         d = _bare_discovery()
         d._classify_cf_scenes_from_command_mapping()
         self.assertEqual(d.discovered_cf_broadcasts, {})
+
+
+class TestCompleteRunInvokesSceneClassifier(unittest.TestCase):
+    """Placement regression: light-scene CFs sit on valid button
+    addresses, so an install can finish discovery with an EMPTY
+    ``_accumulated_unmatched``. The scene classifier must still run —
+    it must NOT be gated behind the unmatched-only block that handles
+    38xx broadcasts / RF cluster synthesis."""
+
+    def _run(self, coro):
+        return asyncio.new_event_loop().run_until_complete(coro)
+
+    def test_scene_classified_with_empty_unmatched(self):
+        d = NikobusDiscovery.__new__(NikobusDiscovery)
+        d._accumulated_command_mapping = {
+            ("0D1C9E", 3, None): [
+                _out("0D1C9E", "0E6C", 1, "M12 (Preset on)"),
+                _out("0D1C9E", "8394", 1, "M02 (Open)"),
+            ],
+        }
+        d._accumulated_unmatched = set()  # <- the case the old guard skipped
+        d.discovered_cf_broadcasts = {}
+        d._button_data = {}
+        d.discovered_devices = {}
+        d._coordinator = MagicMock()
+        d._cancel_inventory_timeout = MagicMock()
+        d._emit_progress = AsyncMock()
+        d.reset_state = MagicMock()
+
+        with patch.object(
+            discovery_mod, "_notify_discovery_finished", new=AsyncMock()
+        ):
+            self._run(d._complete_discovery_run(None))
+
+        self.assertIn("0D1C9E", d.discovered_cf_broadcasts)
+        self.assertEqual(
+            d.discovered_cf_broadcasts["0D1C9E"].pattern, "light_scene"
+        )
 
 
 if __name__ == "__main__":
