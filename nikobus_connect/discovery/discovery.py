@@ -551,7 +551,8 @@ def _is_inventory_trailer(message: str) -> bool:
 # to that address. Two prefix patterns are known from a labelled-
 # dataset analysis (.nkb file paired with the bus scan log):
 #
-#   38 41 XX   — switch-pair CFs (Alles-uit, "AAN"/"UIT" pairs).
+#   38 4Y XX   — switch-pair CFs (Alles-uit, "AAN"/"UIT" pairs),
+#                family Y ∈ 0..7.
 #   38 80 XX   — roller/sunshade-pair CFs (OP/NEER pairs).
 #
 # In both patterns the trailing byte (``XX``) is the CF index assigned
@@ -560,9 +561,25 @@ def _is_inventory_trailer(message: str) -> bool:
 # button or remote would), every output module with a matching link
 # record fires in unison — single-frame atomic scene activation, no
 # round-trip-per-channel.
+#
+# Switch-pair family range (0x3840..0x3847): the PC-Logic stores a CF
+# trigger-address enumeration (function 0x10, sub=0x02) as a grid of
+# ``<prefix> 87 00 00 <index>`` units, prefix ∈ {00,20,…,E0}. Decoding
+# it against ``convert_nikobus_address`` lands each prefix exactly on
+# one switch-CF family:
+#   convert(008700)=003840  convert(208700)=003841  …  convert(E08700)=003847
+# So switch CFs span the whole 0x3840..0x3847 space, not just 0x3841.
+# An earlier build only recognised 0x3841, which silently dropped every
+# real CF programmed on the other seven families. Broadening the pattern
+# is safe: ``_classify_cf_broadcasts_from_unmatched`` only ever emits a
+# CF when actual output-module link records target the address (see
+# ``_extract_cf_outputs``); a family address with no link members — i.e.
+# an *empty* CF slot — is never turned into a scene. This is precisely
+# the "in use vs empty" discrimination, sourced entirely from the
+# module link tables (no user input, no .nkb project file).
 
 _CF_BROADCAST_PATTERNS: tuple[tuple[re.Pattern, str], ...] = (
-    (re.compile(r"^3841[0-9A-F]{2}$"), "switch_pair"),
+    (re.compile(r"^384[0-7][0-9A-F]{2}$"), "switch_pair"),
     (re.compile(r"^3880[0-9A-F]{2}$"), "roller_pair"),
 )
 
@@ -1380,8 +1397,9 @@ class NikobusDiscovery:
         """Pull CF activation broadcasts out of the unmatched accumulator.
 
         PC-Logic emits each Central Function (CF) on a deterministic
-        bus address of the form ``38 41 XX`` (switch-pair CFs like
-        ``Alles-uit``) or ``38 80 XX`` (roller/sunshade-pair CFs).
+        bus address of the form ``38 4Y XX`` (switch-pair CFs like
+        ``Alles-uit``, family Y ∈ 0..7) or ``38 80 XX``
+        (roller/sunshade-pair CFs).
         Output modules carry normal link records pointing back to that
         address, so the per-module decoders see them as link-record
         SOURCES; ``_resolve_operation_point`` then fails because no

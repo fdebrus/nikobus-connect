@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.20.7
+
+Recognise the full switch-CF family range when classifying Central
+Functions that are actually in use.
+
+**Switch CFs span 0x3840..0x3847, not just 0x3841.** The CF activation
+broadcast classifier (`_classify_cf_broadcasts_from_unmatched`) finds
+which Central Functions are in use purely from the output-module link
+tables: an output module that participates in a CF carries a normal
+link record whose SOURCE is the CF trigger address, which lands in
+`_accumulated_unmatched`; the classifier then attaches the CF's
+(module, channel, mode) members and surfaces it as a scene. Empty CF
+slots have no link records and are never emitted — this is the
+in-use-vs-empty discrimination, sourced entirely from the modules (no
+user input, no `.nkb` project file).
+
+The classifier only recognised the `38 41 XX` switch family, but the
+PC-Logic CF trigger-address grid (function 0x10, sub=0x02) decodes —
+via `convert_nikobus_address(<prefix>8700)` — onto all eight switch
+families `0x3840..0x3847` (prefix 0x00..0xE0). Real CFs programmed on
+any of the other seven families were therefore silently dropped.
+Broadened the `switch_pair` pattern to `^384[0-7][0-9A-F]{2}$`. This is
+safe because a family address with no module link members is still
+never turned into a scene.
+
 ## 0.19.1
 
 Progress-bar fixes for the discovery state machine.

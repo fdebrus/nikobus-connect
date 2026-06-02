@@ -34,6 +34,21 @@ class TestCFPatternMatcher(unittest.TestCase):
         self.assertEqual(_classify_cf_pattern("384100"), "switch_pair")
         self.assertEqual(_classify_cf_pattern("3841FF"), "switch_pair")
 
+    def test_switch_pair_recognises_full_family_range(self):
+        """Switch CFs span 0x3840..0x3847 (the PC-Logic 87 00 grid
+        decodes to all eight families). Every family must classify, not
+        just 0x3841."""
+        for fam in range(0x40, 0x48):
+            addr = f"38{fam:02X}0A"
+            self.assertEqual(
+                _classify_cf_pattern(addr), "switch_pair", addr
+            )
+
+    def test_switch_pair_rejects_out_of_range_families(self):
+        """0x3848+ and 0x383F- are outside the proven switch-CF grid."""
+        self.assertIsNone(_classify_cf_pattern("384800"))
+        self.assertIsNone(_classify_cf_pattern("383F00"))
+
     def test_roller_pair_prefix_is_recognised(self):
         self.assertEqual(_classify_cf_pattern("3880CA"), "roller_pair")
         self.assertEqual(_classify_cf_pattern("3880C8"), "roller_pair")
@@ -199,6 +214,39 @@ class TestCFBroadcastClassifier(unittest.TestCase):
 
         self.assertEqual(set(d.discovered_cf_broadcasts), {"3880CA", "3880CB"})
         self.assertEqual(d._accumulated_unmatched, {"1C4AA0", "DEAD42"})
+
+    def test_in_use_cf_on_family_3840_is_classified(self):
+        """A real switch CF programmed on family 0x3840 (not 0x3841) is
+        surfaced because output-module link records target it — the
+        'in use' signal comes purely from the module link tables."""
+        d = _make_discovery_stub()
+        d._accumulated_unmatched = {"384005"}
+        d._accumulated_command_mapping = {
+            ("384005", 0, None): [
+                {"module_address": "81F6", "channel": 1, "mode": "M03"},
+                {"module_address": "81F6", "channel": 2, "mode": "M03"},
+            ],
+        }
+
+        d._classify_cf_broadcasts_from_unmatched()
+
+        self.assertIn("384005", d.discovered_cf_broadcasts)
+        self.assertEqual(
+            d.discovered_cf_broadcasts["384005"].pattern, "switch_pair"
+        )
+
+    def test_empty_cf_family_slot_without_links_is_not_classified(self):
+        """An address on a valid switch family but with NO module link
+        records (an empty CF slot from the grid enumeration) must never
+        become a scene — this is the in-use-vs-empty discrimination."""
+        d = _make_discovery_stub()
+        d._accumulated_unmatched = {"384203"}
+        d._accumulated_command_mapping = {}  # no module link members
+
+        d._classify_cf_broadcasts_from_unmatched()
+
+        self.assertEqual(d.discovered_cf_broadcasts, {})
+        self.assertIn("384203", d._accumulated_unmatched)
 
     def test_empty_inputs_are_noop(self):
         d = _make_discovery_stub()
