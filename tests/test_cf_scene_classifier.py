@@ -41,9 +41,10 @@ def _bare_discovery() -> NikobusDiscovery:
     return d
 
 
-def _out(button, module, channel, mode):
+def _out(button, module, channel, mode, ir_button=None):
     return {
         "button_address": button,
+        "ir_button_address": ir_button,
         "module_address": module,
         "channel": channel,
         "mode": mode,
@@ -158,6 +159,39 @@ class TestSceneClassifier(unittest.TestCase):
         d._classify_cf_scenes_from_command_mapping()
 
         self.assertIs(d.discovered_cf_broadcasts["384102"], existing)
+
+    def test_ir_records_group_by_channel_slot_not_receiver_base(self):
+        """For IR records ``button_address`` is the receiver base (shared
+        by every channel + physical button); ``ir_button_address`` is the
+        per-channel slot. The CF must key on the slot, and the receiver's
+        physical buttons (no IR slot, plain modes) must NOT be merged in
+        or flagged."""
+        d = _bare_discovery()
+        d._accumulated_command_mapping = {
+            # IR scene on channel 0D1C9E ("30B")
+            ("0D1C80", 3, "30B"): [
+                _out("0D1C80", "0E6C", 1, "M12 (Preset on)", ir_button="0D1C9E"),
+                _out("0D1C80", "8394", 1, "M02 (Open)", ir_button="0D1C9E"),
+            ],
+            # physical buttons of the same receiver (no IR slot)
+            ("0D1C80", 0, None): [
+                _out("0D1C80", "0E6C", 1, "M01 (Dim on/off (2 buttons))"),
+                _out("0D1C80", "0E6C", 2, "M01 (Dim on/off (2 buttons))"),
+            ],
+        }
+
+        d._classify_cf_scenes_from_command_mapping()
+
+        # Only the IR channel slot is a CF; the receiver base is not.
+        self.assertEqual(set(d.discovered_cf_broadcasts), {"0D1C9E"})
+        cf = d.discovered_cf_broadcasts["0D1C9E"]
+        members = {(o.module_address, o.channel, o.mode) for o in cf.outputs}
+        self.assertEqual(
+            members,
+            {("0E6C", 1, "M12 (Preset on)"), ("8394", 1, "M02 (Open)")},
+        )
+        # The M01 physical-button channels did not leak into the CF.
+        self.assertTrue(all(o.mode != "M01 (Dim on/off (2 buttons))" for o in cf.outputs))
 
     def test_no_mapping_is_safe(self):
         d = _bare_discovery()
