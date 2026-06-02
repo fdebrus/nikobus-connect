@@ -195,6 +195,58 @@ def is_noise_chunk(chunk_hex: str) -> bool:
     return chunk_hex[2:8] != "000000"
 
 
+# CF (Central Function) trigger-address table, stored in PC-Logic
+# register memory (function 0x10, sub=0x02). Decoded from a real
+# install (940C): the region enumerates every CF trigger address as a
+# grid of 5-byte units ``<prefix> 87 00 00 <index>`` where the prefix
+# byte cycles 0x00,0x20,0x40,…,0xE0 and the index byte runs 0x00..0x1F.
+# Each unit's ``convert_nikobus_address(<prefix>8700)`` lands exactly on
+# the CF broadcast space the integration already classifies:
+#   convert(008700)=003840 … convert(E08700)=003847  → CF families
+#   0x3840..0x3847, with <index> selecting the trailing byte.
+#
+# This is the PC-Logic's *address enumeration*, NOT the user's
+# programmed-CF directory: it carries no output members and no names
+# (those live in the output-module link tables and the .nkb project
+# respectively). We recognise it so the scan stops logging structured
+# data as "noise", but we deliberately do NOT synthesise scene entities
+# from it — that would produce empty, nameless CF slots.
+def is_cf_address_table_chunk(chunk_hex: str) -> bool:
+    """True if ``chunk_hex`` is a PC-Logic CF trigger-address-table grid.
+
+    Matches a 16-byte chunk wholly composed of the repeating CF-grid
+    unit ``<n>87000<n><ii>`` (see note above). Used to label the region
+    as recognised-but-not-a-link rather than noise.
+    """
+
+    if not isinstance(chunk_hex, str):
+        return False
+    chunk_hex = chunk_hex.strip().upper()
+    if len(chunk_hex) != RECORD_HEX_LEN:
+        return False
+    # The grid is a continuous stream of 5-byte (10-hex) ``XX870000II``
+    # units, so a fixed 16-byte chunk window straddles unit boundaries
+    # and the ``8700`` marker lands at varying offsets. Rather than
+    # require alignment, detect the region by its density of ``8700``
+    # markers across BOTH nibble phases: a genuine CF-grid chunk carries
+    # at least two, while a real link/registry record (bytes 1-3 == 0)
+    # or a counter/FF chunk carries essentially none.
+    # ``8700`` (loose grid: ``XX870000II``) or ``87`` immediately
+    # followed by the index nibble (tight grid: ``XX870CYY``) both
+    # appear depending on chunk phase. Count ``87`` occurrences across
+    # both nibble phases; a CF-grid chunk is saturated with them
+    # (3 units per 16-byte window → ~3 markers), whereas a link record
+    # (bytes 1-3 == 000000) or a counter/FF chunk carries at most one
+    # incidental ``87``.
+    markers = chunk_hex.count("87") + chunk_hex[1:].count("87")
+    if markers < 3:
+        return False
+    # Never claim a genuine link/registry record (its bytes 1-3 are
+    # zero) — those are real and must reach the parser.
+    return chunk_hex[2:8] != "000000"
+
+
+
 def parse_pc_record(
     chunk_hex: str,
     *,
@@ -616,6 +668,7 @@ __all__ = [
     "PcRecord",
     "RegistryBuffer",
     "build_flat_channel_map",
+    "is_cf_address_table_chunk",
     "is_empty_record",
     "is_noise_chunk",
     "link_record_to_decoded_metadata",
