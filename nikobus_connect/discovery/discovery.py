@@ -1978,6 +1978,15 @@ class NikobusDiscovery:
         _LOGGER.info("Discovery finished")
         await self._emit_progress(PHASE_FINALIZING)
 
+        # Light-scene CFs sit on real button/IR source addresses, so they
+        # never reach the unmatched set — classify them straight from the
+        # command mapping by their light-scene/preset member mode (the
+        # on-bus fingerprint of an "MCF" link). Runs unconditionally: an
+        # install can have light-scene CFs with an *empty* unmatched set
+        # (no 38xx PC-Logic CFs), which is exactly the case the guarded
+        # block below would skip. The method no-ops on an empty mapping.
+        self._classify_cf_scenes_from_command_mapping()
+
         # Cluster-synthesis pass for unmatched references collected
         # across the per-module scans. Multi-page Easywave remotes
         # emit dozens of distinct bus codes from one physical
@@ -1998,11 +2007,6 @@ class NikobusDiscovery:
             # ``38 80 XX`` address is a single CF, not 8+ siblings of
             # one remote.
             self._classify_cf_broadcasts_from_unmatched()
-            # Light-scene CFs sit on real button/IR source addresses, so
-            # they never reach the unmatched set. Classify them straight
-            # from the command mapping by their light-scene/preset member
-            # mode (the on-bus fingerprint of an "MCF" link).
-            self._classify_cf_scenes_from_command_mapping()
             pre_synth_count = len(self.discovered_devices)
             self._synthesize_remote_transmitters_from_unmatched()
             synthesised = len(self.discovered_devices) - pre_synth_count
