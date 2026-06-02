@@ -41,6 +41,7 @@ from .pc_record_parser import (
     LinkRecord,
     ModuleRegistryRecord,
     RegistryBuffer,
+    is_cf_address_table_chunk,
     is_empty_record,
     is_noise_chunk,
     link_record_to_decoded_metadata,
@@ -199,6 +200,22 @@ def _decode_and_log(
     if is_empty_record(chunk_hex):
         log.debug(
             "%s empty record | module=%s payload=%s",
+            prefix,
+            module_address,
+            chunk_hex,
+        )
+        return commands
+
+    if is_cf_address_table_chunk(chunk_hex):
+        # PC-Logic CF (Central Function) trigger-address-table region.
+        # Structured data, not noise: it enumerates the CF broadcast
+        # addresses (0x3840..0x3847 families) the install can route. It
+        # carries no output members or names, so we recognise and log it
+        # but emit no link/scene — the authoritative CF→output mapping
+        # comes from the output-module link tables, and CF names from the
+        # .nkb project. See ``is_cf_address_table_chunk``.
+        log.debug(
+            "%s CF address-table chunk | module=%s payload=%s",
             prefix,
             module_address,
             chunk_hex,
