@@ -551,7 +551,8 @@ def _is_inventory_trailer(message: str) -> bool:
 # to that address. Two prefix patterns are known from a labelled-
 # dataset analysis (.nkb file paired with the bus scan log):
 #
-#   38 41 XX   — switch-pair CFs (Alles-uit, "AAN"/"UIT" pairs).
+#   38 4Y XX   — switch-pair CFs (Alles-uit, "AAN"/"UIT" pairs),
+#                family Y ∈ 0..7.
 #   38 80 XX   — roller/sunshade-pair CFs (OP/NEER pairs).
 #
 # In both patterns the trailing byte (``XX``) is the CF index assigned
@@ -560,10 +561,36 @@ def _is_inventory_trailer(message: str) -> bool:
 # button or remote would), every output module with a matching link
 # record fires in unison — single-frame atomic scene activation, no
 # round-trip-per-channel.
+#
+# Switch-pair family range (0x3840..0x3847): the PC-Logic stores a CF
+# trigger-address enumeration (function 0x10, sub=0x02) as a grid of
+# ``<prefix> 87 00 00 <index>`` units, prefix ∈ {00,20,…,E0}. Decoding
+# it against ``convert_nikobus_address`` lands each prefix exactly on
+# one switch-CF family:
+#   convert(008700)=003840  convert(208700)=003841  …  convert(E08700)=003847
+# So switch CFs span the whole 0x3840..0x3847 space, not just 0x3841.
+# An earlier build only recognised 0x3841, which silently dropped every
+# real CF programmed on the other seven families. Broadening the pattern
+# is safe: ``_classify_cf_broadcasts_from_unmatched`` only ever emits a
+# CF when actual output-module link records target the address (see
+# ``_extract_cf_outputs``); a family address with no link members — i.e.
+# an *empty* CF slot — is never turned into a scene. This is precisely
+# the "in use vs empty" discrimination, sourced entirely from the
+# module link tables (no user input, no .nkb project file).
 
+# DIAGNOSTIC WIDENING (not for release): the final catch-all classifies
+# ANY ``38 XX XX`` bus address as a CF so that the discovery log surfaces
+# every CF-space address an output-module link record actually points at,
+# letting us learn this install's real family layout from the log. It is
+# ordered LAST so the known specific labels (switch/roller) still win
+# where they match. This stays safe because
+# ``_classify_cf_broadcasts_from_unmatched`` only ever emits / logs a CF
+# when real module link records target the address (see
+# ``_extract_cf_outputs``) — empty CF-space slots are never surfaced.
 _CF_BROADCAST_PATTERNS: tuple[tuple[re.Pattern, str], ...] = (
-    (re.compile(r"^3841[0-9A-F]{2}$"), "switch_pair"),
+    (re.compile(r"^384[0-7][0-9A-F]{2}$"), "switch_pair"),
     (re.compile(r"^3880[0-9A-F]{2}$"), "roller_pair"),
+    (re.compile(r"^38[0-9A-F]{4}$"), "cf_other"),
 )
 
 
@@ -573,8 +600,11 @@ def _classify_cf_pattern(addr: str) -> str | None:
     ``addr`` is a 6-hex bus address. Matching is exact (no substring,
     no case sensitivity beyond the canonical uppercase). Returns one
     of ``"switch_pair"`` / ``"roller_pair"`` when a known prefix
-    matches, else ``None`` — the address is then left in the unmatched
-    set for the existing remote-transmitter cluster pass to consider.
+    matches. DIAGNOSTIC: any other ``38 XX XX`` address falls through to
+    the ``"cf_other"`` catch-all so the log captures the full CF-space
+    layout this install actually uses. Non-``38`` addresses return
+    ``None`` and are left in the unmatched set for the existing
+    remote-transmitter cluster pass to consider.
     """
     if not isinstance(addr, str):
         return None
@@ -1380,8 +1410,9 @@ class NikobusDiscovery:
         """Pull CF activation broadcasts out of the unmatched accumulator.
 
         PC-Logic emits each Central Function (CF) on a deterministic
-        bus address of the form ``38 41 XX`` (switch-pair CFs like
-        ``Alles-uit``) or ``38 80 XX`` (roller/sunshade-pair CFs).
+        bus address of the form ``38 4Y XX`` (switch-pair CFs like
+        ``Alles-uit``, family Y ∈ 0..7) or ``38 80 XX``
+        (roller/sunshade-pair CFs).
         Output modules carry normal link records pointing back to that
         address, so the per-module decoders see them as link-record
         SOURCES; ``_resolve_operation_point`` then fails because no
