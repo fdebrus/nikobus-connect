@@ -41,10 +41,11 @@ def _bare_discovery() -> NikobusDiscovery:
     return d
 
 
-def _out(button, module, channel, mode, ir_button=None):
+def _out(button, module, channel, mode, ir_button=None, push=None):
     return {
         "button_address": button,
         "ir_button_address": ir_button,
+        "push_button_address": push,
         "module_address": module,
         "channel": channel,
         "mode": mode,
@@ -197,6 +198,72 @@ class TestSceneClassifier(unittest.TestCase):
         d = _bare_discovery()
         d._classify_cf_scenes_from_command_mapping()
         self.assertEqual(d.discovered_cf_broadcasts, {})
+
+    def test_cf_keyed_on_keyed_wire_address_when_resolved(self):
+        """When the decoder resolved the keyed wire address
+        (``push_button_address``), the CF is keyed on it — that's the
+        ``#N`` frame the bus actually emits, so it's directly usable as
+        the scene's activation address. IR slot 0D1C9E key 3 -> DE4E2C."""
+        d = _bare_discovery()
+        d._accumulated_command_mapping = {
+            ("0D1C80", 3, "30B"): [
+                _out("0D1C80", "0E6C", 1, "M04 (Light scene on)",
+                     ir_button="0D1C9E", push="DE4E2C"),
+                _out("0D1C80", "8394", 1, "M02 (Open)",
+                     ir_button="0D1C9E", push="DE4E2C"),
+            ],
+        }
+
+        d._classify_cf_scenes_from_command_mapping()
+
+        # Keyed on the wire form, not the IR slot / receiver base.
+        self.assertEqual(set(d.discovered_cf_broadcasts), {"DE4E2C"})
+        cf = d.discovered_cf_broadcasts["DE4E2C"]
+        self.assertEqual(cf.pattern, "light_scene")
+        members = {(o.module_address, o.channel, o.mode) for o in cf.outputs}
+        self.assertEqual(
+            members,
+            {("0E6C", 1, "M04 (Light scene on)"), ("8394", 1, "M02 (Open)")},
+        )
+
+    def test_multi_key_base_splits_into_one_cf_per_key(self):
+        """A single base trigger carrying two keys is two distinct
+        presets/scenes — keying on the wire form splits them into one
+        CF per key (0D1C9E key 1 -> 9E4E2C preset, key 3 -> DE4E2C
+        scene) instead of merging them into one bogus mega-CF."""
+        d = _bare_discovery()
+        d._accumulated_command_mapping = {
+            ("0D1C80", 1, "10B"): [
+                _out("0D1C80", "0E6C", 1, "M12 (Preset on)",
+                     ir_button="0D1C9E", push="9E4E2C"),
+                _out("0D1C80", "0E6C", 2, "M06 (Off + Operating time)",
+                     ir_button="0D1C9E", push="9E4E2C"),
+            ],
+            ("0D1C80", 3, "30B"): [
+                _out("0D1C80", "0E6C", 1, "M04 (Light scene on)",
+                     ir_button="0D1C9E", push="DE4E2C"),
+                _out("0D1C80", "8394", 1, "M02 (Open)",
+                     ir_button="0D1C9E", push="DE4E2C"),
+            ],
+        }
+
+        d._classify_cf_scenes_from_command_mapping()
+
+        self.assertEqual(set(d.discovered_cf_broadcasts), {"9E4E2C", "DE4E2C"})
+        # Each CF holds only its own key's members.
+        k1 = {(o.module_address, o.channel, o.mode)
+              for o in d.discovered_cf_broadcasts["9E4E2C"].outputs}
+        k3 = {(o.module_address, o.channel, o.mode)
+              for o in d.discovered_cf_broadcasts["DE4E2C"].outputs}
+        self.assertEqual(
+            k1,
+            {("0E6C", 1, "M12 (Preset on)"),
+             ("0E6C", 2, "M06 (Off + Operating time)")},
+        )
+        self.assertEqual(
+            k3,
+            {("0E6C", 1, "M04 (Light scene on)"), ("8394", 1, "M02 (Open)")},
+        )
 
 
 class TestCompleteRunInvokesSceneClassifier(unittest.TestCase):
