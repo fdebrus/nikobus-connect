@@ -1575,9 +1575,12 @@ class NikobusDiscovery:
 
         Algorithm — purely from ``_accumulated_command_mapping``:
 
-        1. Group every decoded output by its source ``button_address``
-           (the bus address that triggers it, e.g. an IR channel like
-           ``0D1C9E`` = "30B").
+        1. Group every decoded output by its trigger's own bus address
+           — ``ir_button_address`` (the IR channel slot, e.g. ``0D1C9E``
+           = "30B") when present, else ``button_address``. (For IR
+           records ``button_address`` is the receiver *base*, shared by
+           every channel + physical button on that receiver, so grouping
+           on it would merge unrelated triggers.)
         2. A source is a Central Function iff **any** of its members
            uses a light-scene / preset mode (``_is_cf_scene_mode``).
         3. The CF's members = **all** outputs sharing that source —
@@ -1604,7 +1607,14 @@ class NikobusDiscovery:
             for output in outputs:
                 if not isinstance(output, dict):
                     continue
-                src = output.get("button_address")
+                # Group by the trigger's own bus address. For IR records
+                # ``add_to_command_mapping`` rewrites ``button_address``
+                # to the IR *receiver base* (e.g. 0D1C80) and keeps the
+                # per-channel slot address (e.g. 0D1C9E = "30B") in
+                # ``ir_button_address`` — so prefer the slot, otherwise
+                # every IR channel + every physical button on one
+                # receiver collapses into a single bogus mega-CF.
+                src = output.get("ir_button_address") or output.get("button_address")
                 mod = output.get("module_address")
                 ch = output.get("channel")
                 mode = output.get("mode")
