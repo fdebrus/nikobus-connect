@@ -357,6 +357,13 @@ def add_to_command_mapping(command_mapping, decoded_command, module_address, ir_
     """Store decoded command information, allowing one-to-many button mappings."""
     push_button_address = decoded_command.get("push_button_address")
 
+    # Whether the decoder genuinely resolved the keyed *wire* address
+    # (the ``#N`` frame the bus emits for this key) — as opposed to the
+    # ``button_address`` fallback below. Only a genuine resolution is a
+    # usable activation address; the fallback collapses to a base /
+    # IR-receiver address that nothing on the bus listens for.
+    _push_resolved = push_button_address is not None
+
     # Fall back to physical device address when push_button_address could not
     # be resolved (e.g. coordinator doesn't know the button's channel count).
     # fileio._rebuild_address_lookup() maps physical addresses via
@@ -431,6 +438,14 @@ def add_to_command_mapping(command_mapping, decoded_command, module_address, ir_
         # button addresses
         "button_address": physical_btn or physical_push or button_address,
         "ir_button_address": ir_btn_addr or ir_push_addr,
+
+        # Keyed *wire* address — the actual ``#N`` frame the bus emits
+        # for this key (e.g. IR slot 0D1C9E key 3 -> "DE4E2C"). This is
+        # what a CF / light-scene must broadcast to fire; the base
+        # button / IR-slot address above is never seen on the wire.
+        # ``None`` when the decoder couldn't resolve it (so consumers
+        # fall back to the base address).
+        "push_button_address": physical_push if _push_resolved else None,
 
         # IR channel label (e.g. "17A", "30B") derived from slot address + key.
         "ir_code": ir_channel or ir_btn_slot or ir_push_slot,
@@ -1575,9 +1590,14 @@ class NikobusDiscovery:
 
         Algorithm — purely from ``_accumulated_command_mapping``:
 
-        1. Group every decoded output by its trigger's own bus address
-           — ``ir_button_address`` (the IR channel slot, e.g. ``0D1C9E``
-           = "30B") when present, else ``button_address``. (For IR
+        1. Group every decoded output by its trigger's keyed *wire*
+           address (``push_button_address``) — the ``#N`` frame the bus
+           emits, which is also what activating the CF must broadcast.
+           This both yields a directly-usable activation address and
+           splits a multi-key base into one CF per key (each key has a
+           distinct wire form). Falls back to the IR channel slot
+           (``ir_button_address``, e.g. ``0D1C9E``) then
+           ``button_address`` when the wire form is unresolved. (For IR
            records ``button_address`` is the receiver *base*, shared by
            every channel + physical button on that receiver, so grouping
            on it would merge unrelated triggers.)
@@ -1607,14 +1627,25 @@ class NikobusDiscovery:
             for output in outputs:
                 if not isinstance(output, dict):
                     continue
-                # Group by the trigger's own bus address. For IR records
-                # ``add_to_command_mapping`` rewrites ``button_address``
-                # to the IR *receiver base* (e.g. 0D1C80) and keeps the
-                # per-channel slot address (e.g. 0D1C9E = "30B") in
-                # ``ir_button_address`` — so prefer the slot, otherwise
-                # every IR channel + every physical button on one
-                # receiver collapses into a single bogus mega-CF.
-                src = output.get("ir_button_address") or output.get("button_address")
+                # Group by — and key the CF on — the trigger's keyed
+                # *wire* address (``push_button_address``): the actual
+                # ``#N`` frame the bus emits, which is what activating
+                # the scene must broadcast. Using it also splits a base
+                # that carries several keys into one CF per key (e.g.
+                # IR slot 0D1C9E key 1 -> "9E4E2C" preset vs key 3 ->
+                # "DE4E2C" scene), since each key has a distinct wire
+                # form. Fall back to the IR slot / base button address
+                # when the decoder couldn't resolve the wire form — for
+                # IR records ``add_to_command_mapping`` rewrites
+                # ``button_address`` to the receiver base (e.g. 0D1C80)
+                # and keeps the per-channel slot (0D1C9E) in
+                # ``ir_button_address``, so prefer the slot to avoid
+                # collapsing a whole receiver into one bogus mega-CF.
+                src = (
+                    output.get("push_button_address")
+                    or output.get("ir_button_address")
+                    or output.get("button_address")
+                )
                 mod = output.get("module_address")
                 ch = output.get("channel")
                 mode = output.get("mode")
