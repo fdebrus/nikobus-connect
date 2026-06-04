@@ -1,21 +1,18 @@
 """Regression tests for light-scene Central Function classification.
 
-The PC software's "MCF (Activate light scene / Central Function)"
-connection mode also covers CFs triggered by a real wall button or IR
-input (not a ``38xx`` PC-Logic broadcast). For those the source IS a
-valid button address, so it never lands in the unmatched accumulator —
-but the output modules store the member records in a light-scene /
-preset output mode.
+The PC software's "MCF (Activate light scene / Central Function)" mode
+covers CFs triggered by a real wall button or IR code (not a ``38xx``
+PC-Logic broadcast). ``_classify_cf_scenes_from_command_mapping`` detects
+these from the **merged button store**: it walks each button / IR
+op-point and, if any of the op-point's ``linked_modules`` members uses a
+light-scene / preset mode, emits a CF keyed on the op-point's own
+``bus_address`` — the keyed wire address the bus actually emits (and that
+activating the scene must broadcast).
 
-``_classify_cf_scenes_from_command_mapping`` detects those: it groups
-decoded outputs by their source ``button_address`` and flags any source
-with a light-scene / preset member as a Central Function, pulling in all
-members that share the source (including roller/switch members stored in
-plain Open/Close/On modes).
-
-The member fixtures mirror a real install ("waterloo", Nikobus-HA): CF6
-"Scene - Dinner" on IR source ``0D1C9E`` ("30B") with a dimmer preset
-member plus a switch and a shutter member in plain M02.
+Keying on the op-point ``bus_address`` is what makes per-key / per-IR-code
+scenes split correctly: IR ``30A`` -> ``9E4E2C`` and ``30B`` -> ``DE4E2C``
+are distinct op-points, so they become distinct scenes instead of
+collapsing under the shared receiver base (``0D1C80``).
 """
 
 from __future__ import annotations
@@ -32,26 +29,30 @@ from nikobus_connect.discovery.discovery import (
 )
 
 
-def _bare_discovery() -> NikobusDiscovery:
-    """A NikobusDiscovery with just the attributes the classifier reads,
-    bypassing __init__ (which needs a live coordinator)."""
+def _op(bus_address, *outputs):
+    """Build an op-point dict. ``outputs``: ``(module, channel, mode)``."""
+    by_mod: dict[str, list] = {}
+    for mod, ch, mode in outputs:
+        by_mod.setdefault(mod, []).append(
+            {"channel": ch, "mode": mode, "t1": None, "t2": None}
+        )
+    return {
+        "bus_address": bus_address,
+        "linked_modules": [
+            {"module_address": m, "outputs": o} for m, o in by_mod.items()
+        ],
+    }
+
+
+def _bare_discovery(op_points=None) -> NikobusDiscovery:
+    """A NikobusDiscovery carrying just a one-button store, bypassing
+    __init__ (which needs a live coordinator)."""
     d = NikobusDiscovery.__new__(NikobusDiscovery)
-    d._accumulated_command_mapping = {}
+    d._button_data = {
+        "nikobus_button": {"0D1C80": {"operation_points": dict(op_points or {})}}
+    }
     d.discovered_cf_broadcasts = {}
     return d
-
-
-def _out(button, module, channel, mode, ir_button=None, push=None):
-    return {
-        "button_address": button,
-        "ir_button_address": ir_button,
-        "push_button_address": push,
-        "module_address": module,
-        "channel": channel,
-        "mode": mode,
-        "t1": None,
-        "t2": None,
-    }
 
 
 class TestSceneModeMarker(unittest.TestCase):
@@ -85,24 +86,21 @@ class TestSceneModeMarker(unittest.TestCase):
 
 
 class TestSceneClassifier(unittest.TestCase):
-    def test_cf6_scene_dinner_is_classified_with_all_members(self):
-        """A light-scene member on the dimmer pulls the whole source —
-        including the switch/shutter members stored in plain M02 — into
-        one Central Function."""
-        d = _bare_discovery()
-        d._accumulated_command_mapping = {
-            ("0D1C9E", 3, None): [
-                _out("0D1C9E", "0E6C", 1, "M04 (Light scene on)"),
-                _out("0D1C9E", "4707", 12, "M02 (On + Operating time)"),
-                _out("0D1C9E", "8394", 1, "M02 (Open)"),
-            ],
-        }
-
+    def test_scene_keyed_on_wire_address_with_all_members(self):
+        """An op-point with a light-scene member becomes a CF keyed on its
+        bus_address, pulling in its switch/shutter members too."""
+        d = _bare_discovery({
+            "IR:30B": _op(
+                "DE4E2C",
+                ("0E6C", 1, "M04 (Light scene on)"),
+                ("4707", 12, "M02 (On + Operating time)"),
+                ("8394", 1, "M02 (Open)"),
+            )
+        })
         d._classify_cf_scenes_from_command_mapping()
 
-        self.assertIn("0D1C9E", d.discovered_cf_broadcasts)
-        cf = d.discovered_cf_broadcasts["0D1C9E"]
-        self.assertIsInstance(cf, CFBroadcast)
+        self.assertEqual(set(d.discovered_cf_broadcasts), {"DE4E2C"})
+        cf = d.discovered_cf_broadcasts["DE4E2C"]
         self.assertEqual(cf.pattern, "light_scene")
         members = {(o.module_address, o.channel, o.mode) for o in cf.outputs}
         self.assertEqual(
@@ -114,179 +112,129 @@ class TestSceneClassifier(unittest.TestCase):
             },
         )
 
-    def test_ordinary_multi_output_button_is_not_a_cf(self):
-        """A button driving the dimmer + shutters open/close with no
-        light-scene/preset member must NOT be flagged — this is the
-        'close all shutters' counter-example."""
-        d = _bare_discovery()
-        d._accumulated_command_mapping = {
-            ("1CFBA0", 3, None): [
-                _out("1CFBA0", "0E6C", 1, "M06 (Off + Operating time)"),
-                _out("1CFBA0", "8394", 1, "M03 (Close)"),
-                _out("1CFBA0", "9105", 2, "M03 (Close)"),
-            ],
-        }
-
-        d._classify_cf_scenes_from_command_mapping()
-
-        self.assertEqual(d.discovered_cf_broadcasts, {})
-
-    def test_members_deduped_across_rescans(self):
-        d = _bare_discovery()
-        d._accumulated_command_mapping = {
-            ("0D1C9E", 1, None): [
-                _out("0D1C9E", "0E6C", 1, "M12 (Preset on)"),
-                _out("0D1C9E", "0E6C", 1, "M12 (Preset on)"),  # dup
-            ],
-        }
-
-        d._classify_cf_scenes_from_command_mapping()
-
-        cf = d.discovered_cf_broadcasts["0D1C9E"]
-        self.assertEqual(len(cf.outputs), 1)
-
-    def test_existing_38xx_broadcast_is_not_overwritten(self):
-        d = _bare_discovery()
-        existing = CFBroadcast(bus_address="384102", pattern="switch_pair", outputs=[])
-        d.discovered_cf_broadcasts = {"384102": existing}
-        # Even if a (hypothetical) scene-mode record shared that address,
-        # the unmatched-path classification wins.
-        d._accumulated_command_mapping = {
-            ("384102", 0, None): [
-                _out("384102", "C9A5", 1, "M14 (Light scene on)"),
-            ],
-        }
-
-        d._classify_cf_scenes_from_command_mapping()
-
-        self.assertIs(d.discovered_cf_broadcasts["384102"], existing)
-
-    def test_ir_records_group_by_channel_slot_not_receiver_base(self):
-        """For IR records ``button_address`` is the receiver base (shared
-        by every channel + physical button); ``ir_button_address`` is the
-        per-channel slot. The CF must key on the slot, and the receiver's
-        physical buttons (no IR slot, plain modes) must NOT be merged in
-        or flagged."""
-        d = _bare_discovery()
-        d._accumulated_command_mapping = {
-            # IR scene on channel 0D1C9E ("30B")
-            ("0D1C80", 3, "30B"): [
-                _out("0D1C80", "0E6C", 1, "M12 (Preset on)", ir_button="0D1C9E"),
-                _out("0D1C80", "8394", 1, "M02 (Open)", ir_button="0D1C9E"),
-            ],
-            # physical buttons of the same receiver (no IR slot)
-            ("0D1C80", 0, None): [
-                _out("0D1C80", "0E6C", 1, "M01 (Dim on/off (2 buttons))"),
-                _out("0D1C80", "0E6C", 2, "M01 (Dim on/off (2 buttons))"),
-            ],
-        }
-
-        d._classify_cf_scenes_from_command_mapping()
-
-        # Only the IR channel slot is a CF; the receiver base is not.
-        self.assertEqual(set(d.discovered_cf_broadcasts), {"0D1C9E"})
-        cf = d.discovered_cf_broadcasts["0D1C9E"]
-        members = {(o.module_address, o.channel, o.mode) for o in cf.outputs}
-        self.assertEqual(
-            members,
-            {("0E6C", 1, "M12 (Preset on)"), ("8394", 1, "M02 (Open)")},
-        )
-        # The M01 physical-button channels did not leak into the CF.
-        self.assertTrue(all(o.mode != "M01 (Dim on/off (2 buttons))" for o in cf.outputs))
-
-    def test_no_mapping_is_safe(self):
-        d = _bare_discovery()
-        d._classify_cf_scenes_from_command_mapping()
-        self.assertEqual(d.discovered_cf_broadcasts, {})
-
-    def test_cf_keyed_on_keyed_wire_address_when_resolved(self):
-        """When the decoder resolved the keyed wire address
-        (``push_button_address``), the CF is keyed on it — that's the
-        ``#N`` frame the bus actually emits, so it's directly usable as
-        the scene's activation address. IR slot 0D1C9E key 3 -> DE4E2C."""
-        d = _bare_discovery()
-        d._accumulated_command_mapping = {
-            ("0D1C80", 3, "30B"): [
-                _out("0D1C80", "0E6C", 1, "M04 (Light scene on)",
-                     ir_button="0D1C9E", push="DE4E2C"),
-                _out("0D1C80", "8394", 1, "M02 (Open)",
-                     ir_button="0D1C9E", push="DE4E2C"),
-            ],
-        }
-
-        d._classify_cf_scenes_from_command_mapping()
-
-        # Keyed on the wire form, not the IR slot / receiver base.
-        self.assertEqual(set(d.discovered_cf_broadcasts), {"DE4E2C"})
-        cf = d.discovered_cf_broadcasts["DE4E2C"]
-        self.assertEqual(cf.pattern, "light_scene")
-        members = {(o.module_address, o.channel, o.mode) for o in cf.outputs}
-        self.assertEqual(
-            members,
-            {("0E6C", 1, "M04 (Light scene on)"), ("8394", 1, "M02 (Open)")},
-        )
-
-    def test_multi_key_base_splits_into_one_cf_per_key(self):
-        """A single base trigger carrying two keys is two distinct
-        presets/scenes — keying on the wire form splits them into one
-        CF per key (0D1C9E key 1 -> 9E4E2C preset, key 3 -> DE4E2C
-        scene) instead of merging them into one bogus mega-CF."""
-        d = _bare_discovery()
-        d._accumulated_command_mapping = {
-            ("0D1C80", 1, "10B"): [
-                _out("0D1C80", "0E6C", 1, "M12 (Preset on)",
-                     ir_button="0D1C9E", push="9E4E2C"),
-                _out("0D1C80", "0E6C", 2, "M06 (Off + Operating time)",
-                     ir_button="0D1C9E", push="9E4E2C"),
-            ],
-            ("0D1C80", 3, "30B"): [
-                _out("0D1C80", "0E6C", 1, "M04 (Light scene on)",
-                     ir_button="0D1C9E", push="DE4E2C"),
-                _out("0D1C80", "8394", 1, "M02 (Open)",
-                     ir_button="0D1C9E", push="DE4E2C"),
-            ],
-        }
-
+    def test_ir_codes_split_per_wire_address(self):
+        """The headline fix: two IR codes on the same slot/receiver are
+        distinct op-points → distinct scenes on their own wire addresses,
+        not one merged receiver-base mega-CF."""
+        d = _bare_discovery({
+            "IR:30A": _op(
+                "9E4E2C",
+                ("0E6C", 1, "M12 (Preset on)"),
+                ("0E6C", 2, "M06 (Off + Operating time)"),
+            ),
+            "IR:30B": _op(
+                "DE4E2C",
+                ("0E6C", 1, "M04 (Light scene on)"),
+                ("8394", 1, "M02 (Open)"),
+            ),
+        })
         d._classify_cf_scenes_from_command_mapping()
 
         self.assertEqual(set(d.discovered_cf_broadcasts), {"9E4E2C", "DE4E2C"})
-        # Each CF holds only its own key's members.
-        k1 = {(o.module_address, o.channel, o.mode)
-              for o in d.discovered_cf_broadcasts["9E4E2C"].outputs}
-        k3 = {(o.module_address, o.channel, o.mode)
-              for o in d.discovered_cf_broadcasts["DE4E2C"].outputs}
+        a = {(o.module_address, o.channel, o.mode)
+             for o in d.discovered_cf_broadcasts["9E4E2C"].outputs}
+        b = {(o.module_address, o.channel, o.mode)
+             for o in d.discovered_cf_broadcasts["DE4E2C"].outputs}
         self.assertEqual(
-            k1,
+            a,
             {("0E6C", 1, "M12 (Preset on)"),
              ("0E6C", 2, "M06 (Off + Operating time)")},
         )
         self.assertEqual(
-            k3,
+            b,
             {("0E6C", 1, "M04 (Light scene on)"), ("8394", 1, "M02 (Open)")},
         )
 
+    def test_plain_roller_ir_code_is_not_a_scene(self):
+        """A receiver with a scene code AND a plain roller code surfaces
+        only the scene — the mega-merge is gone."""
+        d = _bare_discovery({
+            "IR:30A": _op("9E4E2C", ("0E6C", 1, "M12 (Preset on)")),
+            "IR:14A": _op("9C4E2C", ("9105", 5, "M01 (Open - stop - close)")),
+        })
+        d._classify_cf_scenes_from_command_mapping()
+        self.assertEqual(set(d.discovered_cf_broadcasts), {"9E4E2C"})
+
+    def test_ordinary_button_is_not_a_cf(self):
+        d = _bare_discovery({
+            "1A": _op("8B7086", ("0E6C", 2, "M01 (Dim on/off (2 buttons))")),
+        })
+        d._classify_cf_scenes_from_command_mapping()
+        self.assertEqual(d.discovered_cf_broadcasts, {})
+
+    def test_existing_38xx_broadcast_is_not_overwritten(self):
+        d = _bare_discovery({
+            "IR:30B": _op("384102", ("C9A5", 1, "M14 (Light scene on)")),
+        })
+        existing = CFBroadcast(bus_address="384102", pattern="switch_pair", outputs=[])
+        d.discovered_cf_broadcasts = {"384102": existing}
+        d._classify_cf_scenes_from_command_mapping()
+        self.assertIs(d.discovered_cf_broadcasts["384102"], existing)
+
+    def test_members_deduped(self):
+        d = _bare_discovery({
+            "IR:30B": {
+                "bus_address": "DE4E2C",
+                "linked_modules": [{
+                    "module_address": "0E6C",
+                    "outputs": [
+                        {"channel": 1, "mode": "M12 (Preset on)"},
+                        {"channel": 1, "mode": "M12 (Preset on)"},  # dup
+                    ],
+                }],
+            }
+        })
+        d._classify_cf_scenes_from_command_mapping()
+        self.assertEqual(len(d.discovered_cf_broadcasts["DE4E2C"].outputs), 1)
+
+    def test_op_point_without_bus_address_is_skipped(self):
+        d = _bare_discovery({
+            "1A": {"linked_modules": [
+                {"module_address": "0E6C",
+                 "outputs": [{"channel": 1, "mode": "M12 (Preset on)"}]}
+            ]}  # no bus_address
+        })
+        d._classify_cf_scenes_from_command_mapping()
+        self.assertEqual(d.discovered_cf_broadcasts, {})
+
+    def test_empty_or_missing_button_data_is_safe(self):
+        d = _bare_discovery({})
+        d._classify_cf_scenes_from_command_mapping()
+        self.assertEqual(d.discovered_cf_broadcasts, {})
+
+        d2 = NikobusDiscovery.__new__(NikobusDiscovery)
+        d2._button_data = None
+        d2.discovered_cf_broadcasts = {}
+        d2._classify_cf_scenes_from_command_mapping()
+        self.assertEqual(d2.discovered_cf_broadcasts, {})
+
 
 class TestCompleteRunInvokesSceneClassifier(unittest.TestCase):
-    """Placement regression: light-scene CFs sit on valid button
-    addresses, so an install can finish discovery with an EMPTY
-    ``_accumulated_unmatched``. The scene classifier must still run —
-    it must NOT be gated behind the unmatched-only block that handles
-    38xx broadcasts / RF cluster synthesis."""
+    """Placement regression: light-scene CFs sit on real op-points, so an
+    install can finish discovery with an EMPTY ``_accumulated_unmatched``.
+    The classifier must still run — not be gated behind the unmatched-only
+    block that handles 38xx broadcasts / RF cluster synthesis."""
 
     def _run(self, coro):
         return asyncio.new_event_loop().run_until_complete(coro)
 
     def test_scene_classified_with_empty_unmatched(self):
         d = NikobusDiscovery.__new__(NikobusDiscovery)
-        d._accumulated_command_mapping = {
-            ("0D1C9E", 3, None): [
-                _out("0D1C9E", "0E6C", 1, "M12 (Preset on)"),
-                _out("0D1C9E", "8394", 1, "M02 (Open)"),
-            ],
+        d._button_data = {
+            "nikobus_button": {
+                "0D1C80": {
+                    "operation_points": {
+                        "IR:30B": _op(
+                            "DE4E2C",
+                            ("0E6C", 1, "M04 (Light scene on)"),
+                            ("8394", 1, "M02 (Open)"),
+                        )
+                    }
+                }
+            }
         }
-        d._accumulated_unmatched = set()  # <- the case the old guard skipped
+        d._accumulated_unmatched = set()  # the case the old guard skipped
         d.discovered_cf_broadcasts = {}
-        d._button_data = {}
         d.discovered_devices = {}
         d._coordinator = MagicMock()
         d._cancel_inventory_timeout = MagicMock()
@@ -298,9 +246,9 @@ class TestCompleteRunInvokesSceneClassifier(unittest.TestCase):
         ):
             self._run(d._complete_discovery_run(None))
 
-        self.assertIn("0D1C9E", d.discovered_cf_broadcasts)
+        self.assertIn("DE4E2C", d.discovered_cf_broadcasts)
         self.assertEqual(
-            d.discovered_cf_broadcasts["0D1C9E"].pattern, "light_scene"
+            d.discovered_cf_broadcasts["DE4E2C"].pattern, "light_scene"
         )
 
 

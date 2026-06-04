@@ -1576,117 +1576,97 @@ class NikobusDiscovery:
         return members
 
     def _classify_cf_scenes_from_command_mapping(self) -> None:
-        """Classify IR/button-sourced light scenes (Central Functions).
+        """Classify button / IR-sourced light scenes (Central Functions)
+        from the merged button store.
 
-        Complements :meth:`_classify_cf_broadcasts_from_unmatched`,
-        which handles PC-Logic CFs that broadcast on a ``38xx`` address
-        with no real button behind them. This method handles the other
-        CF mechanism: a wall button or IR input connected to its
-        outputs in PC-software mode "MCF (Activate light scene /
-        Central Function)". There the source IS a valid button address
-        (so it never lands in the unmatched set), but the output
-        modules store the member records in a light-scene / preset
-        mode.
+        Complements :meth:`_classify_cf_broadcasts_from_unmatched` (which
+        handles ``38xx`` PC-Logic broadcast CFs with no real button
+        behind them). This handles the "MCF (Activate light scene /
+        Central Function)" mechanism: a wall button or IR code wired to
+        its outputs in a light-scene / preset mode.
 
-        Algorithm — purely from ``_accumulated_command_mapping``:
+        Reads the **merged button store** rather than the raw command
+        mapping. Each button / IR op-point already carries the keyed
+        **wire address** that fires it (``bus_address`` — the exact
+        ``#N`` frame the bus emits, e.g. IR ``30A`` -> ``9E4E2C``, ``30B``
+        -> ``DE4E2C``) plus its resolved ``linked_modules`` members.
+        Grouping the raw command mapping instead collapsed every IR code
+        on a receiver under the receiver *base* (``0D1C80``) into one
+        bogus mega-CF whose activation frame the bus ignores. Keying each
+        scene on the op-point's own ``bus_address`` yields one CF per
+        trigger (per key / per IR code) with a directly activatable
+        address, and covers scenes with no physical trigger as long as
+        their address surfaces as an op-point.
 
-        1. Group every decoded output by its trigger's keyed *wire*
-           address (``push_button_address``) — the ``#N`` frame the bus
-           emits, which is also what activating the CF must broadcast.
-           This both yields a directly-usable activation address and
-           splits a multi-key base into one CF per key (each key has a
-           distinct wire form). Falls back to the IR channel slot
-           (``ir_button_address``, e.g. ``0D1C9E``) then
-           ``button_address`` when the wire form is unresolved. (For IR
-           records ``button_address`` is the receiver *base*, shared by
-           every channel + physical button on that receiver, so grouping
-           on it would merge unrelated triggers.)
-        2. A source is a Central Function iff **any** of its members
-           uses a light-scene / preset mode (``_is_cf_scene_mode``).
-        3. The CF's members = **all** outputs sharing that source —
-           including roller/switch members stored in plain
-           Open/Close/On modes, which belong to the scene by virtue of
-           sharing its trigger.
-
-        Each detected CF is surfaced as a :class:`CFBroadcast` (pattern
-        ``"light_scene"``) on ``discovered_cf_broadcasts`` so the same
-        consumer path the ``38xx`` CFs use picks it up. Addresses
-        already classified by the unmatched path are left untouched.
+        Algorithm: for every op-point, gather its ``linked_modules``
+        members (deduped on ``(module, channel, mode)``); if **any**
+        member uses a light-scene / preset mode (:func:`_is_cf_scene_mode`)
+        the op-point is a CF, emitted as a :class:`CFBroadcast`
+        (``pattern="light_scene"``) keyed on its ``bus_address`` with all
+        its members. Addresses already classified by the ``38xx`` path
+        are left untouched.
         """
-
-        if not self._accumulated_command_mapping:
+        if self._button_data is None:
+            return
+        buttons = self._button_data.get("nikobus_button")
+        if not isinstance(buttons, dict):
             return
 
-        by_source: dict[str, list[CFOutputMember]] = {}
-        seen: dict[str, set[tuple[str, int, str]]] = {}
-        scene_sources: set[str] = set()
-
-        for outputs in self._accumulated_command_mapping.values():
-            if not isinstance(outputs, list):
-                continue
-            for output in outputs:
-                if not isinstance(output, dict):
-                    continue
-                # Group by — and key the CF on — the trigger's keyed
-                # *wire* address (``push_button_address``): the actual
-                # ``#N`` frame the bus emits, which is what activating
-                # the scene must broadcast. Using it also splits a base
-                # that carries several keys into one CF per key (e.g.
-                # IR slot 0D1C9E key 1 -> "9E4E2C" preset vs key 3 ->
-                # "DE4E2C" scene), since each key has a distinct wire
-                # form. Fall back to the IR slot / base button address
-                # when the decoder couldn't resolve the wire form — for
-                # IR records ``add_to_command_mapping`` rewrites
-                # ``button_address`` to the receiver base (e.g. 0D1C80)
-                # and keeps the per-channel slot (0D1C9E) in
-                # ``ir_button_address``, so prefer the slot to avoid
-                # collapsing a whole receiver into one bogus mega-CF.
-                src = (
-                    output.get("push_button_address")
-                    or output.get("ir_button_address")
-                    or output.get("button_address")
-                )
-                mod = output.get("module_address")
-                ch = output.get("channel")
-                mode = output.get("mode")
-                if not (
-                    isinstance(src, str)
-                    and isinstance(mod, str)
-                    and isinstance(ch, int)
-                    and isinstance(mode, str)
-                ):
-                    continue
-                src = src.upper()
-                dedupe = (mod.upper(), ch, mode)
-                bucket_seen = seen.setdefault(src, set())
-                if dedupe in bucket_seen:
-                    continue
-                bucket_seen.add(dedupe)
-                by_source.setdefault(src, []).append(
-                    CFOutputMember(
-                        module_address=mod.upper(),
-                        channel=ch,
-                        mode=mode,
-                        t1=output.get("t1") if isinstance(output.get("t1"), str) else None,
-                        t2=output.get("t2") if isinstance(output.get("t2"), str) else None,
-                    )
-                )
-                if _is_cf_scene_mode(mode):
-                    scene_sources.add(src)
-
         found: dict[str, CFBroadcast] = {}
-        for src in scene_sources:
-            # Don't shadow a 38xx CF already classified from the
-            # unmatched accumulator (different mechanism, same address
-            # space is impossible here anyway, but keep it explicit).
-            if src in self.discovered_cf_broadcasts:
+        for phys in buttons.values():
+            if not isinstance(phys, dict):
                 continue
-            members = by_source.get(src)
-            if not members:
+            op_points = phys.get("operation_points")
+            if not isinstance(op_points, dict):
                 continue
-            found[src] = CFBroadcast(
-                bus_address=src, pattern="light_scene", outputs=members
-            )
+            for op_point in op_points.values():
+                if not isinstance(op_point, dict):
+                    continue
+                bus_addr = op_point.get("bus_address")
+                if not isinstance(bus_addr, str) or not bus_addr:
+                    continue
+                addr = bus_addr.upper()
+                # Don't shadow a 38xx CF already classified, and emit one
+                # scene per distinct firing address.
+                if addr in self.discovered_cf_broadcasts or addr in found:
+                    continue
+
+                members: list[CFOutputMember] = []
+                seen: set[tuple[str, int, str]] = set()
+                is_scene = False
+                for link in op_point.get("linked_modules") or []:
+                    if not isinstance(link, dict):
+                        continue
+                    mod = link.get("module_address")
+                    if not isinstance(mod, str):
+                        continue
+                    for output in link.get("outputs") or []:
+                        if not isinstance(output, dict):
+                            continue
+                        ch = output.get("channel")
+                        mode = output.get("mode")
+                        if not (isinstance(ch, int) and isinstance(mode, str)):
+                            continue
+                        dedupe = (mod.upper(), ch, mode)
+                        if dedupe in seen:
+                            continue
+                        seen.add(dedupe)
+                        members.append(
+                            CFOutputMember(
+                                module_address=mod.upper(),
+                                channel=ch,
+                                mode=mode,
+                                t1=output.get("t1") if isinstance(output.get("t1"), str) else None,
+                                t2=output.get("t2") if isinstance(output.get("t2"), str) else None,
+                            )
+                        )
+                        if _is_cf_scene_mode(mode):
+                            is_scene = True
+
+                if is_scene and members:
+                    found[addr] = CFBroadcast(
+                        bus_address=addr, pattern="light_scene", outputs=members
+                    )
 
         if not found:
             return
@@ -1703,7 +1683,6 @@ class NikobusDiscovery:
         _LOGGER.info(
             "CF light-scene classification | total_scenes=%d", len(found)
         )
-
     def _synthesize_remote_transmitters_from_unmatched(self) -> None:
         """Synthesise virtual transmitters from clusters of unmatched
         button references collected across module scans.
