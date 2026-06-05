@@ -692,6 +692,17 @@ class CFBroadcast:
     bus_address: str
     pattern: str
     outputs: list[CFOutputMember] = field(default_factory=list)
+    # Every trigger address that activates this CF, sorted. For a CF with
+    # one trigger this is ``[bus_address]``; for a light scene wired to
+    # several buttons / IR codes (the Niko "MCF" mechanism — one Central
+    # Function, many inputs) it lists them all, with ``bus_address`` the
+    # canonical (sorted-first) one. See
+    # :meth:`NikobusDiscovery._classify_cf_scenes_from_command_mapping`.
+    triggered_by: list[str] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        if not self.triggered_by:
+            self.triggered_by = [self.bus_address]
 
 
 class NikobusDiscovery:
@@ -1577,7 +1588,7 @@ class NikobusDiscovery:
 
     def _classify_cf_scenes_from_command_mapping(self) -> None:
         """Classify button / IR-sourced light scenes (Central Functions)
-        from the merged button store.
+        from the merged button store, de-duplicated by member set.
 
         Complements :meth:`_classify_cf_broadcasts_from_unmatched` (which
         handles ``38xx`` PC-Logic broadcast CFs with no real button
@@ -1592,19 +1603,30 @@ class NikobusDiscovery:
         -> ``DE4E2C``) plus its resolved ``linked_modules`` members.
         Grouping the raw command mapping instead collapsed every IR code
         on a receiver under the receiver *base* (``0D1C80``) into one
-        bogus mega-CF whose activation frame the bus ignores. Keying each
-        scene on the op-point's own ``bus_address`` yields one CF per
-        trigger (per key / per IR code) with a directly activatable
-        address, and covers scenes with no physical trigger as long as
-        their address surfaces as an op-point.
+        bogus mega-CF whose activation frame the bus ignores.
+
+        **Scene-centric model (matches Niko's own architecture).** In the
+        Niko software a "Light scene / Central function" is a single
+        *named output group* that can be activated from any number of
+        inputs via the ``MCF`` connection mode — one CF, many triggers.
+        So rather than emit one scene per firing address, we group
+        op-points by their **member set** and emit one
+        :class:`CFBroadcast` per distinct set, with
+        ``triggered_by`` listing every address that activates it and
+        ``bus_address`` the canonical (sorted-first) one. Two wall
+        buttons wired to the identical outputs+modes therefore collapse
+        into a single scene with two triggers; an on-CF and its separate
+        off-CF stay distinct (their member *modes* differ). This also
+        covers scenes with no physical trigger as long as their address
+        surfaces as an op-point.
 
         Algorithm: for every op-point, gather its ``linked_modules``
         members (deduped on ``(module, channel, mode)``); if **any**
         member uses a light-scene / preset mode (:func:`_is_cf_scene_mode`)
-        the op-point is a CF, emitted as a :class:`CFBroadcast`
-        (``pattern="light_scene"``) keyed on its ``bus_address`` with all
-        its members. Addresses already classified by the ``38xx`` path
-        are left untouched.
+        the op-point is a CF candidate. Candidates are grouped by member
+        signature; each group becomes one CF keyed on its canonical
+        address. Addresses already classified by the ``38xx`` path are
+        left untouched.
         """
         if self._button_data is None:
             return
@@ -1612,7 +1634,11 @@ class NikobusDiscovery:
         if not isinstance(buttons, dict):
             return
 
-        found: dict[str, CFBroadcast] = {}
+        # signature -> (sorted member list, set of trigger addresses)
+        groups: dict[
+            tuple[tuple[str, int, str, str | None, str | None], ...],
+            tuple[list[CFOutputMember], set[str]],
+        ] = {}
         for phys in buttons.values():
             if not isinstance(phys, dict):
                 continue
@@ -1626,9 +1652,9 @@ class NikobusDiscovery:
                 if not isinstance(bus_addr, str) or not bus_addr:
                     continue
                 addr = bus_addr.upper()
-                # Don't shadow a 38xx CF already classified, and emit one
-                # scene per distinct firing address.
-                if addr in self.discovered_cf_broadcasts or addr in found:
+                # Don't shadow a 38xx CF already classified by the
+                # unmatched-accumulator path.
+                if addr in self.discovered_cf_broadcasts:
                     continue
 
                 members: list[CFOutputMember] = []
@@ -1663,20 +1689,44 @@ class NikobusDiscovery:
                         if _is_cf_scene_mode(mode):
                             is_scene = True
 
-                if is_scene and members:
-                    found[addr] = CFBroadcast(
-                        bus_address=addr, pattern="light_scene", outputs=members
-                    )
+                if not (is_scene and members):
+                    continue
 
-        if not found:
+                # Signature is the full member set (mode included, so an
+                # on-scene and its off-scene don't merge), order-independent.
+                signature = tuple(
+                    sorted(
+                        (m.module_address, m.channel, m.mode, m.t1, m.t2)
+                        for m in members
+                    )
+                )
+                bucket = groups.get(signature)
+                if bucket is None:
+                    groups[signature] = (members, {addr})
+                else:
+                    bucket[1].add(addr)
+
+        if not groups:
             return
+
+        found: dict[str, CFBroadcast] = {}
+        for members, triggers in groups.values():
+            triggered_by = sorted(triggers)
+            canonical = triggered_by[0]
+            found[canonical] = CFBroadcast(
+                bus_address=canonical,
+                pattern="light_scene",
+                outputs=members,
+                triggered_by=triggered_by,
+            )
 
         self.discovered_cf_broadcasts.update(found)
 
         for addr, cf in sorted(found.items()):
             _LOGGER.info(
-                "CF light-scene | source=%s outputs=%d sample_members=%s",
+                "CF light-scene | source=%s triggers=%s outputs=%d sample_members=%s",
                 addr,
+                cf.triggered_by,
                 len(cf.outputs),
                 [(o.module_address, o.channel, o.mode) for o in cf.outputs[:5]],
             )
