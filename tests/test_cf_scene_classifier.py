@@ -208,6 +208,88 @@ class TestSceneClassifier(unittest.TestCase):
         d2._classify_cf_scenes_from_command_mapping()
         self.assertEqual(d2.discovered_cf_broadcasts, {})
 
+    def test_single_trigger_populates_triggered_by(self):
+        d = _bare_discovery({
+            "IR:30B": _op("DE4E2C", ("0E6C", 1, "M04 (Light scene on)")),
+        })
+        d._classify_cf_scenes_from_command_mapping()
+        self.assertEqual(
+            d.discovered_cf_broadcasts["DE4E2C"].triggered_by, ["DE4E2C"]
+        )
+
+
+class TestSceneDeduplication(unittest.TestCase):
+    """One Central Function, many triggers — the Niko 'MCF' model.
+
+    Op-points whose member set is identical collapse into a single scene
+    with ``triggered_by`` listing every firing address and ``bus_address``
+    the canonical (sorted-first) one. An on-scene and its separate
+    off-scene stay distinct because their member *modes* differ."""
+
+    def test_identical_member_sets_merge_with_canonical_address(self):
+        d = _bare_discovery({
+            # same scene wired to two different buttons
+            "IR:30B": _op(
+                "DE4E2C",
+                ("0E6C", 1, "M04 (Light scene on)"),
+                ("8394", 1, "M02 (Open)"),
+            ),
+            "BUTTON:1A": _op(
+                "8B7086",
+                ("0E6C", 1, "M04 (Light scene on)"),
+                ("8394", 1, "M02 (Open)"),
+            ),
+        })
+        d._classify_cf_scenes_from_command_mapping()
+
+        # canonical = sorted-first of {8B7086, DE4E2C} = 8B7086
+        self.assertEqual(set(d.discovered_cf_broadcasts), {"8B7086"})
+        cf = d.discovered_cf_broadcasts["8B7086"]
+        self.assertEqual(cf.bus_address, "8B7086")
+        self.assertEqual(cf.triggered_by, ["8B7086", "DE4E2C"])
+        # members carried once
+        self.assertEqual(len(cf.outputs), 2)
+
+    def test_on_and_off_scenes_stay_distinct(self):
+        """An M14 on-scene and a separate off-button share outputs but not
+        modes — the off-button isn't a scene mode, so only the on-scene
+        surfaces; crucially the two never merge."""
+        d = _bare_discovery({
+            "ON": _op("AAAAAA", ("0E6C", 1, "M14 (Light scene on)")),
+            "OFF": _op("BBBBBB", ("0E6C", 1, "M06 (Off + Operating time)")),
+        })
+        d._classify_cf_scenes_from_command_mapping()
+        self.assertEqual(set(d.discovered_cf_broadcasts), {"AAAAAA"})
+
+    def test_three_triggers_one_scene(self):
+        members = (("C9A5", 1, "M15 (Light scene on / off)"),)
+        d = _bare_discovery({
+            "A": _op("DDDDDD", *members),
+            "B": _op("AAAAAA", *members),
+            "C": _op("CCCCCC", *members),
+        })
+        d._classify_cf_scenes_from_command_mapping()
+        self.assertEqual(set(d.discovered_cf_broadcasts), {"AAAAAA"})
+        self.assertEqual(
+            d.discovered_cf_broadcasts["AAAAAA"].triggered_by,
+            ["AAAAAA", "CCCCCC", "DDDDDD"],
+        )
+
+
+class TestCFBroadcastDefaults(unittest.TestCase):
+    def test_triggered_by_defaults_to_bus_address(self):
+        cf = CFBroadcast(bus_address="384102", pattern="switch_pair", outputs=[])
+        self.assertEqual(cf.triggered_by, ["384102"])
+
+    def test_explicit_triggered_by_preserved(self):
+        cf = CFBroadcast(
+            bus_address="AAAAAA",
+            pattern="light_scene",
+            outputs=[],
+            triggered_by=["AAAAAA", "BBBBBB"],
+        )
+        self.assertEqual(cf.triggered_by, ["AAAAAA", "BBBBBB"])
+
 
 class TestCompleteRunInvokesSceneClassifier(unittest.TestCase):
     """Placement regression: light-scene CFs sit on real op-points, so an

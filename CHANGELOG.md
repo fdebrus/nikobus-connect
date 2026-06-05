@@ -1,5 +1,45 @@
 # Changelog
 
+## 0.24.0
+
+**Scene-centric light-scene Central Functions: one CF, many triggers.**
+
+Matches Niko's own architecture (confirmed against the Nikobus software
+manual §15.6 "Light scene / Central functions"): a light scene is a
+single *named output group* that can be activated from any number of
+inputs via the `MCF` connection mode. `_classify_cf_scenes_from_command_mapping`
+now groups light-scene op-points by their **member set** and emits **one**
+`CFBroadcast` per distinct set instead of one per firing address.
+
+- New `CFBroadcast.triggered_by: list[str]` — every address that
+  activates the CF, sorted; `bus_address` is the canonical (sorted-first)
+  one. Defaults to `[bus_address]` for single-trigger CFs (including the
+  `38xx` PC-Logic broadcast path), so the field is always populated.
+- Two buttons / IR codes wired to the **identical** outputs+modes collapse
+  into a single scene with both addresses in `triggered_by` (previously two
+  duplicate scenes).
+- An M14 on-scene and a separate off-trigger stay **distinct** — the member
+  set includes each output's *mode*, so on/off don't merge.
+- Per-key / per-IR-code scenes with different member sets still split
+  correctly (the 0.21–0.23 behaviour), now keyed on the canonical address.
+
+## 0.23.0
+
+Classify light-scene CFs from the merged button store, keyed on each
+op-point's own wire address (per-key / per-IR-code split) — fixes IR
+light-scenes collapsing under the receiver base.
+
+## 0.22.0
+
+Emit the keyed **wire address** for light-scene CFs (the `#N` frame the
+bus actually emits), fixing activation that previously did nothing.
+
+## 0.21.0
+
+Classify button / IR-sourced light-scene Central Functions ("MCF"
+mechanism) from the merged button store, complementing the `38xx`
+PC-Logic broadcast path.
+
 ## 0.20.8
 
 **DIAGNOSTIC build — not for release.** Widen CF classification to a
