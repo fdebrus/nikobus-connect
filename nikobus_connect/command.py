@@ -5,7 +5,8 @@ from __future__ import annotations
 import asyncio
 import inspect
 import logging
-from typing import Any, Callable, Awaitable, Optional
+from collections.abc import Awaitable, Callable
+from typing import Any
 
 from .const import (
     COMMAND_EXECUTION_DELAY,
@@ -27,7 +28,7 @@ class NikobusCommandHandler:
         self,
         connection: Any,
         listener: Any,
-        module_states: Optional[dict[str, bytearray]] = None,
+        module_states: dict[str, bytearray] | None = None,
     ) -> None:
         """Initialize the command handler.
 
