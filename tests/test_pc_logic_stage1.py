@@ -373,17 +373,17 @@ def test_pc_logic_decoder_returns_none_for_any_chunk():
     assert decode("CAFEBABE1234", [], context) is None
 
 
-def test_pc_logic_decoder_logs_registry_record_at_info(caplog):
-    """Stage 2a logs structured records at INFO so users can attach
-    the dump without enabling component-level debug. A registry record
-    must surface its decoded device_type / address / type_slot."""
+def test_pc_logic_decoder_logs_registry_record_at_debug(caplog):
+    """Per-record detail is logged at DEBUG (the INFO stream carries one
+    summary line per module). A registry record must still surface its
+    decoded device_type / address / type_slot at DEBUG."""
 
     context = MagicMock()
     context.module_address = "80D9"
     # 940C registry record from roswennen's trace.
     chunk = "03000000080000000C94000001000000"
 
-    with caplog.at_level(logging.INFO, logger="nikobus_connect.discovery.pc_logic_decoder"):
+    with caplog.at_level(logging.DEBUG, logger="nikobus_connect.discovery.pc_logic_decoder"):
         result = decode(chunk, [], context)
 
     assert result is None
@@ -407,7 +407,7 @@ def test_decode_command_payload_routes_pc_logic_to_decoder(caplog):
     # bytes directly).
     chunk = "0400000006000080B443180001000000"
 
-    with caplog.at_level(logging.INFO, logger="nikobus_connect.discovery.pc_logic_decoder"):
+    with caplog.at_level(logging.DEBUG, logger="nikobus_connect.discovery.pc_logic_decoder"):
         result = decode_command_payload(
             chunk,
             "pc_logic",

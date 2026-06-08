@@ -1918,9 +1918,25 @@ class NikobusDiscovery:
             _LOGGER.exception("Inventory finalization failed")
             raise
 
+        # Single INFO roll-up of what the inventory found — the
+        # per-device "Discovered ..." lines are at DEBUG so a large
+        # install doesn't produce dozens of INFO lines.
+        _modules = sum(
+            1
+            for d in self.discovered_devices.values()
+            if isinstance(d, dict) and d.get("category") == "Module"
+        )
+        _buttons = sum(
+            1
+            for d in self.discovered_devices.values()
+            if isinstance(d, dict) and d.get("category") == "Button"
+        )
         _LOGGER.info(
-            "PC-Link inventory scan finished — discovered %d",
+            "PC-Link inventory scan finished — discovered %d device(s): "
+            "%d module(s), %d button(s)",
             len(self.discovered_devices),
+            _modules,
+            _buttons,
         )
 
         _LOGGER.debug(
@@ -2947,7 +2963,9 @@ class NikobusDiscovery:
             )
 
             if first_sight:
-                _LOGGER.info(
+                # Per-device detail at DEBUG; the inventory phase logs a
+                # single INFO roll-up (see _finalize_inventory_phase).
+                _LOGGER.debug(
                     "Discovered %s %s — model %s, address %s",
                     category,
                     name,
