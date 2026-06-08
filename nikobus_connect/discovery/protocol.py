@@ -330,7 +330,7 @@ def get_button_address(payload_hex: str) -> str | None:
     try:
         bin_str = format(int(payload_hex, 16), "024b")
     except Exception as err:  # pragma: no cover - defensive
-        _LOGGER.error("Error converting button address to binary: %s", err)
+        _LOGGER.error("Failed to convert button address to binary: %s", err)
         return None
 
     modified = bin_str[:4] + bin_str[4:6] + bin_str[8:]
@@ -341,7 +341,7 @@ def get_button_address(payload_hex: str) -> str | None:
     try:
         result_int = int(new_bin, 2)
     except Exception as err:  # pragma: no cover - defensive
-        _LOGGER.error("Error converting binary to int: %s", err)
+        _LOGGER.error("Failed to convert binary to int: %s", err)
         return None
     return format(result_int, "06X")
 
@@ -415,7 +415,7 @@ def decode_command_payload(
             resolved_channel_count = coordinator.get_module_channel_count(module_address)
         except Exception as err:  # pragma: no cover - defensive
             _LOGGER.debug(
-                "Module channel lookup failed | module=%s error=%s", module_address, err
+                "Module channel lookup failed for module %s — %s", module_address, err
             )
 
     context = DecoderContext(
@@ -453,13 +453,12 @@ def decode_command_payload(
     try:
         result: dict[str, Any] | None = decoder(payload_hex, raw_bytes, context)
         return result
-    except Exception as err:  # pragma: no cover - defensive
-        _LOGGER.error(
-            "Decoder error | type=%s module=%s payload=%s error=%s",
+    except Exception:  # pragma: no cover - defensive
+        _LOGGER.exception(
+            "Decoder error for %s module %s — payload %s",
             module_type,
             module_address,
             payload_hex,
-            err,
         )
         return None
 

@@ -855,7 +855,7 @@ class NikobusDiscovery:
 
         if normalized != raw:
             _LOGGER.debug(
-                "Normalized module address | raw=%s normalized=%s source=%s",
+                "Normalized module address %s to %s (source %s)",
                 raw,
                 normalized,
                 source,
@@ -890,7 +890,7 @@ class NikobusDiscovery:
 
         if config_type and inventory_type and config_type != inventory_type:
             _LOGGER.debug(
-                "Module type conflict | address=%s config=%s inventory=%s — using config",
+                "Module type conflict for address %s — config %s, inventory %s, using config",
                 address,
                 config_type,
                 inventory_type,
@@ -993,8 +993,8 @@ class NikobusDiscovery:
                 for reg in command_range:
                     if self._scan_trailer_seen:
                         _LOGGER.debug(
-                            "Register scan short-circuited by trailer | module=%s "
-                            "last_register=0x%02X sent=%d",
+                            "Register scan short-circuited by trailer for module %s "
+                            "— last register 0x%02X, sent %d",
                             normalized_address,
                             reg,
                             registers_sent,
@@ -1042,9 +1042,9 @@ class NikobusDiscovery:
                             # is a feature, not a problem. Keep at DEBUG so it
                             # doesn't surface in the integration UI.
                             _LOGGER.debug(
-                                "Register scan pass aborted — module not responding | "
-                                "module=%s base_cmd=%s sub=%s last_register=0x%02X "
-                                "consecutive_give_ups=%d sent=%d",
+                                "Register scan pass aborted, module %s not "
+                                "responding — base cmd %s, sub %s, last register "
+                                "0x%02X, consecutive give-ups %d, sent %d",
                                 normalized_address,
                                 base_command,
                                 sub_byte,
@@ -1070,7 +1070,7 @@ class NikobusDiscovery:
                     await asyncio.sleep(COMMAND_EXECUTION_DELAY)
                 else:
                     _LOGGER.debug(
-                        "Register scan completed full range | module=%s sent=%d",
+                        "Register scan completed full range for module %s — sent %d",
                         normalized_address,
                         registers_sent,
                     )
@@ -1114,7 +1114,7 @@ class NikobusDiscovery:
                     # mid-scan reconnect cycles; the outer scan loop
                     # fast-fails cleanly. Keep at DEBUG.
                     _LOGGER.debug(
-                        "Register scan send failed | module=%s reg=0x%02X attempt=%d",
+                        "Register scan send failed for module %s — register 0x%02X, attempt %d",
                         module_address,
                         reg,
                         attempt + 1,
@@ -1128,7 +1128,7 @@ class NikobusDiscovery:
                 )
                 if not ack_ok:
                     _LOGGER.debug(
-                        "Register scan ACK timeout | module=%s reg=0x%02X attempt=%d",
+                        "Register scan ACK timeout for module %s — register 0x%02X, attempt %d",
                         module_address,
                         reg,
                         attempt + 1,
@@ -1153,7 +1153,7 @@ class NikobusDiscovery:
         # (handled by the outer fast-fail). Keep at DEBUG to avoid
         # cluttering the integration log.
         _LOGGER.debug(
-            "Register scan gave up on register | module=%s reg=0x%02X",
+            "Register scan gave up for module %s — register 0x%02X",
             module_address,
             reg,
         )
@@ -1260,8 +1260,8 @@ class NikobusDiscovery:
 
         try:
             await self._finalize_inventory_phase()
-        except Exception as err:
-            _LOGGER.error("CRITICAL ERROR in _finalize_inventory_phase: %s", err, exc_info=True)
+        except Exception:
+            _LOGGER.exception("Failed to finalize inventory phase")
             self.reset_state()
 
     async def _emit_progress(
@@ -1299,7 +1299,7 @@ class NikobusDiscovery:
                 await result
         except Exception:
             _LOGGER.warning(
-                "Discovery on_progress callback raised; continuing scan",
+                "Discovery on_progress callback raised — continuing scan",
                 exc_info=True,
             )
 
@@ -1454,8 +1454,7 @@ class NikobusDiscovery:
                     "pc_logic_slot_index": slot_index,
                 }
                 _LOGGER.info(
-                    "Synthesized %s input | parent=%s slot=%d "
-                    "address=%s",
+                    "Synthesized %s input — parent %s, slot %d, address %s",
                     module_type,
                     module_addr,
                     slot_index,
@@ -1534,16 +1533,16 @@ class NikobusDiscovery:
 
         for addr, cf in sorted(found.items()):
             _LOGGER.info(
-                "CF activation broadcast | address=%s pattern=%s "
-                "outputs=%d sample_members=%s",
+                "CF activation broadcast %s — pattern %s, outputs %d, "
+                "sample members %s",
                 addr,
                 cf.pattern,
                 len(cf.outputs),
                 [(o.module_address, o.channel, o.mode) for o in cf.outputs[:5]],
             )
         _LOGGER.info(
-            "CF classification | total_broadcasts=%d consumed_unmatched=%d "
-            "remaining_unmatched=%d",
+            "CF classification — total broadcasts %d, consumed unmatched %d, "
+            "remaining unmatched %d",
             len(found),
             len(consumed),
             len(self._accumulated_unmatched),
@@ -1732,14 +1731,14 @@ class NikobusDiscovery:
 
         for addr, cf in sorted(found.items()):
             _LOGGER.info(
-                "CF light-scene | source=%s triggers=%s outputs=%d sample_members=%s",
+                "CF light-scene from %s — triggers %s, outputs %d, sample members %s",
                 addr,
                 cf.triggered_by,
                 len(cf.outputs),
                 [(o.module_address, o.channel, o.mode) for o in cf.outputs[:5]],
             )
         _LOGGER.info(
-            "CF light-scene classification | total_scenes=%d", len(found)
+            "CF light-scene classification — total scenes %d", len(found)
         )
     def _synthesize_remote_transmitters_from_unmatched(self) -> None:
         """Synthesise virtual transmitters from clusters of unmatched
@@ -1770,10 +1769,10 @@ class NikobusDiscovery:
 
         if not self._accumulated_unmatched:
             _LOGGER.info(
-                "Remote-transmitter synthesis | accumulator empty — no "
+                "Remote-transmitter synthesis — accumulator empty, no "
                 "unmatched references were collected during this scan "
                 "(either no scan ran or every BP-cell reference resolved "
-                "to an existing button-store entry)."
+                "to an existing button-store entry)"
             )
             return
 
@@ -1795,9 +1794,9 @@ class NikobusDiscovery:
         )
         sample_addresses = sorted(self._accumulated_unmatched)[:20]
         _LOGGER.info(
-            "Remote-transmitter synthesis | accumulator_size=%d "
-            "unique_suffixes=%d threshold=%d top_clusters=%s "
-            "sample_addresses=%s",
+            "Remote-transmitter synthesis — accumulator size %d, "
+            "unique suffixes %d, threshold %d, top clusters %s, "
+            "sample addresses %s",
             len(self._accumulated_unmatched),
             len(clusters),
             self.REMOTE_TRANSMITTER_CLUSTER_THRESHOLD,
@@ -1853,8 +1852,8 @@ class NikobusDiscovery:
                 }
 
             _LOGGER.info(
-                "Synthesized remote transmitter | suffix=%s "
-                "member_count=%d transmitter_id=%s",
+                "Synthesized remote transmitter — suffix %s, "
+                "member count %d, transmitter id %s",
                 suffix,
                 len(members),
                 transmitter_id,
@@ -1866,20 +1865,20 @@ class NikobusDiscovery:
     async def _finalize_inventory_phase(self) -> None:
         """Finalize the PC-Link inventory phase."""
         self._cancel_inventory_timeout()
-        _LOGGER.debug("Entering _finalize_inventory_phase. Stage: %s", self.discovery_stage)
+        _LOGGER.debug("Entering inventory-phase finalize — stage %s", self.discovery_stage)
 
         # Stage 1: we have inventory addresses but haven't queued identity/register queries yet
         if self.discovery_stage == "inventory_addresses" and self._inventory_addresses:
             pending_addresses = self._inventory_addresses - self._inventory_identity_queued
             if pending_addresses:
-                _LOGGER.debug("Found pending inventory addresses, queuing identity queries.")
+                _LOGGER.debug("Found pending inventory addresses — queuing identity queries")
                 await self._run_inventory_identity_queries(pending_addresses)
                 self._inventory_identity_queued.update(pending_addresses)
                 self.discovery_stage = "inventory_identity"
                 self._schedule_inventory_timeout()
                 return
             else:
-                _LOGGER.debug("No pending inventory addresses. Moving directly to Stage 2.")
+                _LOGGER.debug("No pending inventory addresses — moving directly to stage 2")
                 self.discovery_stage = "inventory_identity"
 
         # Stage 1.6: synthesise PC-Logic logical-input "virtual buttons".
@@ -1894,16 +1893,16 @@ class NikobusDiscovery:
         self._synthesize_pc_logic_inputs()
 
         # Stage 2: inventory complete -> persist results
-        _LOGGER.debug("Starting updates for module and button data.")
+        _LOGGER.debug("Starting updates for module and button data")
         try:
             if self._module_data is not None:
                 merge_discovered_modules(
                     self._module_data, self.discovered_devices
                 )
-                _LOGGER.debug("Finished merge_discovered_modules.")
+                _LOGGER.debug("Finished merge_discovered_modules")
                 if self._on_module_save is not None:
                     await self._on_module_save()
-                    _LOGGER.debug("Finished on_module_save callback.")
+                    _LOGGER.debug("Finished on_module_save callback")
             if self._button_data is not None:
                 merge_discovered_buttons(
                     self._button_data,
@@ -1911,26 +1910,42 @@ class NikobusDiscovery:
                     KEY_MAPPING,
                     convert_nikobus_address,
                 )
-                _LOGGER.debug("Finished merge_discovered_buttons.")
+                _LOGGER.debug("Finished merge_discovered_buttons")
                 if self._on_button_save is not None:
                     await self._on_button_save()
-                    _LOGGER.debug("Finished on_button_save callback.")
+                    _LOGGER.debug("Finished on_button_save callback")
         except Exception:
-            _LOGGER.error("Error during inventory finalization", exc_info=True)
+            _LOGGER.exception("Inventory finalization failed")
             raise
 
+        # Single INFO roll-up of what the inventory found — the
+        # per-device "Discovered ..." lines are at DEBUG so a large
+        # install doesn't produce dozens of INFO lines.
+        _modules = sum(
+            1
+            for d in self.discovered_devices.values()
+            if isinstance(d, dict) and d.get("category") == "Module"
+        )
+        _buttons = sum(
+            1
+            for d in self.discovered_devices.values()
+            if isinstance(d, dict) and d.get("category") == "Button"
+        )
         _LOGGER.info(
-            "PC Link inventory scan finished | discovered=%d",
+            "PC-Link inventory scan finished — discovered %d device(s): "
+            "%d module(s), %d button(s)",
             len(self.discovered_devices),
+            _modules,
+            _buttons,
         )
 
         _LOGGER.debug(
-            "DUMP OF DISCOVERED DEVICES:\n%s",
+            "Discovered devices dump:\n%s",
             json.dumps(self.discovered_devices, indent=2)
         )
 
         _LOGGER.info(
-            "PC Link inventory phase completed. Module discovery is manual; stopping here."
+            "PC-Link inventory phase completed — module discovery is manual, stopping here"
         )
 
         # End discovery here (do not chain into register_scan automatically)
@@ -1962,7 +1977,7 @@ class NikobusDiscovery:
             bus_order_address = address[2:4] + address[:2]
 
             _LOGGER.debug(
-                "PC Link inventory enumeration starting | address=%s bus=%s",
+                "PC-Link inventory enumeration starting for address %s — bus %s",
                 address,
                 bus_order_address,
             )
@@ -1978,7 +1993,7 @@ class NikobusDiscovery:
                 pc_link_command = make_pc_link_inventory_command(payload)
 
                 _LOGGER.debug(
-                    "PC Link inventory key queued | address=%s bus=%s reg=%02X",
+                    "PC-Link inventory key queued for address %s — bus %s, register %02X",
                     address,
                     bus_order_address,
                     reg,
@@ -2007,7 +2022,7 @@ class NikobusDiscovery:
 
     async def _start_next_register_scan(self) -> None:
         if not self._register_scan_queue:
-            _LOGGER.info("All modules in queue have been scanned.")
+            _LOGGER.info("All modules in queue have been scanned")
             await self._complete_discovery_run(None)
             return
 
@@ -2016,7 +2031,7 @@ class NikobusDiscovery:
             next_module, source="register_scan_queue"
         )
         _LOGGER.info(
-            "Discovery started | module=%s (Remaining in queue: %d)",
+            "Discovery started for module %s — %d remaining in queue",
             normalized_address,
             len(self._register_scan_queue)
         )
@@ -2111,10 +2126,10 @@ class NikobusDiscovery:
                         self._accumulated_command_mapping,
                     )
                     _LOGGER.info(
-                        "Remote-transmitter cluster synthesis | "
-                        "new_devices=%d updated_buttons=%d "
-                        "links_added=%d outputs_added=%d "
-                        "residual_unmatched=%d",
+                        "Remote-transmitter cluster synthesis — "
+                        "new devices %d, updated buttons %d, "
+                        "links added %d, outputs added %d, "
+                        "residual unmatched %d",
                         synthesised,
                         updated_buttons,
                         links_added,
@@ -2188,8 +2203,8 @@ class NikobusDiscovery:
         self._progress_pass_index = 1
         self._progress_pass_total = 1
         self._progress_current_sub_byte = None
-        _LOGGER.info("PC Link inventory enumeration started")
-        _LOGGER.debug("Queueing PC Link inventory command #A")
+        _LOGGER.info("PC-Link inventory enumeration started")
+        _LOGGER.debug("Queueing PC-Link inventory command #A")
         await self._coordinator.nikobus_command.queue_command("#A")
         # Mark the single unit as in-flight so the bar leaves 0 once
         # the command is on the wire. Completion is signalled when
@@ -2292,8 +2307,8 @@ class NikobusDiscovery:
             nikobus_command, "get_output_state"
         ):
             _LOGGER.warning(
-                "detect_stale_inventory: coordinator has no nikobus_command "
-                "with get_output_state; returning empty manifest"
+                "Stale-inventory detection — coordinator has no nikobus_command "
+                "with get_output_state, returning empty manifest"
             )
             return empty
 
@@ -2341,8 +2356,7 @@ class NikobusDiscovery:
                     absent_last_reason[addr] = type(exc).__name__
                 else:
                     _LOGGER.debug(
-                        "Bus presence probe | addr=%s status=present "
-                        "outer=%d/%d",
+                        "Bus presence probe %s present — outer %d/%d",
                         addr,
                         outer,
                         outer_passes,
@@ -2364,8 +2378,7 @@ class NikobusDiscovery:
                 continue
             reason = absent_last_reason.get(addr, "timeout")
             _LOGGER.info(
-                "Bus presence probe | addr=%s status=absent reason=%s "
-                "outer_passes=%d",
+                "Bus presence probe %s absent — reason %s, outer passes %d",
                 addr,
                 reason,
                 outer_passes,
@@ -2416,8 +2429,8 @@ class NikobusDiscovery:
         }
 
         _LOGGER.info(
-            "Stale-inventory probe complete | checked=%d present=%d "
-            "absent=%d orphaned_buttons=%d",
+            "Stale-inventory probe complete — checked %d, present %d, "
+            "absent %d, orphaned buttons %d",
             len(manifest["checked"]),
             len(manifest["present_modules"]),
             len(manifest["absent_modules"]),
@@ -2436,7 +2449,7 @@ class NikobusDiscovery:
         marker_index = clean_message.find(DEVICE_ADDRESS_INVENTORY)
         if marker_index == -1:
             _LOGGER.debug(
-                "Inventory record ignored | reason=missing_marker message=%s",
+                "Inventory record ignored — missing marker, message %s",
                 message,
             )
             return
@@ -2462,11 +2475,10 @@ class NikobusDiscovery:
             and signature_byte != PC_LINK_INVENTORY_SIGNATURE_BYTE
         ):
             _LOGGER.warning(
-                "Inventory record rejected | reason=non_pc_link_signature "
-                "raw=%s signature=0x%02X (expected 0x%02X — PC-Link); "
-                "this responder is most likely a PC-Logic answering #A "
-                "before the PC-Link did. Verify a PC-Link (model 0A) "
-                "is present on the bus.",
+                "Inventory record rejected — non-PC-Link signature, raw %s, "
+                "signature 0x%02X (expected 0x%02X for PC-Link); this responder "
+                "is most likely a PC-Logic answering #A before the PC-Link did "
+                "— verify a PC-Link (model 0A) is present on the bus",
                 raw_address,
                 signature_byte,
                 PC_LINK_INVENTORY_SIGNATURE_BYTE,
@@ -2479,9 +2491,9 @@ class NikobusDiscovery:
         is_new = normalized not in self._inventory_addresses
         self._inventory_addresses.add(normalized)
         _LOGGER.debug(
-            "Inventory record | raw=%s normalized=%s", raw_address, normalized
+            "Inventory record — raw %s, normalized %s", raw_address, normalized
         )
-        _LOGGER.debug("Inventory record | address=%s", normalized)
+        _LOGGER.debug("Inventory record — address %s", normalized)
         self._ensure_pc_link_address(normalized, source="device_address_inventory")
         if is_new and self.discovery_stage == "inventory_addresses":
             self._create_task(
@@ -2502,7 +2514,7 @@ class NikobusDiscovery:
         existing = self.discovered_devices.get(address)
         if existing and existing.get("module_type") != "pc_link":
             _LOGGER.debug(
-                "Skipping PC Link address record | address=%s reason=existing_module_type",
+                "Skipping PC-Link address record %s — existing module type",
                 address,
             )
             return
@@ -2511,7 +2523,7 @@ class NikobusDiscovery:
         known_pc_links = coordinator_modules.get("pc_link") or {}
         if known_pc_links and address not in known_pc_links:
             _LOGGER.debug(
-                "Skipping PC Link address record | address=%s reason=known_pc_link_present source=%s",
+                "Skipping PC-Link address record %s — known PC-Link present, source %s",
                 address,
                 source,
             )
@@ -2541,7 +2553,7 @@ class NikobusDiscovery:
             self.discovered_devices[address] = base_device
 
         _LOGGER.debug(
-            "PC Link address recorded | address=%s source=%s",
+            "PC-Link address recorded %s — source %s",
             address,
             source,
         )
@@ -2616,13 +2628,13 @@ class NikobusDiscovery:
 
             if not all_addresses:
                 _LOGGER.warning(
-                    "No output modules found in config to scan (dict_module_data keys=%s)",
+                    "No output modules found in config to scan — dict_module_data keys %s",
                     list(dict_data.keys()) if isinstance(dict_data, dict) else type(dict_data).__name__,
                 )
                 self.reset_state()
                 return
 
-            _LOGGER.info("Starting sequential discovery queue for ALL output modules: %s", all_addresses)
+            _LOGGER.info("Starting sequential discovery queue for all output modules — %s", all_addresses)
             self.discovery_stage = "register_scan"
             self._register_scan_queue = all_addresses
             self._progress_module_total = len(all_addresses)
@@ -2642,7 +2654,7 @@ class NikobusDiscovery:
         discovered_device = self.discovered_devices.get(normalized_address, {})
 
         if not self._coordinator.discovery_module:
-            _LOGGER.info("Discovery started | module=%s", normalized_address)
+            _LOGGER.info("Discovery started for module %s", normalized_address)
             if not from_queue:
                 self._coordinator.discovery_running = True
                 # Single-module entry — seed progress for a queue of one.
@@ -2698,8 +2710,8 @@ class NikobusDiscovery:
             effective_sub = (sub_byte or "04").upper()
             forensic_range = range(register_start, register_end + 1)
             _LOGGER.info(
-                "Forensic register scan | module=%s function=%s sub=%s "
-                "range=0x%02X..0x%02X (custom range mode — extra passes skipped)",
+                "Forensic register scan of module %s — function %s, sub %s, "
+                "range 0x%02X..0x%02X (custom range mode, extra passes skipped)",
                 normalized_address,
                 base_command[:2],
                 effective_sub,
@@ -2717,7 +2729,7 @@ class NikobusDiscovery:
 
         if not is_output_module:
             _LOGGER.debug(
-                "Skipping register scan for non-output module | module=%s type=%s",
+                "Skipping register scan for non-output module %s — type %s",
                 normalized_address,
                 self._module_type,
             )
@@ -2767,8 +2779,8 @@ class NikobusDiscovery:
             self._progress_pass_index = pass_index
             self._progress_current_sub_byte = wire_sub
             _LOGGER.debug(
-                "Register scan pass starting | module=%s function=%s "
-                "sub=%s wire_sub=%s registers=%d pass=%d/%d",
+                "Register scan pass starting for module %s — function %s, "
+                "sub %s, wire sub %s, registers %d, pass %d/%d",
                 normalized_address,
                 function_code,
                 sub_byte,
@@ -2801,7 +2813,7 @@ class NikobusDiscovery:
             payload_bytes = bytes.fromhex(payload)
 
             _LOGGER.debug(
-                "Inventory raw frame | length=%d hex=%s",
+                "Inventory raw frame — length %d, hex %s",
                 len(payload_bytes),
                 payload_bytes.hex().upper(),
             )
@@ -2821,14 +2833,14 @@ class NikobusDiscovery:
             # bus presence rather than inferring from register patterns.
             if bool(data_bytes) and all(b == 0xFF for b in data_bytes):
                 _LOGGER.debug(
-                    "Empty PC Link registry block (FFFF...) detected. "
-                    "Skipping to next."
+                    "Empty PC-Link registry block (FFFF...) detected — "
+                    "skipping to next"
                 )
                 return result
 
             if len(payload_bytes) < 15:
                 _LOGGER.debug(
-                    "Discovery skipped | reason=payload_too_short length=%d",
+                    "Skipped inventory record — payload too short, length %d",
                     len(payload_bytes),
                 )
                 return result
@@ -2845,8 +2857,8 @@ class NikobusDiscovery:
             # and a phantom "Discovered Unknown" device entry.
             if device_type_hex in ("FE", "FF"):
                 _LOGGER.debug(
-                    "Discovery skipped | type=inventory module=%s "
-                    "reason=empty_register raw_type=%s",
+                    "Skipped inventory record for module %s — empty register, "
+                    "raw type %s",
                     self._module_address,
                     device_type_hex,
                 )
@@ -2876,7 +2888,7 @@ class NikobusDiscovery:
             # in addition to the exact FFFF / FFFFFF matches.
             if converted_address.startswith("FF"):
                 _LOGGER.debug(
-                    "Discovery skipped | reason=deleted_or_empty_address address=%s type=%s",
+                    "Skipped inventory record — deleted or empty address %s, type %s",
                     converted_address,
                     device_type_hex
                 )
@@ -2887,14 +2899,14 @@ class NikobusDiscovery:
                 if device_type_hex not in self._unknown_device_types_warned:
                     self._unknown_device_types_warned.add(device_type_hex)
                     _LOGGER.warning(
-                        "Unknown device detected: Type %s at Address %s. "
-                        "Please open an issue on https://github.com/fdebrus/Nikobus-HA/issues with this information.",
+                        "Unknown device detected — type %s at address %s; "
+                        "please open an issue on https://github.com/fdebrus/Nikobus-HA/issues with this information",
                         device_type_hex,
                         converted_address,
                     )
                 else:
                     _LOGGER.debug(
-                        "Unknown device detected (deduped): Type %s at Address %s",
+                        "Unknown device detected (deduped) — type %s at address %s",
                         device_type_hex,
                         converted_address,
                     )
@@ -2902,7 +2914,7 @@ class NikobusDiscovery:
             module_type = get_module_type_from_device_type(device_type_hex)
             if module_type == "pc_link":
                 _LOGGER.info(
-                    "PC Link detected during inventory enumeration | address=%s",
+                    "PC-Link detected during inventory enumeration — address %s",
                     converted_address,
                 )
 
@@ -2938,8 +2950,9 @@ class NikobusDiscovery:
             self.discovered_devices[converted_address] = device_entry
 
             _LOGGER.debug(
-                "Inventory classification | module_address=%s device_type=%s module_type=%s "
-                "model=%s channels=%s raw_type_byte=0x%02X raw_addr_bytes=%s",
+                "Inventory classification for module %s — device type %s, "
+                "module type %s, model %s, channels %s, raw type byte 0x%02X, "
+                "raw address bytes %s",
                 converted_address,
                 device_type_hex,
                 module_type,
@@ -2950,8 +2963,10 @@ class NikobusDiscovery:
             )
 
             if first_sight:
-                _LOGGER.info(
-                    "Discovered %s - %s, Model: %s, at Address: %s",
+                # Per-device detail at DEBUG; the inventory phase logs a
+                # single INFO roll-up (see _finalize_inventory_phase).
+                _LOGGER.debug(
+                    "Discovered %s %s — model %s, address %s",
                     category,
                     name,
                     model,
@@ -2959,14 +2974,14 @@ class NikobusDiscovery:
                 )
             else:
                 _LOGGER.debug(
-                    "Discovery duplicate (already seen this pass) | "
-                    "category=%s address=%s",
+                    "Discovery duplicate (already seen this pass) — "
+                    "category %s, address %s",
                     category,
                     converted_address,
                 )
             return result
         except Exception:
-            _LOGGER.error("Failed to parse Nikobus payload", exc_info=True)
+            _LOGGER.exception("Failed to parse Nikobus payload")
             self.reset_state()
             return None
 
@@ -3017,7 +3032,7 @@ class NikobusDiscovery:
 
             decoder = self._get_decoder()
             if decoder is None:
-                _LOGGER.error("No decoder available for module type: %s", self._module_type)
+                _LOGGER.error("No decoder available for module type %s", self._module_type)
                 self._schedule_timeout()
                 return
 
@@ -3037,8 +3052,8 @@ class NikobusDiscovery:
             response_index = self._scan_response_index
 
             _LOGGER.debug(
-                "Register scan response | module=%s response_index=%d frame_hex=%s "
-                "buffered_chunks=%d remainder_len=%d",
+                "Register scan response for module %s — response index %d, "
+                "frame hex %s, buffered chunks %d, remainder len %d",
                 address,
                 response_index,
                 payload_and_crc.upper(),
@@ -3052,7 +3067,7 @@ class NikobusDiscovery:
                 if not normalized_chunk:
                     continue
                 _LOGGER.debug(
-                    "Discovery relationship chunk | module=%s response_index=%d chunk=%s",
+                    "Relationship chunk for module %s — response index %d, chunk %s",
                     address,
                     response_index,
                     normalized_chunk,
@@ -3064,7 +3079,7 @@ class NikobusDiscovery:
                     # Link / PC Logic), so we check by content rather than
                     # against a single fixed string.
                     _LOGGER.debug(
-                        "Discovery relationship empty chunk detected | module=%s response_index=%d chunk=%s",
+                        "Relationship empty chunk for module %s — response index %d, chunk %s",
                         address,
                         response_index,
                         normalized_chunk,
@@ -3094,8 +3109,8 @@ class NikobusDiscovery:
                 data_region = analysis.get("payload_region", "")
                 if len(data_region) >= tail_len and data_region[-tail_len:] == "F" * tail_len:
                     _LOGGER.debug(
-                        "Register scan FF-tail terminator detected | module=%s "
-                        "response_index=%d tail_len=%d data_region=%s",
+                        "Register scan FF-tail terminator detected for module %s "
+                        "— response index %d, tail len %d, data region %s",
                         address,
                         response_index,
                         tail_len,
@@ -3112,7 +3127,7 @@ class NikobusDiscovery:
                 self._schedule_timeout()
 
         except Exception:
-            _LOGGER.error("Failed to parse module inventory response", exc_info=True)
+            _LOGGER.exception("Failed to parse module inventory response")
             self.reset_state()
 
     async def _handle_decoded_commands(
@@ -3162,7 +3177,7 @@ class NikobusDiscovery:
         }
 
         _LOGGER.debug(
-            "Discovery decoded commands | module=%s count=%d",
+            "Decoded commands for module %s — count %d",
             self._decoded_buffer["module_address"],
             len(self._decoded_buffer["commands"]),
         )
@@ -3191,14 +3206,14 @@ class NikobusDiscovery:
         # no-op merges (the common case on re-discovery) stay at DEBUG.
         if updated_buttons or links_added or outputs_added:
             _LOGGER.info(
-                "Discovered links merged into store: %d buttons updated, %d link blocks added, %d outputs added.",
+                "Discovered links merged into store — %d buttons updated, %d link blocks added, %d outputs added",
                 updated_buttons,
                 links_added,
                 outputs_added,
             )
         else:
             _LOGGER.debug(
-                "Discovered links merged into store: %d buttons updated, %d link blocks added, %d outputs added.",
+                "Discovered links merged into store — %d buttons updated, %d link blocks added, %d outputs added",
                 updated_buttons,
                 links_added,
                 outputs_added,
@@ -3219,14 +3234,14 @@ def run_decoder_harness(coordinator: Any) -> None:
 
     decoders = [DimmerDecoder(coordinator), SwitchDecoder(coordinator), ShutterDecoder(coordinator)]
     for message in sample_messages:
-        _LOGGER.info("HARNESS message=%s", message)
+        _LOGGER.info("Harness message %s", message)
         for decoder in decoders:
             results = decoder.decode(message)
             if not results:
                 continue
             for result in results:
                 _LOGGER.info(
-                    "HARNESS decoder=%s payload_len=%s chunk_len=%s payload=%s metadata=%s",
+                    "Harness decoder %s — payload len %s, chunk len %s, payload %s, metadata %s",
                     decoder.module_type,
                     len(result.payload_hex) if result.payload_hex else "?",
                     len(result.chunk_hex) if result.chunk_hex else "?",

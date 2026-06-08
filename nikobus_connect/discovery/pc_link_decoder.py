@@ -33,6 +33,7 @@ context the resolver can't run.
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from typing import Any
 
 from .base import DecodedCommand
@@ -51,6 +52,52 @@ from .pc_record_parser import (
 
 _LOGGER = logging.getLogger(__name__)
 _LOG_PREFIX = "PC-Link"
+
+
+@dataclass
+class _ScanCounts:
+    """Per-module tally of decoded records.
+
+    The per-record lines (registry / link / resolved target) are logged
+    at DEBUG; these counters drive the single INFO summary emitted per
+    module at scan end, so a full PC-Link / PC-Logic scan produces one
+    meaningful INFO line per module instead of one per record.
+    """
+
+    registry: int = 0
+    links: int = 0
+    resolved: int = 0
+
+    def reset(self) -> None:
+        self.registry = 0
+        self.links = 0
+        self.resolved = 0
+
+
+def _emit_scan_summary(
+    prefix: str,
+    module_address: str | None,
+    counts: _ScanCounts,
+    logger: logging.Logger,
+) -> None:
+    """Log one INFO summary line per module scan, then reset the tally.
+
+    No-ops when nothing was decoded (e.g. the decoder's ``reset`` fires
+    for a module of a different type), so only modules this decoder
+    actually read produce a line.
+    """
+
+    if counts.registry or counts.links:
+        logger.info(
+            "%s scan of module %s — %d registry record(s), %d link "
+            "record(s), %d resolved",
+            prefix,
+            module_address,
+            counts.registry,
+            counts.links,
+            counts.resolved,
+        )
+    counts.reset()
 
 
 def _known_module_addresses(coordinator: Any) -> set[str]:
@@ -107,15 +154,17 @@ class PcLinkDecoder(BaseChunkingDecoder):
     registry is populated, link records' byte 0 is resolved against
     a flat output-channel map built from the coordinator's
     ``get_module_channel_count`` lookups, and the resolved
-    ``(target_module_address, channel)`` is logged at INFO and (since
+    ``(target_module_address, channel)`` is logged at DEBUG and (since
     Stage 2c, 0.5.10) emitted as a ``DecodedCommand`` whose metadata
     carries the resolved target as the ``module_address`` override
-    ``add_to_command_mapping`` consumes.
+    ``add_to_command_mapping`` consumes. One INFO summary line per
+    module reports the registry / link / resolved tallies.
     """
 
     def __init__(self, coordinator: Any) -> None:
         super().__init__(coordinator, "pc_link")
         self._registry = RegistryBuffer()
+        self._scan_counts = _ScanCounts()
 
     def reset_registry(self) -> None:
         """Clear the registry buffer between scans."""
@@ -123,11 +172,18 @@ class PcLinkDecoder(BaseChunkingDecoder):
         self._registry.reset()
 
     def reset_scan_buffers(self) -> None:
-        """Clear per-scan state. Extends the base alt-alignment reset
-        with the registry reset so a fresh scan starts with no carried
-        registry state."""
+        """Clear per-scan state and emit the per-module scan summary.
+
+        Extends the base alt-alignment reset with the registry reset so
+        a fresh scan starts with no carried registry state. Called at
+        each module boundary, so this is where the single INFO summary
+        for the module that just finished is emitted.
+        """
 
         super().reset_scan_buffers()
+        _emit_scan_summary(
+            _LOG_PREFIX, self._module_address, self._scan_counts, _LOGGER
+        )
         self._registry.reset()
 
     def decode_chunk(
@@ -142,6 +198,7 @@ class PcLinkDecoder(BaseChunkingDecoder):
             prefix=_LOG_PREFIX,
             registry=self._registry,
             module_type=self.module_type,
+            counts=self._scan_counts,
         )
 
 
@@ -184,6 +241,7 @@ def _decode_and_log(
     registry: RegistryBuffer | None,
     module_type: str | None,
     logger: logging.Logger | None = None,
+    counts: _ScanCounts | None = None,
 ) -> list[DecodedCommand]:
     """Parse, log, and return a list of ``DecodedCommand``s for the
     merge layer.
@@ -201,7 +259,7 @@ def _decode_and_log(
 
     if is_empty_record(chunk_hex):
         log.debug(
-            "%s empty record | module=%s payload=%s",
+            "%s empty record for module %s — payload %s",
             prefix,
             module_address,
             chunk_hex,
@@ -217,7 +275,7 @@ def _decode_and_log(
         # comes from the output-module link tables, and CF names from the
         # .nkb project. See ``is_cf_address_table_chunk``.
         log.debug(
-            "%s CF address-table chunk | module=%s payload=%s",
+            "%s CF address-table chunk for module %s — payload %s",
             prefix,
             module_address,
             chunk_hex,
@@ -226,7 +284,7 @@ def _decode_and_log(
 
     if is_noise_chunk(chunk_hex):
         log.debug(
-            "%s noise chunk | module=%s payload=%s",
+            "%s noise chunk for module %s — payload %s",
             prefix,
             module_address,
             chunk_hex,
@@ -239,7 +297,7 @@ def _decode_and_log(
     )
     if record is None:
         log.debug(
-            "%s unparseable chunk | module=%s payload=%s",
+            "%s unparseable chunk for module %s — payload %s",
             prefix,
             module_address,
             chunk_hex,
@@ -249,9 +307,11 @@ def _decode_and_log(
     if isinstance(record, ModuleRegistryRecord):
         if registry is not None:
             registry.add(record)
-        log.info(
-            "%s module-registry record | module=%s device_type=0x%02X "
-            "address=%s type_slot=%d raw=%s",
+        if counts is not None:
+            counts.registry += 1
+        log.debug(
+            "%s module-registry record for module %s — device type 0x%02X, "
+            "address %s, type slot %d, raw %s",
             prefix,
             module_address,
             record.device_type,
@@ -262,9 +322,11 @@ def _decode_and_log(
         return commands
 
     if isinstance(record, LinkRecord):
-        log.info(
-            "%s link record | module=%s channel_idx=0x%02X mode=0x%02X "
-            "flag=0x%02X payload=%s slot=0x%02X raw=%s",
+        if counts is not None:
+            counts.links += 1
+        log.debug(
+            "%s link record for module %s — channel index 0x%02X, mode 0x%02X, "
+            "flag 0x%02X, payload %s, slot 0x%02X, raw %s",
             prefix,
             module_address,
             record.channel_index,
@@ -283,8 +345,8 @@ def _decode_and_log(
         )
         if target is None:
             log.debug(
-                "%s link target | module=%s channel_idx=0x%02X "
-                "resolved=None (out of flat-map range or empty registry)",
+                "%s link target for module %s channel index 0x%02X — "
+                "unresolved (out of flat-map range or empty registry)",
                 prefix,
                 module_address,
                 record.channel_index,
@@ -292,9 +354,11 @@ def _decode_and_log(
             return commands
 
         target_address, target_channel = target
-        log.info(
-            "%s link target | module=%s channel_idx=0x%02X "
-            "resolved=%s ch=%d",
+        if counts is not None:
+            counts.resolved += 1
+        log.debug(
+            "%s link target for module %s channel index 0x%02X — "
+            "resolved to %s channel %d",
             prefix,
             module_address,
             record.channel_index,
@@ -322,8 +386,8 @@ def _decode_and_log(
         )
         if metadata is None:
             log.debug(
-                "%s link skipped | module=%s channel_idx=0x%02X "
-                "reason=metadata_resolution_failed (mode/key/source unknown)",
+                "%s link skipped for module %s channel index 0x%02X — "
+                "metadata resolution failed (mode/key/source unknown)",
                 prefix,
                 module_address,
                 record.channel_index,

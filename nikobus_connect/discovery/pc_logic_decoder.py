@@ -40,7 +40,7 @@ from typing import Any
 
 from .base import DecodedCommand
 from .chunk_decoder import BaseChunkingDecoder
-from .pc_link_decoder import _decode_and_log
+from .pc_link_decoder import _ScanCounts, _decode_and_log, _emit_scan_summary
 from .pc_record_parser import RegistryBuffer
 
 _LOGGER = logging.getLogger(__name__)
@@ -52,10 +52,10 @@ def decode(payload_hex: str, raw_bytes: list[str], context: Any) -> dict[str, An
 
     One-shot path with no registry buffer plumbed through, so the
     resolver can't run here and no ``DecodedCommand`` can be returned.
-    Logs the parsed record at INFO for visibility and returns ``None``.
+    Logs the parsed record at DEBUG for visibility and returns ``None``.
     Class-based scans go through ``PcLogicDecoder`` instead, which
-    carries a per-scan registry and emits commands for resolved link
-    records.
+    carries a per-scan registry, emits commands for resolved link
+    records, and logs one INFO summary per module.
     """
 
     _decode_and_log(
@@ -81,6 +81,7 @@ class PcLogicDecoder(BaseChunkingDecoder):
     def __init__(self, coordinator: Any) -> None:
         super().__init__(coordinator, "pc_logic")
         self._registry = RegistryBuffer()
+        self._scan_counts = _ScanCounts()
 
     def reset_registry(self) -> None:
         """Clear the registry buffer between scans."""
@@ -88,11 +89,17 @@ class PcLogicDecoder(BaseChunkingDecoder):
         self._registry.reset()
 
     def reset_scan_buffers(self) -> None:
-        """Clear per-scan state. Extends the base alt-alignment reset
-        with the registry reset so a fresh scan starts with no carried
-        registry state."""
+        """Clear per-scan state and emit the per-module scan summary.
+
+        Extends the base alt-alignment reset with the registry reset so
+        a fresh scan starts with no carried registry state, and emits
+        the single INFO summary for the module that just finished.
+        """
 
         super().reset_scan_buffers()
+        _emit_scan_summary(
+            _LOG_PREFIX, self._module_address, self._scan_counts, _LOGGER
+        )
         self._registry.reset()
 
     def decode_chunk(
@@ -108,6 +115,7 @@ class PcLogicDecoder(BaseChunkingDecoder):
             registry=self._registry,
             module_type=self.module_type,
             logger=_LOGGER,
+            counts=self._scan_counts,
         )
 
 

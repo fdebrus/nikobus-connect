@@ -167,39 +167,42 @@ def test_pc_link_decoder_is_registered_on_discovery(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_pc_link_decoder_logs_registry_record_at_info(caplog):
+def test_pc_link_decoder_logs_registry_record_at_debug(caplog):
+    # Per-record detail is logged at DEBUG (the INFO stream carries one
+    # summary line per module instead); the one-shot decode() path has
+    # no summary, so its record lands at DEBUG.
     context = MagicMock()
     context.module_address = "86F5"
     # 940C registry entry from the trace (PC Logic seen by the PC Link).
     chunk = "03000000080000000C94000001000000"
 
-    with caplog.at_level(logging.INFO, logger="nikobus_connect.discovery.pc_link_decoder"):
+    with caplog.at_level(logging.DEBUG, logger="nikobus_connect.discovery.pc_link_decoder"):
         result = decode(chunk, [], context)
 
     assert result is None
     log_text = caplog.text
     assert "PC-Link module-registry record" in log_text
     assert "86F5" in log_text
-    assert "address=940C" in log_text
-    assert "device_type=0x08" in log_text
+    assert "address 940C" in log_text
+    assert "device type 0x08" in log_text
 
 
-def test_pc_link_decoder_logs_link_record_at_info(caplog):
+def test_pc_link_decoder_logs_link_record_at_debug(caplog):
     context = MagicMock()
     context.module_address = "86F5"
     # First link record from roswennen's trace, reg=0xAD.
     chunk = "0400000006000080B443180001000000"
 
-    with caplog.at_level(logging.INFO, logger="nikobus_connect.discovery.pc_link_decoder"):
+    with caplog.at_level(logging.DEBUG, logger="nikobus_connect.discovery.pc_link_decoder"):
         result = decode(chunk, [], context)
 
     assert result is None
     log_text = caplog.text
     assert "PC-Link link record" in log_text
-    assert "channel_idx=0x04" in log_text
-    assert "mode=0x06" in log_text
-    assert "flag=0x80" in log_text
-    assert "payload=B44318" in log_text
+    assert "channel index 0x04" in log_text
+    assert "mode 0x06" in log_text
+    assert "flag 0x80" in log_text
+    assert "payload B44318" in log_text
 
 
 def test_pc_link_decoder_returns_none_for_any_chunk():
@@ -229,7 +232,7 @@ def test_decode_command_payload_routes_pc_link_to_decoder(caplog):
     coord.get_module_channel_count = MagicMock(return_value=0)
     chunk = "0400000006000080B443180001000000"
 
-    with caplog.at_level(logging.INFO, logger="nikobus_connect.discovery.pc_link_decoder"):
+    with caplog.at_level(logging.DEBUG, logger="nikobus_connect.discovery.pc_link_decoder"):
         result = decode_command_payload(
             chunk, "pc_link", coord, module_address="86F5"
         )

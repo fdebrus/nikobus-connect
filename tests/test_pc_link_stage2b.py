@@ -364,7 +364,7 @@ def test_pc_link_decoder_accumulates_registry_across_chunks():
 
 def test_pc_link_decoder_logs_resolved_target_for_link_record(caplog):
     """After a link record is parsed and the registry is populated,
-    the decoder logs an INFO ``link target`` line carrying the
+    the decoder logs a DEBUG ``link target`` line carrying the
     resolved ``(target, channel)`` pair from the flat map."""
 
     coord = _make_fdebrus_coordinator()
@@ -388,13 +388,13 @@ def test_pc_link_decoder_logs_resolved_target_for_link_record(caplog):
 
     # Then a link record with channel_idx=0x21 (33 dec). On the
     # fdebrus flat map, idx 33 → (C9A5, 10).
-    with caplog.at_level(logging.INFO, logger="nikobus_connect.discovery.pc_link_decoder"):
+    with caplog.at_level(logging.DEBUG, logger="nikobus_connect.discovery.pc_link_decoder"):
         decoder.decode_chunk("210000001F000080F6582E0006000000")
 
     assert "PC-Link link target" in caplog.text
-    assert "channel_idx=0x21" in caplog.text
-    assert "resolved=C9A5" in caplog.text
-    assert "ch=10" in caplog.text
+    assert "channel index 0x21" in caplog.text
+    assert "resolved to C9A5" in caplog.text
+    assert "channel 10" in caplog.text
 
 
 def test_pc_link_decoder_logs_unresolved_at_debug_when_registry_incomplete(caplog):
@@ -412,15 +412,52 @@ def test_pc_link_decoder_logs_unresolved_at_debug_when_registry_incomplete(caplo
         decoder.decode_chunk("0400000006000080B443180001000000")
 
     assert "PC-Link link target" in caplog.text
-    assert "resolved=None" in caplog.text
-    # And the INFO-level "link record" line is still emitted...
+    assert "unresolved" in caplog.text
+    # The per-record "link record" line is still emitted (now at DEBUG)...
     assert "PC-Link link record" in caplog.text
-    # ...but the resolution itself is at DEBUG.
+    # ...and the unresolved resolution is at DEBUG.
     debug_lines = [
         rec for rec in caplog.records
         if "link target" in rec.message and rec.levelno == logging.DEBUG
     ]
     assert len(debug_lines) == 1
+
+
+def test_pc_link_decoder_emits_one_info_summary_per_module(caplog):
+    """The per-record dumps are at DEBUG; the INFO stream gets a single
+    summary line per module (registry / link / resolved tallies),
+    emitted when the scan boundary calls ``reset_scan_buffers``."""
+
+    coord = _make_fdebrus_coordinator()
+    decoder = PcLinkDecoder(coord)
+    decoder.set_module_address("86F5")
+
+    registry_chunks = [
+        "03000000030000006C0E000001000000",  # 0E6C dimmer
+        "0300000001000000A5C9000001000000",  # C9A5 switch
+    ]
+    for chunk in registry_chunks:
+        decoder.decode_chunk(chunk)
+    # One link record resolving against the (partial) registry.
+    decoder.decode_chunk("210000001F000080F6582E0006000000")
+
+    with caplog.at_level(logging.INFO, logger="nikobus_connect.discovery.pc_link_decoder"):
+        decoder.reset_scan_buffers()
+
+    info_lines = [
+        rec for rec in caplog.records if rec.levelno == logging.INFO
+    ]
+    assert len(info_lines) == 1
+    summary = info_lines[0].getMessage()
+    assert "PC-Link scan of module 86F5" in summary
+    assert "2 registry record(s)" in summary
+    assert "1 link record(s)" in summary
+
+    # Counters reset for the next module: a no-op reset emits nothing.
+    caplog.clear()
+    with caplog.at_level(logging.INFO, logger="nikobus_connect.discovery.pc_link_decoder"):
+        decoder.reset_scan_buffers()
+    assert [r for r in caplog.records if r.levelno == logging.INFO] == []
 
 
 def test_pc_link_decoder_registry_records_emit_no_commands():
