@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 from .exceptions import NikobusError
 
@@ -29,7 +30,7 @@ class NikobusAPI:
         self._command_handler = command_handler
         self._module_data = module_data
 
-    def _get_channel_info(self, module_key: str, address: str, channel: int) -> dict:
+    def _get_channel_info(self, module_key: str, address: str, channel: int) -> dict[str, Any]:
         """Safely retrieve channel metadata and always return a dict."""
         module_data = self._module_data.get(module_key, {})
         try:

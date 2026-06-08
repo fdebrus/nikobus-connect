@@ -5,7 +5,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
-from typing import Any, Callable, Optional
+from collections.abc import Callable
+from typing import Any
 
 from .const import (
     BUTTON_COMMAND_PREFIX,
@@ -28,7 +29,7 @@ class NikobusEventListener:
         self,
         connection: Any,
         event_callback: Callable[[str], Any],
-        feedback_callback: Optional[Callable[[int, str], Any]] = None,
+        feedback_callback: Callable[[int, str], Any] | None = None,
         has_feedback_module: bool = False,
     ) -> None:
         """Initialize the listener.
@@ -74,6 +75,17 @@ class NikobusEventListener:
             self.response_queue.put_nowait(message)
             _LOGGER.warning("Response queue was full — dropped oldest message to make room")
 
+    @staticmethod
+    async def _invoke(callback: Callable[..., Any] | None, *args: Any) -> None:
+        """Call ``callback`` with ``args``, awaiting it if it's a coroutine
+        function. No-op when ``callback`` is ``None``."""
+        if callback is None:
+            return
+        if asyncio.iscoroutinefunction(callback):
+            await callback(*args)
+        else:
+            callback(*args)
+
     async def start(self) -> None:
         """Start the background listening task."""
         self._running = True
@@ -110,11 +122,7 @@ class NikobusEventListener:
                 if not self._connection.is_connected:
                     _LOGGER.warning("Connection lost — listener loop exiting.")
                     self._running = False
-                    if self.on_connection_lost:
-                        if asyncio.iscoroutinefunction(self.on_connection_lost):
-                            await self.on_connection_lost()
-                        else:
-                            self.on_connection_lost()
+                    await self._invoke(self.on_connection_lost)
                     break
                 await asyncio.sleep(1)
 
@@ -141,10 +149,7 @@ class NikobusEventListener:
 
         # Handle button presses — dispatch to event callback and return
         if message.startswith(BUTTON_COMMAND_PREFIX):
-            if asyncio.iscoroutinefunction(self._event_callback):
-                await self._event_callback(message)
-            else:
-                self._event_callback(message)
+            await self._invoke(self._event_callback, message)
             return
 
         # Command acknowledgments go straight to the response queue
@@ -155,10 +160,7 @@ class NikobusEventListener:
         if any(message.startswith(cmd) for cmd in COMMAND_PROCESSED):
             if self._awaiting_response:
                 self._enqueue_response(message)
-            if asyncio.iscoroutinefunction(self._event_callback):
-                await self._event_callback(message)
-            else:
-                self._event_callback(message)
+            await self._invoke(self._event_callback, message)
             return
 
         # GET-state command echoes ($1012/$1017) — track group and discard
@@ -178,10 +180,7 @@ class NikobusEventListener:
                     if len(message) >= 7:
                         addr = (message[5:7] + message[3:5]).upper()
                         group = self._last_query_group.get(addr, 1)
-                        if asyncio.iscoroutinefunction(self._feedback_callback):
-                            await self._feedback_callback(group, message)
-                        else:
-                            self._feedback_callback(group, message)
+                        await self._invoke(self._feedback_callback, group, message)
                 if self._awaiting_response:
                     self._enqueue_response(message)
             return
@@ -195,10 +194,7 @@ class NikobusEventListener:
         # Discovery frames ($18 inventory, $2E/$1E register answers)
         # Forward to event callback so the integration can route them.
         if message.startswith(("$18", "$2E", "$1E")):
-            if asyncio.iscoroutinefunction(self._event_callback):
-                await self._event_callback(message)
-            else:
-                self._event_callback(message)
+            await self._invoke(self._event_callback, message)
             return
 
         # All other PC-Link responses. Only enqueue while a caller is
@@ -213,10 +209,7 @@ class NikobusEventListener:
             return
 
         # General event callback for unhandled messages
-        if asyncio.iscoroutinefunction(self._event_callback):
-            await self._event_callback(message)
-        else:
-            self._event_callback(message)
+        await self._invoke(self._event_callback, message)
 
     def validate_crc(self, message: str) -> bool:
         """Validate the Nikobus CRC-8 for PC-Link frames."""
