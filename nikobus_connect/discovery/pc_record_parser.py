@@ -37,7 +37,7 @@ validate the byte-0 → ``(module, channel)`` mapping against.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Iterable, Union
+from typing import Any, Iterable, Union
 
 from .mapping import (
     DEVICE_TYPES,
@@ -437,7 +437,7 @@ class RegistryBuffer:
 
 def build_flat_channel_map(
     registry: RegistryBuffer,
-    coordinator,
+    coordinator: Any,
 ) -> list[tuple[str, int]]:
     """Build the flat output-channel map a PC-Link link record's byte 0
     indexes into.
@@ -476,7 +476,7 @@ def build_flat_channel_map(
 def resolve_link_target(
     channel_index: int,
     registry: RegistryBuffer,
-    coordinator,
+    coordinator: Any,
 ) -> tuple[str, int] | None:
     """Resolve a link record's byte 0 to ``(target_address, channel)``.
 
@@ -561,10 +561,10 @@ def _key_raw_from_flag_byte(
 def link_record_to_decoded_metadata(
     record: LinkRecord,
     registry: RegistryBuffer,
-    coordinator,
+    coordinator: Any,
     *,
     record_source: str | None = None,
-) -> dict | None:
+) -> dict[str, Any] | None:
     """Translate a parsed ``LinkRecord`` into ``DecodedCommand`` metadata.
 
     Combines three resolutions:
@@ -643,7 +643,7 @@ def link_record_to_decoded_metadata(
     if key_raw is None:
         return None
 
-    metadata: dict = {
+    metadata: dict[str, Any] = {
         "module_address": target_address,
         "channel": target_channel,
         "M": mode_label,

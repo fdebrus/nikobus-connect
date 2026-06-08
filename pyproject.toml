@@ -21,6 +21,19 @@ Repository = "https://github.com/fdebrus/nikobus-connect"
 [tool.setuptools.packages.find]
 include = ["nikobus_connect*"]
 
+[tool.setuptools.package-data]
+nikobus_connect = ["py.typed"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+
+[tool.mypy]
+python_version = "3.11"
+files = ["nikobus_connect"]
+strict = true
+
+# pyserial-asyncio ships no type information (no stubs, no py.typed).
+[[tool.mypy.overrides]]
+module = "serial_asyncio"
+ignore_missing_imports = true

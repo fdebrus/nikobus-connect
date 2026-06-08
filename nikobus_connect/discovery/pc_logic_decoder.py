@@ -38,6 +38,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from .base import DecodedCommand
 from .chunk_decoder import BaseChunkingDecoder
 from .pc_link_decoder import _decode_and_log
 from .pc_record_parser import RegistryBuffer
@@ -46,7 +47,7 @@ _LOGGER = logging.getLogger(__name__)
 _LOG_PREFIX = "PC-Logic"
 
 
-def decode(payload_hex: str, raw_bytes: list[str], context) -> dict[str, Any] | None:
+def decode(payload_hex: str, raw_bytes: list[str], context: Any) -> dict[str, Any] | None:
     """Module-level decoder hook used by ``decode_command_payload``.
 
     One-shot path with no registry buffer plumbed through, so the
@@ -77,7 +78,7 @@ class PcLogicDecoder(BaseChunkingDecoder):
     only difference is the log prefix used for diagnostic lines.
     """
 
-    def __init__(self, coordinator):
+    def __init__(self, coordinator: Any) -> None:
         super().__init__(coordinator, "pc_logic")
         self._registry = RegistryBuffer()
 
@@ -94,7 +95,9 @@ class PcLogicDecoder(BaseChunkingDecoder):
         super().reset_scan_buffers()
         self._registry.reset()
 
-    def decode_chunk(self, chunk, module_address=None):
+    def decode_chunk(
+        self, chunk: str, module_address: str | None = None
+    ) -> list[DecodedCommand]:
         chunk = chunk.strip().upper()
         addr = module_address or self._module_address
         return _decode_and_log(

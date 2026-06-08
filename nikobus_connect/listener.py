@@ -46,7 +46,7 @@ class NikobusEventListener:
         self._has_feedback_module = has_feedback_module
 
         self._running = False
-        self._listener_task: asyncio.Task | None = None
+        self._listener_task: asyncio.Task[None] | None = None
         self.response_queue: asyncio.Queue[str] = asyncio.Queue(maxsize=200)
         self.on_connection_lost: Callable[[], Any] | None = None
         self._frame_buffer = ""
@@ -135,7 +135,7 @@ class NikobusEventListener:
 
         *frames, self._frame_buffer = self._frame_buffer.split("\r")
 
-        extracted = []
+        extracted: list[str] = []
         for frame in frames:
             if frame := frame.strip():
                 extracted.extend(f for f in _FRAME_SPLIT_RE.split(frame) if f)

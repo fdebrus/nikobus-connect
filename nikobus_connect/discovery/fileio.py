@@ -1,8 +1,12 @@
+from __future__ import annotations
+
 import asyncio
 import json
 import logging
 import os
 import tempfile
+from collections.abc import Callable
+from typing import Any
 
 from .mapping import KEY_MAPPING, KEY_MAPPING_MODULE
 
@@ -78,10 +82,12 @@ def _inline_channels(json_text: str) -> str:
     return "\n".join(output) + ("\n" if json_text.endswith("\n") else "")
 
 
-async def _write_json_atomic(file_path, data, inline_channels: bool = False):
+async def _write_json_atomic(
+    file_path: str, data: dict[str, Any], inline_channels: bool = False
+) -> None:
     """Write JSON data atomically to avoid partial writes."""
 
-    def _write(path):
+    def _write(path: str) -> None:
         serialized = json.dumps(data, indent=4, ensure_ascii=False, sort_keys=False)
         if inline_channels:
             serialized = _inline_channels(serialized)
@@ -106,17 +112,19 @@ async def _write_json_atomic(file_path, data, inline_channels: bool = False):
         raise
 
 
-async def write_json_file(file_path, data, inline_channels: bool = False):
+async def write_json_file(
+    file_path: str, data: dict[str, Any], inline_channels: bool = False
+) -> None:
     """Write JSON data to a file asynchronously."""
     await _write_json_atomic(file_path, data, inline_channels=inline_channels)
 
 
-async def read_json_file(file_path):
+async def read_json_file(file_path: str) -> dict[str, Any] | None:
     """Read JSON data from a file asynchronously. Returns dict or None on error."""
     if not os.path.exists(file_path):
         return None
 
-    def _read(path):
+    def _read(path: str) -> Any:
         with open(path, "r", encoding="utf-8") as file:
             return json.load(file)
 
@@ -127,11 +135,11 @@ async def read_json_file(file_path):
         return None
 
 
-def _normalize_address(address):
+def _normalize_address(address: Any) -> str:
     return address.strip().upper() if isinstance(address, str) else ""
 
 
-def _key_label_to_raw(channels, key_label):
+def _key_label_to_raw(channels: Any, key_label: Any) -> int | None:
     """Convert a linked_button key label (e.g. "1C") to the raw key index.
 
     A physical wall button can have multiple operation points; each point
@@ -153,6 +161,8 @@ def _key_label_to_raw(channels, key_label):
         ch_int = int(channels) if channels is not None else None
     except (TypeError, ValueError):
         return None
+    if ch_int is None:
+        return None
 
     label_map = KEY_MAPPING.get(ch_int)
     raw_map = KEY_MAPPING_MODULE.get(ch_int)
@@ -169,7 +179,7 @@ def _key_label_to_raw(channels, key_label):
     return None
 
 
-def _key_raw_to_label(channels, key_raw):
+def _key_raw_to_label(channels: Any, key_raw: Any) -> str | None:
     """Inverse of :func:`_key_label_to_raw`: raw index (0..7) -> label ("1A".."2D").
 
     Returns None if the raw index can't be resolved for the given channel count.
@@ -178,6 +188,8 @@ def _key_raw_to_label(channels, key_raw):
     try:
         ch_int = int(channels) if channels is not None else None
     except (TypeError, ValueError):
+        return None
+    if ch_int is None:
         return None
 
     raw_map = KEY_MAPPING_MODULE.get(ch_int)
@@ -195,7 +207,9 @@ def _key_raw_to_label(channels, key_raw):
     return None
 
 
-def merge_discovered_modules(module_data, discovered_devices):
+def merge_discovered_modules(
+    module_data: dict[str, Any], discovered_devices: dict[str, Any]
+) -> tuple[int, int]:
     """Merge discovery results into the caller-owned module store in place.
 
     Option-A shape (keyed by physical address, parallel to the button
@@ -256,7 +270,7 @@ def merge_discovered_modules(module_data, discovered_devices):
         {"pc_logic", "interface_module"}
     )
 
-    def _default_channel(module_type: str, index: int) -> dict:
+    def _default_channel(module_type: str, index: int) -> dict[str, Any]:
         label = "input" if module_type in _INPUT_MODULE_TYPES else "output"
         channel = {"description": f"not_in_use {label}_{index}"}
         if module_type == "roller_module":
@@ -264,8 +278,8 @@ def merge_discovered_modules(module_data, discovered_devices):
         return channel
 
     def _pad_channels(
-        module_type: str, existing: list, channels_count: int
-    ) -> list:
+        module_type: str, existing: Any, channels_count: int
+    ) -> list[dict[str, Any]]:
         """Return a channel list of length ``channels_count``.
 
         Keeps every existing entry verbatim (user fields preserved);
@@ -282,7 +296,7 @@ def merge_discovered_modules(module_data, discovered_devices):
 
         if channels_count <= 0:
             return list(existing) if isinstance(existing, list) else []
-        out: list[dict] = []
+        out: list[dict[str, Any]] = []
         source = existing if isinstance(existing, list) else []
         is_input = module_type in _INPUT_MODULE_TYPES
         for idx in range(max(channels_count, len(source))):
@@ -300,7 +314,9 @@ def merge_discovered_modules(module_data, discovered_devices):
                 out.append(_default_channel(module_type, idx + 1))
         return out
 
-    def _refresh_discovered_info(channels_count: int, device: dict) -> dict:
+    def _refresh_discovered_info(
+        channels_count: int, device: dict[str, Any]
+    ) -> dict[str, Any]:
         info = {
             "name": device.get("discovered_name") or device.get("description", ""),
             "device_type": device.get("device_type"),
@@ -368,7 +384,7 @@ def merge_discovered_modules(module_data, discovered_devices):
             updated += 1
         else:
             # New module — insert with generated description + defaults.
-            entry: dict = {
+            entry: dict[str, Any] = {
                 "module_type": module_type,
                 "description": _generate_description(module_type),
                 "model": device.get("model", "") or "",
@@ -390,7 +406,9 @@ def merge_discovered_modules(module_data, discovered_devices):
     return added, updated
 
 
-def find_module(module_data: dict, address: str) -> tuple[str, dict] | None:
+def find_module(
+    module_data: dict[str, Any], address: str
+) -> tuple[str, dict[str, Any]] | None:
     """Locate a module entry by address in the Option-A module store.
 
     Returns ``(normalized_address, entry_dict)`` or ``None``.
@@ -438,7 +456,7 @@ _BUTTON_KEYS_BY_CHANNEL_COUNT = {
 }
 
 
-def _ensure_buttons_dict(button_data: dict) -> dict:
+def _ensure_buttons_dict(button_data: dict[str, Any]) -> dict[str, Any]:
     """Return the ``nikobus_button`` dict, creating it if missing."""
 
     buttons = button_data.setdefault("nikobus_button", {})
@@ -449,8 +467,8 @@ def _ensure_buttons_dict(button_data: dict) -> dict:
 
 
 def find_operation_point(
-    button_data: dict, bus_address: str
-) -> tuple[str, str, dict] | None:
+    button_data: dict[str, Any], bus_address: str
+) -> tuple[str, str, dict[str, Any]] | None:
     """Locate an operation point by its bus-emitted address.
 
     Returns ``(physical_address, key_label, operation_point_dict)`` or
@@ -488,8 +506,8 @@ def find_operation_point(
 
 
 def find_ir_operation_point(
-    button_data: dict, receiver_address: str, ir_code: str
-) -> tuple[str, str, dict] | None:
+    button_data: dict[str, Any], receiver_address: str, ir_code: str
+) -> tuple[str, str, dict[str, Any]] | None:
     """Locate a virtual IR op-point on a given IR receiver.
 
     Returns ``(receiver_address, storage_key, op_point_dict)`` where
@@ -523,8 +541,11 @@ def find_ir_operation_point(
 
 
 def merge_discovered_buttons(
-    button_data, discovered_devices, key_mapping, convert_nikobus_address
-):
+    button_data: dict[str, Any],
+    discovered_devices: dict[str, Any],
+    key_mapping: dict[int, dict[str, str]],
+    convert_nikobus_address: Callable[[str], str],
+) -> None:
     """Merge discovered Button devices into the caller-owned ``button_data``.
 
     Produces the Option-A physical-keyed shape::
@@ -689,7 +710,7 @@ def merge_discovered_buttons(
             op_points = {}
             phys_entry["operation_points"] = op_points
 
-        channels_data: dict[str, dict] = {}
+        channels_data: dict[str, dict[str, Any]] = {}
 
         # Multi-key remote dispatch. Some Nikobus remotes (currently
         # only the 05-312 Easywave 52-key) emit sub-codes that differ
@@ -750,14 +771,16 @@ def merge_discovered_buttons(
         device["channels_data"] = channels_data
 
 
-def _normalize_key(value):
+def _normalize_key(value: Any) -> Any:
     try:
         return int(value)
     except (TypeError, ValueError):
         return value
 
 
-def _build_bus_to_op_index(buttons: dict) -> dict[str, tuple[str, str]]:
+def _build_bus_to_op_index(
+    buttons: dict[str, Any],
+) -> dict[str, tuple[str, str]]:
     """Map bus_address -> (physical_address, key_label).
 
     Includes the +1 alias for 8-channel wall buttons: the bus traffic for
@@ -793,7 +816,7 @@ def _build_bus_to_op_index(buttons: dict) -> dict[str, tuple[str, str]]:
     return index
 
 
-def _build_easywave_52_lookup(buttons: dict) -> dict[str, str]:
+def _build_easywave_52_lookup(buttons: dict[str, Any]) -> dict[str, str]:
     """Index every address in the 32-byte BP-cell window of each
     52-channel button back to that button's physical base.
 
@@ -830,10 +853,10 @@ def _build_easywave_52_lookup(buttons: dict) -> dict[str, str]:
 
 def _resolve_easywave_52(
     normalized_addr: str,
-    key_raw,
-    buttons: dict,
+    key_raw: Any,
+    buttons: dict[str, Any],
     easywave_52_lookup: dict[str, str],
-):
+) -> tuple[str, str, dict[str, Any]] | None:
     """Resolve a BP-cell ref to a 05-312 op-point.
 
     The BP-cell ``button_address`` decomposes as ``physical + offset``
@@ -900,7 +923,7 @@ def _resolve_easywave_52(
     return phys_addr, label, op_point
 
 
-def _build_ir_base_lookup(buttons: dict) -> dict[str, int]:
+def _build_ir_base_lookup(buttons: dict[str, Any]) -> dict[str, int]:
     """Map 4-char IR prefix -> base byte, derived from physical IR receivers."""
 
     lookup: dict[str, int] = {}
@@ -923,12 +946,12 @@ def _build_ir_base_lookup(buttons: dict) -> dict[str, int]:
 
 def _resolve_operation_point(
     push_button_address: str,
-    key_raw,
-    buttons: dict,
+    key_raw: Any,
+    buttons: dict[str, Any],
     bus_to_op: dict[str, tuple[str, str]],
     ir_base_lookup: dict[str, int],
     easywave_52_lookup: dict[str, str] | None = None,
-):
+) -> tuple[str, str, dict[str, Any]] | None:
     """Find the (physical_addr, key_label, operation_point) tuple for a press.
 
     Returns ``None`` when nothing matches — the caller should drop the link
@@ -1097,8 +1120,10 @@ def _resolve_operation_point(
 
 
 def _resolve_ir_receiver_address(
-    push_button_address: str, buttons: dict, ir_base_lookup: dict[str, int]
-):
+    push_button_address: str,
+    buttons: dict[str, Any],
+    ir_base_lookup: dict[str, int],
+) -> str | None:
     """Find the IR receiver physical address for an IR-flagged mapping entry.
 
     ``push_button_address`` is whatever ``add_to_command_mapping`` placed as
@@ -1147,7 +1172,7 @@ def _generated_ir_description(ir_code: str) -> str:
     return f"IR code {ir_code} #I{ir_code}"
 
 
-def _compute_ir_bus_address(receiver_address: str, ir_code: str):
+def _compute_ir_bus_address(receiver_address: str, ir_code: str) -> str | None:
     """Compute the runtime wire address emitted when ``ir_code`` is
     pressed on the IR receiver at ``receiver_address``.
 
@@ -1212,8 +1237,8 @@ def _compute_ir_bus_address(receiver_address: str, ir_code: str):
 
 
 def _ensure_ir_op_point(
-    physical_entry: dict, receiver_address: str, ir_code: str
-) -> dict:
+    physical_entry: dict[str, Any], receiver_address: str, ir_code: str
+) -> dict[str, Any]:
     """Return the IR virtual op-point, creating it if missing.
 
     Sits in ``operation_points`` next to the wall keys, keyed ``IR:{code}``.
@@ -1255,7 +1280,9 @@ def _ensure_ir_op_point(
     return op_point
 
 
-def merge_linked_modules(button_data, command_mapping):
+def merge_linked_modules(
+    button_data: dict[str, Any], command_mapping: dict[Any, Any]
+) -> tuple[int, int, int, set[str]]:
     """Merge a discovery ``command_mapping`` into the caller-owned ``button_data``.
 
     Operates on the Option-A physical-keyed shape.
@@ -1273,7 +1300,7 @@ def merge_linked_modules(button_data, command_mapping):
 
     buttons = _ensure_buttons_dict(button_data)
 
-    def _unpack_mapping_key(mapping_key):
+    def _unpack_mapping_key(mapping_key: Any) -> tuple[Any, Any, Any]:
         if not isinstance(mapping_key, tuple):
             return mapping_key, None, None
         if len(mapping_key) == 2:
@@ -1577,7 +1604,7 @@ def _peers_for_mirror(source_key: str, mode_text: str) -> tuple[str, ...]:
     return ()
 
 
-def _output_dedupe_key(output: dict) -> tuple:
+def _output_dedupe_key(output: dict[str, Any]) -> tuple[Any, ...]:
     """Same shape used by ``merge_linked_modules`` so mirrored outputs
     dedupe identically against existing entries on the peer key."""
 
@@ -1591,7 +1618,7 @@ def _output_dedupe_key(output: dict) -> tuple:
     )
 
 
-def _mirror_paired_button_links(buttons: dict) -> int:
+def _mirror_paired_button_links(buttons: dict[str, Any]) -> int:
     """Synthesize linked_modules entries on paired keys for M01/M02 modes.
 
     Walks every operation_point's outputs. When an output's mode text

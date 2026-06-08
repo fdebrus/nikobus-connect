@@ -42,7 +42,7 @@ class NikobusCommandHandler:
         self._module_states: dict[str, bytearray] = module_states if module_states is not None else {}
 
         self._running: bool = False
-        self._command_task: asyncio.Task | None = None
+        self._command_task: asyncio.Task[None] | None = None
         self._command_queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=100)
         self._pending_get_futures: dict[str, asyncio.Future[str]] = {}
         self._queued_get_keys: set[str] = set()
@@ -76,7 +76,7 @@ class NikobusCommandHandler:
                 command_item = await self._command_queue.get()
                 command = command_item["command"]
                 address = command_item.get("address")
-                future: asyncio.Future | None = command_item.get("future")
+                future: asyncio.Future[str] | None = command_item.get("future")
                 completion_handler: Callable[[], Awaitable[None]] | None = (
                     command_item.get("completion_handler")
                 )

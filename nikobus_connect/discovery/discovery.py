@@ -1,10 +1,14 @@
+from __future__ import annotations
+
 import asyncio
 import inspect
 import json
 import logging
 import re
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from typing import Any
 
 from .base import (
     DecodedCommand,
@@ -223,7 +227,7 @@ def _scan_passes_for_module_type(
     plan = _MODULE_SCAN_PROFILES.get(module_type) if module_type else None
     if not plan:
         return ()
-    if broad_scan:
+    if broad_scan and module_type:
         extras = _MODULE_SCAN_PROFILES_BROAD_EXTRA.get(module_type, ())
         if extras:
             plan = _merge_passes((*plan, *extras))
@@ -242,7 +246,7 @@ def _wire_sub_byte(sub_byte: str) -> str:
     return sub_byte
 
 
-def decode_ir_channel(ir_slot_addr: str | None, key_raw: int | None, ir_base_byte: int = 0x80) -> str | None:
+def decode_ir_channel(ir_slot_addr: str | None, key_raw: Any, ir_base_byte: int = 0x80) -> str | None:
     """Derive the IR channel label from a bus slot address and key index.
 
     Parameters
@@ -280,7 +284,7 @@ def decode_ir_channel(ir_slot_addr: str | None, key_raw: int | None, ir_base_byt
     return f"{channel:02d}{bank}"
 
 
-def build_ir_receiver_lookup(buttons) -> dict[str, int]:
+def build_ir_receiver_lookup(buttons: Any) -> dict[str, int]:
     """Build a mapping of 4-char IR address prefixes to their base byte.
 
     Operates on the Option-A physical-keyed button store. ``buttons`` may
@@ -351,7 +355,12 @@ def split_ir_button_address(
     return physical, a, a[-2:]
 
 
-def add_to_command_mapping(command_mapping, decoded_command, module_address, ir_receiver_lookup=None):
+def add_to_command_mapping(
+    command_mapping: dict[Any, Any],
+    decoded_command: dict[str, Any],
+    module_address: str | None,
+    ir_receiver_lookup: dict[str, int] | None = None,
+) -> None:
     """Store decoded command information, allowing one-to-many button mappings."""
     push_button_address = decoded_command.get("push_button_address")
 
@@ -406,6 +415,7 @@ def add_to_command_mapping(command_mapping, decoded_command, module_address, ir_
     # resolver can locate the receiver and attach the link to an
     # IR:{code} op-point. physical_btn is that base when button_address
     # is the pre-shift slot address (always the case for IR records).
+    mapping_address: str | None
     if ir_key and physical_btn:
         mapping_address = physical_btn
     else:
@@ -488,10 +498,10 @@ def add_to_command_mapping(command_mapping, decoded_command, module_address, ir_
 
 
 async def _notify_discovery_finished(
-    discovery,
+    discovery: Any,
     *,
-    discovered_devices: dict | None = None,
-    inventory_query_type=None,
+    discovered_devices: dict[str, Any] | None = None,
+    inventory_query_type: InventoryQueryType | None = None,
 ) -> None:
     """Call the discovery finished callback when available.
 
@@ -524,7 +534,7 @@ async def _notify_discovery_finished(
         p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values()
     )
 
-    kwargs: dict = {}
+    kwargs: dict[str, Any] = {}
     if accepts_var_keyword or "discovered_devices" in params:
         kwargs["discovered_devices"] = discovered_devices
     if accepts_var_keyword or "inventory_query_type" in params:
@@ -600,7 +610,7 @@ def _is_inventory_trailer(message: str) -> bool:
 # ``_classify_cf_broadcasts_from_unmatched`` only ever emits / logs a CF
 # when real module link records target the address (see
 # ``_extract_cf_outputs``) — empty CF-space slots are never surfaced.
-_CF_BROADCAST_PATTERNS: tuple[tuple[re.Pattern, str], ...] = (
+_CF_BROADCAST_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"^384[0-7][0-9A-F]{2}$"), "switch_pair"),
     (re.compile(r"^3880[0-9A-F]{2}$"), "roller_pair"),
     (re.compile(r"^38[0-9A-F]{4}$"), "cf_other"),
@@ -706,18 +716,18 @@ class CFBroadcast:
 class NikobusDiscovery:
     def __init__(
         self,
-        coordinator,
+        coordinator: Any,
         *,
-        config_dir,
-        create_task,
-        button_data=None,
-        on_button_save=None,
-        module_data=None,
-        on_module_save=None,
-        on_progress=None,
+        config_dir: str,
+        create_task: Callable[..., Any],
+        button_data: dict[str, Any] | None = None,
+        on_button_save: Callable[..., Any] | None = None,
+        module_data: dict[str, Any] | None = None,
+        on_module_save: Callable[..., Any] | None = None,
+        on_progress: Callable[..., Any] | None = None,
         broad_scan: bool = False,
-    ):
-        self.discovered_devices = {}
+    ) -> None:
+        self.discovered_devices: dict[str, Any] = {}
         self._coordinator = coordinator
         self._config_dir = config_dir
         self._create_task = create_task
@@ -770,8 +780,8 @@ class NikobusDiscovery:
             PcLogicDecoder(coordinator),
             PcLinkDecoder(coordinator),
         ]
-        self._timeout_task: asyncio.Task | None = None
-        self._inventory_timeout_task: asyncio.Task | None = None
+        self._timeout_task: asyncio.Task[Any] | None = None
+        self._inventory_timeout_task: asyncio.Task[Any] | None = None
         self.discovery_stage: str | None = None
         self._register_scan_queue: list[str] = []
         self._inventory_addresses: set[str] = set()
@@ -794,23 +804,23 @@ class NikobusDiscovery:
         # 4-hex suffix and synthesise virtual transmitter parents +
         # passthrough children for clusters above the threshold.
         self._accumulated_unmatched: set[str] = set()
-        self._accumulated_command_mapping: dict = {}
+        self._accumulated_command_mapping: dict[Any, Any] = {}
         # CF (Central Function) activation broadcasts classified from
         # unmatched link-record source addresses. Populated at end of
         # discovery by ``_classify_cf_broadcasts_from_unmatched``.
         self.discovered_cf_broadcasts: dict[str, "CFBroadcast"] = {}
         self.reset_state()
 
-    def reset_state(self, *, update_flags: bool = True):
+    def reset_state(self, *, update_flags: bool = True) -> None:
         if self._timeout_task:
             self._timeout_task.cancel()
             self._timeout_task = None
         if self._inventory_timeout_task:
             self._inventory_timeout_task.cancel()
             self._inventory_timeout_task = None
-        self._payload_buffer = ""
-        self._module_address = None
-        self._module_type = None
+        self._payload_buffer: str = ""
+        self._module_address: str | None = None
+        self._module_type: str | None = None
         self._module_channels: int | None = None
         self._scan_response_index = 0
         self._register_scan_queue = []
@@ -819,7 +829,7 @@ class NikobusDiscovery:
         self._module_found_data = False
         self._module_consecutive_empties = 0
         self.discovery_stage = None
-        self._decoded_buffer: dict | None = None
+        self._decoded_buffer: dict[str, Any] | None = None
         self._accumulated_unmatched = set()
         self._accumulated_command_mapping = {}
         self.discovered_cf_broadcasts = {}
@@ -853,14 +863,14 @@ class NikobusDiscovery:
 
         return normalized
 
-    def _get_decoder(self):
+    def _get_decoder(self) -> Any:
         for decoder in getattr(self, "_decoders", []):
             if decoder.can_handle(self._module_type):
                 return decoder
         return None
 
     def _resolve_module_type(
-        self, address: str, discovered_device: dict | None
+        self, address: str, discovered_device: dict[str, Any] | None
     ) -> str | None:
         """Resolve the module type for ``address``.
 
@@ -914,7 +924,7 @@ class NikobusDiscovery:
         self,
         normalized_address: str,
         base_command: str,
-        command_range,
+        command_range: Any,
         sub_byte: str = "04",
     ) -> None:
         """Read each register one at a time, waiting for ACK + optional data.
@@ -1073,8 +1083,8 @@ class NikobusDiscovery:
         command: str,
         reg: int,
         module_address: str,
-        listener,
-        connection,
+        listener: Any,
+        connection: Any,
     ) -> bool:
         """Send a single register-read and wait for ACK + optional data frame.
 
@@ -1162,7 +1172,7 @@ class NikobusDiscovery:
         return False
 
     @staticmethod
-    async def _await_matching_ack(queue, ack_prefix: str) -> bool:
+    async def _await_matching_ack(queue: Any, ack_prefix: str) -> bool:
         """Drain the response queue until an ACK with ``ack_prefix`` is seen.
 
         Returns False if ``MODULE_SCAN_ACK_TIMEOUT`` elapses with no match.
@@ -1380,7 +1390,7 @@ class NikobusDiscovery:
             ),
         }
 
-        new_entries: dict[str, dict] = {}
+        new_entries: dict[str, dict[str, Any]] = {}
         for module_addr, device in self.discovered_devices.items():
             if not isinstance(device, dict):
                 continue
@@ -1795,7 +1805,7 @@ class NikobusDiscovery:
             sample_addresses,
         )
 
-        new_entries: dict[str, dict] = {}
+        new_entries: dict[str, dict[str, Any]] = {}
         for suffix, members in clusters.items():
             if len(members) < self.REMOTE_TRANSMITTER_CLUSTER_THRESHOLD:
                 continue
@@ -2156,7 +2166,7 @@ class NikobusDiscovery:
             # etc.) — flags already flipped above, so don't re-flip.
             self.reset_state(update_flags=False)
 
-    async def start_inventory_discovery(self):
+    async def start_inventory_discovery(self) -> None:
         self.reset_state(update_flags=False)
         self.discovered_devices = {}
         self.discovery_stage = "inventory_addresses"
@@ -2366,7 +2376,7 @@ class NikobusDiscovery:
         if absent and self._button_data is not None:
             absent_set = set(absent)
             buttons = self._button_data.get("nikobus_button") or {}
-            entries: list[tuple[str, dict]] = []
+            entries: list[tuple[str, dict[str, Any]]] = []
             if isinstance(buttons, dict):
                 for phys_addr, button in buttons.items():
                     if isinstance(button, dict):
@@ -2538,13 +2548,13 @@ class NikobusDiscovery:
 
     async def query_module_inventory(
         self,
-        device_address,
+        device_address: str,
         *,
         from_queue: bool = False,
         register_start: int | None = None,
         register_end: int | None = None,
         sub_byte: str | None = None,
-    ):
+    ) -> None:
         """Scan a module's register space.
 
         Production mode (no range params): walk the per-module-type
@@ -2682,6 +2692,9 @@ class NikobusDiscovery:
         # Bypass the per-module-type tuning and the non-output-module
         # guard, scan exactly the range they asked for, and stop.
         if custom_range_mode:
+            # custom_range_mode is True only when both bounds were
+            # provided and validated above; narrow for the type checker.
+            assert register_start is not None and register_end is not None
             effective_sub = (sub_byte or "04").upper()
             forensic_range = range(register_start, register_end + 1)
             _LOGGER.info(
@@ -2778,7 +2791,7 @@ class NikobusDiscovery:
         self._progress_current_sub_byte = None
         await self._finalize_discovery(normalized_address)
 
-    async def parse_inventory_response(self, payload) -> InventoryResult | None:
+    async def parse_inventory_response(self, payload: str) -> InventoryResult | None:
         result = InventoryResult()
         try:
             self.discovery_stage = self.discovery_stage or "inventory"
@@ -2957,7 +2970,7 @@ class NikobusDiscovery:
             self.reset_state()
             return None
 
-    async def parse_module_inventory_response(self, message):
+    async def parse_module_inventory_response(self, message: str) -> None:
         # Wake the sequential scan loop as soon as a data/trailer frame
         # arrives. Parsing the frame still runs below; this hook only
         # signals the scan coordinator.
@@ -3072,7 +3085,11 @@ class NikobusDiscovery:
             # current pass (the register loop checks ``_scan_trailer_seen``
             # at the top of each iteration). Existing chunks for this
             # register were already decoded above.
-            tail_len = _FF_TERMINATOR_TAIL_HEX.get(self._module_type)
+            tail_len = (
+                _FF_TERMINATOR_TAIL_HEX.get(self._module_type)
+                if self._module_type
+                else None
+            )
             if tail_len:
                 data_region = analysis.get("payload_region", "")
                 if len(data_region) >= tail_len and data_region[-tail_len:] == "F" * tail_len:
@@ -3100,7 +3117,7 @@ class NikobusDiscovery:
 
     async def _handle_decoded_commands(
         self, module_address: str | None, decoded_commands: list[DecodedCommand]
-    ):
+    ) -> None:
         # Count successfully-decoded records for the progress tracker.
         # Each DecodedCommand that makes it this far represents one real
         # link; the button-store merge further down may deduplicate, but
@@ -3118,8 +3135,8 @@ class NikobusDiscovery:
             if isinstance(buttons, dict):
                 ir_receiver_lookup = build_ir_receiver_lookup(buttons) or None
 
-        new_commands = []
-        command_mapping = {}
+        new_commands: list[dict[str, Any]] = []
+        command_mapping: dict[Any, Any] = {}
 
         for command in decoded_commands:
             if not isinstance(command, DecodedCommand):
@@ -3192,7 +3209,7 @@ class NikobusDiscovery:
             await self._on_button_save()
 
 
-def run_decoder_harness(coordinator):
+def run_decoder_harness(coordinator: Any) -> None:
     """Lightweight harness to exercise discovery decoders without full HA runtime."""
 
     sample_messages = [

@@ -36,7 +36,9 @@ def append_crc2(data: str) -> str:
     return data + int_to_hex(calc_crc2(data), 2)
 
 
-def make_pc_link_command(func: int, addr: str, args: bytes | None = None) -> str:
+def make_pc_link_command(
+    func: int, addr: str, args: bytes | bytearray | None = None
+) -> str:
     """Construct a PC link command with the specified function, address, and optional arguments."""
     addr_int = int(addr, 16)
     data = int_to_hex(func, 2) + addr_int.to_bytes(2, byteorder='little').hex().upper()

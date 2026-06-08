@@ -57,7 +57,7 @@ def _timer_value(
     return t1_val, t2_val
 
 
-def decode(payload_hex: str, raw_bytes: list[str], context) -> dict[str, Any] | None:
+def decode(payload_hex: str, raw_bytes: list[str], context: Any) -> dict[str, Any] | None:
     """Decode a dimmer payload using fixed offsets (no heuristics)."""
 
     if _is_all_ff(payload_hex, EXPECTED_CHUNK_LEN):
@@ -151,7 +151,7 @@ def decode(payload_hex: str, raw_bytes: list[str], context) -> dict[str, Any] | 
 
 
 class DimmerDecoder(BaseChunkingDecoder):
-    def __init__(self, coordinator):
+    def __init__(self, coordinator: Any) -> None:
         super().__init__(coordinator, "dimmer_module")
 
 

@@ -39,7 +39,7 @@ class NikobusAPI:
         except (IndexError, KeyError, TypeError):
             return {}
 
-    async def _send_bus_command(self, bus_addr: str, completion_handler: Callable | None = None) -> None:
+    async def _send_bus_command(self, bus_addr: str, completion_handler: Callable[..., Any] | None = None) -> None:
         """Helper to send a standard Nikobus bus trigger (#N...#E1)."""
         await self._command_handler.queue_command(
             f"#N{bus_addr}\r#E1", completion_handler=completion_handler
@@ -52,7 +52,7 @@ class NikobusAPI:
         channel: int,
         target_state: int,
         cmd_key: str,
-        completion_handler: Callable | None = None,
+        completion_handler: Callable[..., Any] | None = None,
     ) -> None:
         """Unified dispatcher for all module actions."""
         chan_info = self._get_channel_info(module_key, address, channel)
@@ -74,11 +74,11 @@ class NikobusAPI:
 
     # --- SWITCHES ---
 
-    async def turn_on_switch(self, address: str, channel: int, completion_handler: Callable | None = None) -> None:
+    async def turn_on_switch(self, address: str, channel: int, completion_handler: Callable[..., Any] | None = None) -> None:
         """Turn on a switch module output."""
         await self._dispatch_action("switch_module", address, channel, STATE_ON, "led_on", completion_handler)
 
-    async def turn_off_switch(self, address: str, channel: int, completion_handler: Callable | None = None) -> None:
+    async def turn_off_switch(self, address: str, channel: int, completion_handler: Callable[..., Any] | None = None) -> None:
         """Turn off a switch module output."""
         await self._dispatch_action("switch_module", address, channel, STATE_OFF, "led_off", completion_handler)
 
@@ -90,7 +90,7 @@ class NikobusAPI:
         channel: int,
         brightness: int,
         current_brightness: int = 0,
-        completion_handler: Callable | None = None,
+        completion_handler: Callable[..., Any] | None = None,
     ) -> None:
         """Turn on a dimmer output to a specific brightness.
 
@@ -122,7 +122,7 @@ class NikobusAPI:
         address: str,
         channel: int,
         current_brightness: int = 1,
-        completion_handler: Callable | None = None,
+        completion_handler: Callable[..., Any] | None = None,
     ) -> None:
         """Turn off a dimmer output.
 
@@ -148,15 +148,15 @@ class NikobusAPI:
 
     # --- COVERS ---
 
-    async def open_cover(self, address: str, channel: int, completion_handler: Callable | None = None) -> None:
+    async def open_cover(self, address: str, channel: int, completion_handler: Callable[..., Any] | None = None) -> None:
         """Open a cover/roller shutter."""
         await self._dispatch_action("roller_module", address, channel, STATE_OPEN, "led_on", completion_handler)
 
-    async def close_cover(self, address: str, channel: int, completion_handler: Callable | None = None) -> None:
+    async def close_cover(self, address: str, channel: int, completion_handler: Callable[..., Any] | None = None) -> None:
         """Close a cover/roller shutter."""
         await self._dispatch_action("roller_module", address, channel, STATE_CLOSE, "led_off", completion_handler)
 
-    async def stop_cover(self, address: str, channel: int, direction: str, completion_handler: Callable | None = None) -> None:
+    async def stop_cover(self, address: str, channel: int, direction: str, completion_handler: Callable[..., Any] | None = None) -> None:
         """Stop cover movement."""
         chan_info = self._get_channel_info("roller_module", address, channel)
         cmd_key = "led_on" if direction == "opening" else "led_off"
@@ -171,6 +171,6 @@ class NikobusAPI:
             _LOGGER.error("API Cover Action failed for %s: %s", address, err)
             raise
 
-    async def set_output_states_for_module(self, address: str, completion_handler: Callable | None = None) -> None:
+    async def set_output_states_for_module(self, address: str, completion_handler: Callable[..., Any] | None = None) -> None:
         """Batch update all output states for a specific module."""
         await self._command_handler.set_output_states(address, completion_handler=completion_handler)

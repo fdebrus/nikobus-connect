@@ -112,7 +112,9 @@ def _format_channel(channel_number: int | None) -> str | None:
     return CHANNEL_MAPPING.get(index, f"Channel {channel_number}")
 
 
-def classify_device_type(device_type_hex: str, device_types: dict) -> dict:
+def classify_device_type(
+    device_type_hex: str, device_types: dict[str, dict[str, Any]]
+) -> dict[str, Any]:
     """Return device metadata for the given device type."""
 
     normalized_type = (device_type_hex or "").strip().upper()
@@ -277,7 +279,7 @@ def pc_logic_input_slot_index(input_physical: str) -> int | None:
 
 def is_known_button_canonical(
     button_address: str | None,
-    coordinator_get_button_channels,
+    coordinator_get_button_channels: Callable[[str], int | None] | None,
 ) -> bool:
     """Return ``True`` when ``button_address`` belongs to a known button.
 
@@ -347,9 +349,9 @@ def get_button_address(payload_hex: str) -> str | None:
 def get_push_button_address(
     key_index: int | None,
     button_address: str | None,
-    coordinator_get_button_channels,
+    coordinator_get_button_channels: Callable[[str], int | None] | None,
     convert_func: Callable[[str], str] = convert_nikobus_address,
-):
+) -> tuple[str | None, str | None]:
     """Return the derived push button address when possible."""
 
     if key_index is None or button_address is None:
@@ -388,13 +390,13 @@ def get_push_button_address(
 def decode_command_payload(
     payload_hex: str,
     module_type: str,
-    coordinator,
+    coordinator: Any,
     *,
     module_address: str | None = None,
     reverse_before_decode: bool = False,
     raw_chunk_hex: str | None = None,
     module_channel_count: int | None = None,
-):
+) -> dict[str, Any] | None:
     """Decode a command payload using the module-specific decoder."""
 
     payload_hex = (payload_hex or "").strip().upper()
@@ -422,18 +424,26 @@ def decode_command_payload(
         module_channel_count=resolved_channel_count,
     )
 
+    # Lazy per-type imports break a circular dependency (the decoder
+    # modules import this module). Each branch imports a distinctly-named
+    # module and binds it to the single ``decoder_module`` handle, so the
+    # type checker sees one ``Any`` variable rather than redefinitions.
+    decoder_module: Any = None
     if module_type == "switch_module":
-        from . import switch_decoder as decoder_module
+        from . import switch_decoder
+        decoder_module = switch_decoder
     elif module_type == "roller_module":
-        from . import shutter_decoder as decoder_module
+        from . import shutter_decoder
+        decoder_module = shutter_decoder
     elif module_type == "dimmer_module":
-        from . import dimmer_decoder as decoder_module
+        from . import dimmer_decoder
+        decoder_module = dimmer_decoder
     elif module_type == "pc_logic":
-        from . import pc_logic_decoder as decoder_module
+        from . import pc_logic_decoder
+        decoder_module = pc_logic_decoder
     elif module_type == "pc_link":
-        from . import pc_link_decoder as decoder_module
-    else:
-        decoder_module = None
+        from . import pc_link_decoder
+        decoder_module = pc_link_decoder
 
     decoder = getattr(decoder_module, "decode", None) if decoder_module else None
     if decoder is None:
@@ -441,7 +451,8 @@ def decode_command_payload(
         return None
 
     try:
-        return decoder(payload_hex, raw_bytes, context)
+        result: dict[str, Any] | None = decoder(payload_hex, raw_bytes, context)
+        return result
     except Exception as err:  # pragma: no cover - defensive
         _LOGGER.error(
             "Decoder error | type=%s module=%s payload=%s error=%s",
