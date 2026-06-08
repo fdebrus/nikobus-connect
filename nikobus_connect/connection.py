@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Optional
 
 import serial_asyncio
 
@@ -20,8 +19,8 @@ class NikobusConnect:
     def __init__(self, connection_string: str) -> None:
         """Initialize the connection handler."""
         self._connection_string = connection_string
-        self._reader: Optional[asyncio.StreamReader] = None
-        self._writer: Optional[asyncio.StreamWriter] = None
+        self._reader: asyncio.StreamReader | None = None
+        self._writer: asyncio.StreamWriter | None = None
         self._lock = asyncio.Lock()
         self._is_connected = False
 
@@ -126,10 +125,10 @@ class NikobusConnect:
         try:
             data = await self._reader.readuntil(b'\r')
             return data
-        except asyncio.LimitOverrunError:
+        except asyncio.LimitOverrunError as err:
             _LOGGER.error("Read buffer overrun — disconnecting")
             await self.disconnect()
-            raise NikobusReadError("Buffer overrun")
+            raise NikobusReadError("Buffer overrun") from err
         except (OSError, asyncio.IncompleteReadError) as err:
             _LOGGER.error("Read failed: %s", err)
             await self.disconnect()
