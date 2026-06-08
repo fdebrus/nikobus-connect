@@ -29,10 +29,15 @@ S_DB_* → English translation policy:
   the key (e.g. ``S_DB_KNOP_4_GRAFIET`` → ``Push button 4 (graphite)``).
 """
 
+from __future__ import annotations
+
+from typing import Any
+
+
 # =============================================================================
 # Discovery
 # =============================================================================
-DEVICE_TYPES = {
+DEVICE_TYPES: dict[str, dict[str, Any]] = {
     # ------------------------------------------------------------------
     # Output modules — drive switching / dimming / shutter loads.
     # ------------------------------------------------------------------
@@ -422,7 +427,7 @@ def get_module_type_from_device_type(device_type_hex: str) -> str:
     return _MODULE_TYPE_BY_DEVICE_TYPE.get(normalized_type, "other_module")
 
 
-CHANNEL_MAPPING = {
+CHANNEL_MAPPING: dict[int, str] = {
     0: "Channel 1",
     1: "Channel 2",
     2: "Channel 3",
@@ -437,7 +442,7 @@ CHANNEL_MAPPING = {
     11: "Channel 12",
 }
 
-KEY_MAPPING = {
+KEY_MAPPING: dict[int, dict[str, str]] = {
     1: {"1A": "8"},
     2: {"1A": "8", "1B": "C"},
     4: {"1A": "8", "1B": "C", "1C": "0", "1D": "4"},
@@ -520,7 +525,7 @@ DEVICE_TYPE_KEY_MAPPING = {
 # Validated against a 2026-05-21 install: all 52 emitted bus
 # addresses round-trip through this table. Document is the source
 # of truth — change only against a fresh capture from real hardware.
-EASYWAVE_52_KEY_MAPPING = {
+EASYWAVE_52_KEY_MAPPING: dict[str, str] = {
     "1A": "88", "1B": "C8", "1C": "08",
     "1.1A": "80", "1.1B": "C0",
     "1.2A": "A0", "1.2B": "E0",
@@ -554,12 +559,12 @@ EASYWAVE_52_KEY_MAPPING = {
 # ``merge_discovered_buttons`` to dispatch the right derivation
 # path. Currently only 05-312 (52 keys); add to this table when
 # new multi-key remote variants are catalogued.
-KEY_MAPPING_FIRST_BYTE = {
+KEY_MAPPING_FIRST_BYTE: dict[int, dict[str, str]] = {
     52: EASYWAVE_52_KEY_MAPPING,
 }
 
 
-KEY_MAPPING_MODULE = {
+KEY_MAPPING_MODULE: dict[int, dict[int, str]] = {
     1: {1: "8"},
     # 2-channel devices come in two key-index families that the link
     # resolver must both handle: the 05-060 (0x04) / 05-056 (0x21)
@@ -584,7 +589,7 @@ KEY_MAPPING_MODULE = {
 # M01..M08, M11..M15 to leave room for future M09/M10 (which never
 # shipped for switch modules; the audio module took those codes).
 # =============================================================================
-SWITCH_MODE_MAPPING = {
+SWITCH_MODE_MAPPING: dict[int, str] = {
     0: "M01 (On / off)",
     1: "M02 (On + Operating time)",
     2: "M03 (Off + Operating time)",
@@ -618,7 +623,7 @@ SWITCH_MODE_VENDOR_REF = {
     11: "S_DB_DESC_SCHAKEL_M15",
 }
 
-SWITCH_TIMER_MAPPING = {
+SWITCH_TIMER_MAPPING: dict[int, list[str | None]] = {
     0: ["10s", "0.5s", "0s"],
     1: ["1m", "1s", "1s"],
     2: ["2m", "2s", "2s"],
@@ -643,7 +648,7 @@ SWITCH_TIMER_MAPPING = {
 # Mode descriptions mirror Niko's PC-software UI (English localization
 # of the ``S_DB_DESC_ROLLUIK_M*`` keys in product.mdb LinkModeBase).
 # =============================================================================
-ROLLER_MODE_MAPPING = {
+ROLLER_MODE_MAPPING: dict[int, str] = {
     0: "M01 (Open - stop - close)",
     1: "M02 (Open)",
     2: "M03 (Close)",
@@ -663,7 +668,7 @@ ROLLER_MODE_VENDOR_REF = {
     6: "S_DB_DESC_ROLLUIK_M7",
 }
 
-ROLLER_TIMER_MAPPING = {
+ROLLER_TIMER_MAPPING: dict[int, list[str | None]] = {
     # T1-nibble → operating time per Niko ParamBase ``S_DB_ROLLUIK_T2``.
     # 4-bit nibble, so exactly 16 entries (0..15).
     #
@@ -698,7 +703,7 @@ ROLLER_TIMER_MAPPING = {
 # Per Niko ParamBase ``S_DB_ROLLUIK_T3`` (product.mdb KP=6). Used only for
 # mode bytes 0x05 (M06) and 0x06 (M07) — the regular operating-time modes
 # (M01/M02/M03/M05) use ``ROLLER_TIMER_MAPPING`` instead.
-ROLLER_T3_MAPPING = {
+ROLLER_T3_MAPPING: dict[int, str] = {
     0x0: "-  / 1s",
     0x1: "-  / 1s",   # canonical Niko table has both slot 0 and slot 1 as
                       # "-  / 1s" — keeping the duplication faithful to the
@@ -725,7 +730,7 @@ ROLLER_T3_MAPPING = {
 # Mode descriptions mirror Niko's PC-software UI (English localization
 # of the ``S_DB_DESC_DIMMER_M*`` keys in product.mdb LinkModeBase).
 # =============================================================================
-DIMMER_MODE_MAPPING = {
+DIMMER_MODE_MAPPING: dict[int, str] = {
     0: "M01 (Dim on/off (2 buttons))",
     1: "M02 (Dim on/off (4 buttons))",
     2: "M03 (Light scene on/off)",
@@ -797,9 +802,9 @@ DIMMER_TIMER_MAPPING = {
 #   KP=15 S_DB_DIMMER_T1_3    → delayed-off duration (M07)
 # ---------------------------------------------------------------------------
 
-DIMMER_T1_1 = ("On/off step 0", "On/off step 1", "On/off step 2-F")
-DIMMER_T1_2 = ("0 s", "1 s", "2 s", "3 s")
-DIMMER_T1_3 = (
+DIMMER_T1_1: tuple[str, ...] = ("On/off step 0", "On/off step 1", "On/off step 2-F")
+DIMMER_T1_2: tuple[str, ...] = ("0 s", "1 s", "2 s", "3 s")
+DIMMER_T1_3: tuple[str, ...] = (
     "10 s", "1 m", "2 m", "3 m", "4 m", "5 m", "6 m", "7 m",
     "8 m", "9 m", "15 m", "30 m", "45 m", "60 m", "90 m", "120 m",
 )
@@ -807,7 +812,7 @@ DIMMER_AMOUNT_PERCENT = (
     "1%", "1.5%", "2%", "2.5%", "3%", "3.5%", "4%", "4.5%",
     "5%", "5.5%", "6%", "6.5%", "7%", "8%", "9%", "10%",
 )
-DIMMER_T2_RAMP = (
+DIMMER_T2_RAMP: tuple[str, ...] = (
     "1 s", "2 s", "4 s", "6 s", "8 s", "10 s", "15 s", "20 s",
     "30 s", "40 s", "50 s", "1 m", "2 m", "3 m", "4 m", "5 m",
 )
@@ -816,7 +821,7 @@ DIMMER_T2_RAMP = (
 # M13, M14) use no T1 parameter per Niko's spec — the chunk's T1 nibble
 # is ignored for them, so we deliberately return ``None`` rather than
 # fabricating a value.
-DIMMER_MODE_T1_LOOKUP = {
+DIMMER_MODE_T1_LOOKUP: dict[int, tuple[str, ...]] = {
     0x00: DIMMER_T1_1,         # M01 - Dim on/off (2 buttons)
     0x01: DIMMER_T1_1,         # M02 - Dim on/off (4 buttons)
     0x02: DIMMER_T1_1,         # M03 - Light scene on/off
