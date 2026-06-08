@@ -2,7 +2,6 @@ import asyncio
 import inspect
 import json
 import logging
-import os
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -25,7 +24,6 @@ from .switch_decoder import SwitchDecoder
 from .mapping import (
     DEVICE_TYPES,
     KEY_MAPPING,
-    KEY_MAPPING_MODULE,
     get_module_type_from_device_type,
 )
 from .protocol import (

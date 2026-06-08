@@ -39,7 +39,7 @@ import logging
 from typing import Any
 
 from .chunk_decoder import BaseChunkingDecoder
-from .pc_link_decoder import _decode_and_log, _known_module_addresses
+from .pc_link_decoder import _decode_and_log
 from .pc_record_parser import RegistryBuffer
 
 _LOGGER = logging.getLogger(__name__)
