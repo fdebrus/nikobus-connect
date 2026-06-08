@@ -34,7 +34,7 @@ def _timer_value(mode_raw: int | None, t1_raw: int | None) -> tuple[str | None, 
     return None, None
 
 
-def decode(payload_hex: str, raw_bytes: list[str], context) -> dict[str, Any] | None:
+def decode(payload_hex: str, raw_bytes: list[str], context: Any) -> dict[str, Any] | None:
     """Decode a single switch payload into normalized fields."""
 
     if _is_all_ff(payload_hex, 12):
@@ -133,7 +133,7 @@ def decode(payload_hex: str, raw_bytes: list[str], context) -> dict[str, Any] | 
 
 
 class SwitchDecoder(BaseChunkingDecoder):
-    def __init__(self, coordinator):
+    def __init__(self, coordinator: Any) -> None:
         super().__init__(coordinator, "switch_module")
 
 

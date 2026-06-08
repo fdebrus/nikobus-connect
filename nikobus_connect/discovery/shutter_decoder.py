@@ -37,7 +37,7 @@ def _timer_value(
     return (timer_entry[0], None) if timer_entry else (None, None)
 
 
-def decode(payload_hex: str, raw_bytes: list[str], context) -> dict[str, Any] | None:
+def decode(payload_hex: str, raw_bytes: list[str], context: Any) -> dict[str, Any] | None:
     """Decode a shutter payload following the deterministic selector rule."""
 
     if _is_all_ff(payload_hex, 12):
@@ -132,7 +132,7 @@ def decode(payload_hex: str, raw_bytes: list[str], context) -> dict[str, Any] | 
 
 
 class ShutterDecoder(BaseChunkingDecoder):
-    def __init__(self, coordinator):
+    def __init__(self, coordinator: Any) -> None:
         super().__init__(coordinator, "roller_module")
 
 

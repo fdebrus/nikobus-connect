@@ -50,7 +50,7 @@ _CHUNK_LENGTHS = {
 class BaseChunkingDecoder:
     module_type: str
 
-    def __init__(self, coordinator, module_type: str):
+    def __init__(self, coordinator: Any, module_type: str) -> None:
         self._coordinator = coordinator
         self.module_type = module_type
         self._module_address: str | None = None

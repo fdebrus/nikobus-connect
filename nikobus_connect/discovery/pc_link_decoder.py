@@ -53,7 +53,7 @@ _LOGGER = logging.getLogger(__name__)
 _LOG_PREFIX = "PC-Link"
 
 
-def _known_module_addresses(coordinator) -> set[str]:
+def _known_module_addresses(coordinator: Any) -> set[str]:
     """Collect bus-form addresses of every module in the live inventory.
 
     Used by ``parse_pc_record`` to identify registry records by shape
@@ -73,7 +73,7 @@ def _known_module_addresses(coordinator) -> set[str]:
     return addresses
 
 
-def decode(payload_hex: str, raw_bytes: list[str], context) -> dict[str, Any] | None:
+def decode(payload_hex: str, raw_bytes: list[str], context: Any) -> dict[str, Any] | None:
     """Module-level decoder hook used by ``decode_command_payload``.
 
     The chunking layer routes through this for any chunk it produces
@@ -113,7 +113,7 @@ class PcLinkDecoder(BaseChunkingDecoder):
     ``add_to_command_mapping`` consumes.
     """
 
-    def __init__(self, coordinator):
+    def __init__(self, coordinator: Any) -> None:
         super().__init__(coordinator, "pc_link")
         self._registry = RegistryBuffer()
 
@@ -130,7 +130,9 @@ class PcLinkDecoder(BaseChunkingDecoder):
         super().reset_scan_buffers()
         self._registry.reset()
 
-    def decode_chunk(self, chunk, module_address=None):
+    def decode_chunk(
+        self, chunk: str, module_address: str | None = None
+    ) -> list[DecodedCommand]:
         chunk = chunk.strip().upper()
         addr = module_address or self._module_address
         return _decode_and_log(
@@ -147,7 +149,7 @@ def _log_record(
     chunk_hex: str,
     module_address: str | None,
     *,
-    coordinator=None,
+    coordinator: Any = None,
     prefix: str = _LOG_PREFIX,
     registry: RegistryBuffer | None = None,
     logger: logging.Logger | None = None,
@@ -177,7 +179,7 @@ def _decode_and_log(
     chunk_hex: str,
     module_address: str | None,
     *,
-    coordinator,
+    coordinator: Any,
     prefix: str,
     registry: RegistryBuffer | None,
     module_type: str | None,
