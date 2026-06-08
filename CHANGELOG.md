@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.25.0
+
+**Typed release: `nikobus_connect` is now `mypy --strict` clean and ships a
+`py.typed` marker.**
+
+No behavioural change — this release is a type-annotation and packaging
+pass over the whole library, plus a round of code modernization. The
+headline payoff is for downstream consumers: with `py.typed` shipped
+(PEP 561), the Home Assistant integration can type-check directly against
+this library and drop its `ignore_missing_imports` override.
+
+- **`py.typed` marker shipped** and wired into the wheel via
+  `[tool.setuptools.package-data]`, so installed copies carry their type
+  information.
+- **Whole package is `mypy --strict` clean.** Every module under
+  `nikobus_connect` is annotated: the core I/O layer (`api`, `command`,
+  `listener`, `connection`, `protocol`) and the discovery subsystem
+  (`discovery`, `fileio`, `protocol`, `pc_record_parser`, the lookup
+  tables in `mapping`, and the chunk decoders). Dynamic bus-decoded
+  payloads are typed as `dict[str, Any]`; nullable dict-key and register
+  paths are narrowed with explicit guards rather than suppressed.
+- **`[tool.mypy]` config added** — strict mode scoped to the package,
+  with a single per-module override for `pyserial-asyncio` (which ships
+  no type information upstream).
+- **Code modernization** (behaviour-preserving): PEP 604 unions and
+  `collections.abc` callables across the core modules, DRY-ed the
+  listener callback dispatch, chained the connection buffer-overrun
+  error, removed unused imports, and `make_pc_link_command` now accepts
+  `bytes | bytearray`.
+- **`__version__` is now derived from installed package metadata**
+  (`importlib.metadata.version`) instead of three drifting hard-coded
+  literals.
+
 ## 0.24.0
 
 **Scene-centric light-scene Central Functions: one CF, many triggers.**
