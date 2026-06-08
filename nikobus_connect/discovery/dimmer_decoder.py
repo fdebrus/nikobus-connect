@@ -81,7 +81,7 @@ def decode(payload_hex: str, raw_bytes: list[str], context) -> dict[str, Any] | 
     t1_raw = _safe_int(raw_bytes[4][0])
     mode_raw = _safe_int(raw_bytes[4][1])
 
-    if None in (key_raw, channel_raw, mode_raw):
+    if key_raw is None or channel_raw is None or mode_raw is None:
         _LOGGER.debug(
             "Discovery skipped | type=dimmer module=%s reason=invalid_payload payload=%s",
             context.module_address,
