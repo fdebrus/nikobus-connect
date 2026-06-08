@@ -392,9 +392,9 @@ def test_pc_link_decoder_logs_resolved_target_for_link_record(caplog):
         decoder.decode_chunk("210000001F000080F6582E0006000000")
 
     assert "PC-Link link target" in caplog.text
-    assert "channel_idx=0x21" in caplog.text
-    assert "resolved=C9A5" in caplog.text
-    assert "ch=10" in caplog.text
+    assert "channel index 0x21" in caplog.text
+    assert "resolved to C9A5" in caplog.text
+    assert "channel 10" in caplog.text
 
 
 def test_pc_link_decoder_logs_unresolved_at_debug_when_registry_incomplete(caplog):
@@ -412,7 +412,7 @@ def test_pc_link_decoder_logs_unresolved_at_debug_when_registry_incomplete(caplo
         decoder.decode_chunk("0400000006000080B443180001000000")
 
     assert "PC-Link link target" in caplog.text
-    assert "resolved=None" in caplog.text
+    assert "unresolved" in caplog.text
     # And the INFO-level "link record" line is still emitted...
     assert "PC-Link link record" in caplog.text
     # ...but the resolution itself is at DEBUG.

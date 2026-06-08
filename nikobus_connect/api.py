@@ -60,7 +60,7 @@ class NikobusAPI:
 
         try:
             if bus_cmd:
-                _LOGGER.debug("Sending bus trigger for %s: %s", address, bus_cmd)
+                _LOGGER.debug("Sending bus trigger for %s — %s", address, bus_cmd)
                 await self._send_bus_command(bus_cmd, completion_handler)
                 self._command_handler.set_bytearray_state(address, channel, target_state)
             else:
@@ -69,7 +69,7 @@ class NikobusAPI:
                     address, channel, target_state, completion_handler=completion_handler
                 )
         except NikobusError as err:
-            _LOGGER.error("API Action failed for %s: %s", address, err)
+            _LOGGER.error("API action failed for %s: %s", address, err)
             raise
 
     # --- SWITCHES ---
@@ -114,7 +114,7 @@ class NikobusAPI:
                 address, channel, brightness, completion_handler=completion_handler
             )
         except NikobusError as err:
-            _LOGGER.error("API Dimmer Action failed for %s: %s", address, err)
+            _LOGGER.error("API dimmer action failed for %s: %s", address, err)
             raise
 
     async def turn_off_light(
@@ -143,7 +143,7 @@ class NikobusAPI:
                 address, channel, STATE_OFF, completion_handler=completion_handler
             )
         except NikobusError as err:
-            _LOGGER.error("API Dimmer Action failed for %s: %s", address, err)
+            _LOGGER.error("API dimmer action failed for %s: %s", address, err)
             raise
 
     # --- COVERS ---
@@ -168,7 +168,7 @@ class NikobusAPI:
             else:
                 await self._command_handler.set_output_state(address, channel, STATE_OFF, completion_handler)
         except NikobusError as err:
-            _LOGGER.error("API Cover Action failed for %s: %s", address, err)
+            _LOGGER.error("API cover action failed for %s: %s", address, err)
             raise
 
     async def set_output_states_for_module(self, address: str, completion_handler: Callable[..., Any] | None = None) -> None:

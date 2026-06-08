@@ -390,8 +390,8 @@ def test_pc_logic_decoder_logs_registry_record_at_info(caplog):
     log_text = caplog.text
     assert "PC-Logic module-registry record" in log_text
     assert "80D9" in log_text
-    assert "address=940C" in log_text
-    assert "device_type=0x08" in log_text
+    assert "address 940C" in log_text
+    assert "device type 0x08" in log_text
 
 
 def test_decode_command_payload_routes_pc_logic_to_decoder(caplog):

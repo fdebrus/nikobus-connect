@@ -64,12 +64,12 @@ class NikobusConnect:
 
     async def _handshake(self) -> None:
         """Perform the full modem init + handshake sequence once after connecting."""
-        _LOGGER.debug("Starting Nikobus handshake...")
+        _LOGGER.debug("Starting Nikobus handshake")
         try:
             for cmd in COMMANDS_HANDSHAKE:
                 await self.send(cmd)
                 await asyncio.sleep(0.2)
-            _LOGGER.info("Nikobus handshake completed successfully.")
+            _LOGGER.info("Nikobus handshake completed successfully")
         except Exception as err:
             _LOGGER.error("Handshake failed: %s", err)
             raise NikobusConnectionError(f"Handshake failed: {err}") from err
@@ -81,12 +81,12 @@ class NikobusConnect:
                 self._writer.close()
                 await self._writer.wait_closed()
             except Exception as err:
-                _LOGGER.debug("Error during close: %s", err)
+                _LOGGER.debug("Failed to close connection: %s", err)
 
         self._reader = None
         self._writer = None
         self._is_connected = False
-        _LOGGER.info("Nikobus connection closed.")
+        _LOGGER.info("Nikobus connection closed")
 
     async def ping(self) -> bool:
         """Verify the PC-Link is responsive by sending an #E1 command."""
@@ -95,7 +95,7 @@ class NikobusConnect:
 
         try:
             await self.send("#E1")
-            _LOGGER.debug("Nikobus ping (#E1) successful.")
+            _LOGGER.debug("Nikobus ping (#E1) successful")
             return True
         except Exception as err:
             _LOGGER.error("Nikobus ping failed: %s", err)

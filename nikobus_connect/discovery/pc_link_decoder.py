@@ -201,7 +201,7 @@ def _decode_and_log(
 
     if is_empty_record(chunk_hex):
         log.debug(
-            "%s empty record | module=%s payload=%s",
+            "%s empty record for module %s — payload %s",
             prefix,
             module_address,
             chunk_hex,
@@ -217,7 +217,7 @@ def _decode_and_log(
         # comes from the output-module link tables, and CF names from the
         # .nkb project. See ``is_cf_address_table_chunk``.
         log.debug(
-            "%s CF address-table chunk | module=%s payload=%s",
+            "%s CF address-table chunk for module %s — payload %s",
             prefix,
             module_address,
             chunk_hex,
@@ -226,7 +226,7 @@ def _decode_and_log(
 
     if is_noise_chunk(chunk_hex):
         log.debug(
-            "%s noise chunk | module=%s payload=%s",
+            "%s noise chunk for module %s — payload %s",
             prefix,
             module_address,
             chunk_hex,
@@ -239,7 +239,7 @@ def _decode_and_log(
     )
     if record is None:
         log.debug(
-            "%s unparseable chunk | module=%s payload=%s",
+            "%s unparseable chunk for module %s — payload %s",
             prefix,
             module_address,
             chunk_hex,
@@ -250,8 +250,8 @@ def _decode_and_log(
         if registry is not None:
             registry.add(record)
         log.info(
-            "%s module-registry record | module=%s device_type=0x%02X "
-            "address=%s type_slot=%d raw=%s",
+            "%s module-registry record for module %s — device type 0x%02X, "
+            "address %s, type slot %d, raw %s",
             prefix,
             module_address,
             record.device_type,
@@ -263,8 +263,8 @@ def _decode_and_log(
 
     if isinstance(record, LinkRecord):
         log.info(
-            "%s link record | module=%s channel_idx=0x%02X mode=0x%02X "
-            "flag=0x%02X payload=%s slot=0x%02X raw=%s",
+            "%s link record for module %s — channel index 0x%02X, mode 0x%02X, "
+            "flag 0x%02X, payload %s, slot 0x%02X, raw %s",
             prefix,
             module_address,
             record.channel_index,
@@ -283,8 +283,8 @@ def _decode_and_log(
         )
         if target is None:
             log.debug(
-                "%s link target | module=%s channel_idx=0x%02X "
-                "resolved=None (out of flat-map range or empty registry)",
+                "%s link target for module %s channel index 0x%02X — "
+                "unresolved (out of flat-map range or empty registry)",
                 prefix,
                 module_address,
                 record.channel_index,
@@ -293,8 +293,8 @@ def _decode_and_log(
 
         target_address, target_channel = target
         log.info(
-            "%s link target | module=%s channel_idx=0x%02X "
-            "resolved=%s ch=%d",
+            "%s link target for module %s channel index 0x%02X — "
+            "resolved to %s channel %d",
             prefix,
             module_address,
             record.channel_index,
@@ -322,8 +322,8 @@ def _decode_and_log(
         )
         if metadata is None:
             log.debug(
-                "%s link skipped | module=%s channel_idx=0x%02X "
-                "reason=metadata_resolution_failed (mode/key/source unknown)",
+                "%s link skipped for module %s channel index 0x%02X — "
+                "metadata resolution failed (mode/key/source unknown)",
                 prefix,
                 module_address,
                 record.channel_index,

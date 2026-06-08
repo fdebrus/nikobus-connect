@@ -106,10 +106,10 @@ def test_pc_logic_response_is_rejected_with_warning(tmp_path, caplog):
     assert "8835" not in discovery._inventory_addresses
     assert "8835" not in discovery.discovered_devices
     assert "Inventory record rejected" in caplog.text
-    assert "non_pc_link_signature" in caplog.text
+    assert "non-PC-Link signature" in caplog.text
     # Address is logged in raw (bus byte) order so users can grep
     # against the wire frame they captured.
-    assert "raw=3588" in caplog.text
+    assert "raw 3588" in caplog.text
     assert "0x40" in caplog.text
     assert "0x50" in caplog.text
 
@@ -130,7 +130,7 @@ def test_unknown_signature_byte_is_rejected(tmp_path, caplog):
 
     assert "AAAA" not in discovery._inventory_addresses
     assert "AAAA" not in discovery.discovered_devices
-    assert "non_pc_link_signature" in caplog.text
+    assert "non-PC-Link signature" in caplog.text
 
 
 def test_pc_link_then_pc_logic_keeps_only_pc_link(tmp_path):

@@ -170,14 +170,14 @@ async def test_unknown_device_warning_is_deduped(tmp_path, caplog):
         for rec in caplog.records
         if rec.levelno == logging.WARNING
         and "Unknown device detected" in rec.message
-        and f"Type {rare_type}" in rec.message
+        and f"type {rare_type}" in rec.message
     ]
     deduped_debugs = [
         rec
         for rec in caplog.records
         if rec.levelno == logging.DEBUG
         and "Unknown device detected (deduped)" in rec.message
-        and f"Type {rare_type}" in rec.message
+        and f"type {rare_type}" in rec.message
     ]
 
     assert len(warnings_for_type) == 1, (

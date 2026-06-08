@@ -101,7 +101,7 @@ async def _write_json_atomic(
     try:
         await asyncio.to_thread(_write, tmp_path)
         os.replace(tmp_path, file_path)
-        _LOGGER.debug("Data written to file: %s", file_path)
+        _LOGGER.debug("Data written to file %s", file_path)
     except Exception:
         _LOGGER.exception("Failed to write data to file %s", file_path)
         try:
@@ -131,7 +131,7 @@ async def read_json_file(file_path: str) -> dict[str, Any] | None:
     try:
         return await asyncio.to_thread(_read, file_path)
     except Exception:
-        _LOGGER.error("Failed to read data from file %s", file_path, exc_info=True)
+        _LOGGER.exception("Failed to read data from file %s", file_path)
         return None
 
 
@@ -401,7 +401,7 @@ def merge_discovered_modules(
 
     if added or updated:
         _LOGGER.info(
-            "Module store merge summary: new=%d refreshed=%d", added, updated
+            "Module store merge summary — new %d, refreshed %d", added, updated
         )
     return added, updated
 
@@ -626,7 +626,7 @@ def merge_discovered_buttons(
         keys = _BUTTON_KEYS_BY_CHANNEL_COUNT.get(num_channels)
         if keys is None:
             _LOGGER.error(
-                "Unexpected number of channels: %s for device %s",
+                "Unexpected number of channels %s for device %s",
                 num_channels,
                 physical_addr,
             )
@@ -659,7 +659,7 @@ def merge_discovered_buttons(
             original_nibble = int(converted_address[0], 16)
         except (ValueError, IndexError):
             _LOGGER.error(
-                "Invalid converted address for device %s: %s",
+                "Invalid converted address for device %s — %s",
                 physical_addr,
                 converted_address,
             )
@@ -811,7 +811,7 @@ def _build_bus_to_op_index(
                     index.setdefault(shifted, (phys, key_label))
                 except ValueError:
                     _LOGGER.debug(
-                        "Invalid hex bus address in operation point: %s", bus_addr
+                        "Invalid hex bus address in operation point %s", bus_addr
                     )
     return index
 
@@ -1496,8 +1496,8 @@ def merge_linked_modules(
     # crowded the DEBUG stream.
     if any_updates:
         _LOGGER.debug(
-            "Button store merge summary: updated_buttons=%d, links_added=%d, "
-            "outputs_added=%d",
+            "Button store merge summary — updated buttons %d, links added %d, "
+            "outputs added %d",
             updated_buttons,
             links_added,
             outputs_added,
@@ -1506,7 +1506,7 @@ def merge_linked_modules(
     if not matched_addresses and unmatched_addresses:
         unmatched_sample = list(unmatched_addresses)[:5]
         _LOGGER.debug(
-            "Button store merge found no matching buttons. unmatched_count=%d sample=%s",
+            "Button store merge found no matching buttons — unmatched count %d, sample %s",
             len(unmatched_addresses),
             unmatched_sample,
         )

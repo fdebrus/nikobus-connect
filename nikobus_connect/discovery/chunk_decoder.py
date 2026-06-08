@@ -82,7 +82,7 @@ class BaseChunkingDecoder:
         payload_and_crc = payload_and_crc.upper()
         if len(payload_and_crc) < _CRC_LEN:
             _LOGGER.debug(
-                "Discovery skipped | type=%s reason=short_payload payload=%s",
+                "Skipped %s record — short payload %s",
                 self.module_type,
                 payload_and_crc,
             )
@@ -123,7 +123,7 @@ class BaseChunkingDecoder:
 
         if decoded is None:
             _LOGGER.debug(
-                "Decode returned None | type=%s module=%s chunk=%s",
+                "Decoder returned no record for %s module %s — chunk %s",
                 self.module_type,
                 module_address or self._module_address,
                 chunk,

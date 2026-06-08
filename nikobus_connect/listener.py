@@ -90,7 +90,7 @@ class NikobusEventListener:
         """Start the background listening task."""
         self._running = True
         self._listener_task = asyncio.create_task(self._listen_loop())
-        _LOGGER.info("Nikobus Event Listener started.")
+        _LOGGER.info("Nikobus event listener started")
 
     async def stop(self) -> None:
         """Stop the listener."""
@@ -113,14 +113,14 @@ class NikobusEventListener:
 
                 raw_text = data.decode("Windows-1252", errors="ignore")
                 for frame in self._extract_frames(raw_text):
-                    _LOGGER.debug("Bus Frame: %s", frame)
+                    _LOGGER.debug("Bus frame %s", frame)
                     await self._dispatch_message(frame)
             except asyncio.TimeoutError:
                 continue
             except Exception as err:
-                _LOGGER.error("Listener loop error: %s", err)
+                _LOGGER.error("Listener loop failed: %s", err)
                 if not self._connection.is_connected:
-                    _LOGGER.warning("Connection lost — listener loop exiting.")
+                    _LOGGER.warning("Connection lost — listener loop exiting")
                     self._running = False
                     await self._invoke(self.on_connection_lost)
                     break
@@ -225,7 +225,7 @@ class NikobusEventListener:
 
             if len(message) != expected_total - 1:
                 _LOGGER.error(
-                    "Length mismatch: expected %d chars, got %d (frame: %s)",
+                    "Length mismatch — expected %d chars, got %d (frame %s)",
                     expected_total - 1, len(message), message,
                 )
                 return False

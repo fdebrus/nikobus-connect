@@ -65,12 +65,12 @@ class NikobusCommandHandler:
             try:
                 await self._command_task
             except asyncio.CancelledError:
-                _LOGGER.info("Command processing task was cancelled.")
+                _LOGGER.info("Command processing task was cancelled")
             self._command_task = None
 
     async def _process_commands(self) -> None:
         """Process commands from the queue."""
-        _LOGGER.info("Nikobus Command Processing starting.")
+        _LOGGER.info("Nikobus command processing starting")
         while self._running:
             try:
                 command_item = await self._command_queue.get()
@@ -102,7 +102,7 @@ class NikobusCommandHandler:
                     self._command_queue.task_done()
                     continue
 
-                _LOGGER.debug("Processing command: %s with address: %s", command, address)
+                _LOGGER.debug("Processing command %s with address %s", command, address)
 
                 gid = command[3:5] if len(command) >= 5 else ""
                 if gid in ("12", "17") and address:
@@ -126,19 +126,15 @@ class NikobusCommandHandler:
                             if inspect.isawaitable(res):
                                 await res
                 except Exception as err:
-                    _LOGGER.error(
-                        "Error processing command %s: %s", command, err, exc_info=True
-                    )
+                    _LOGGER.exception("Failed to process command %s", command)
                     if future and not future.done():
                         future.set_exception(err)
                 finally:
                     self._command_queue.task_done()
 
                 await asyncio.sleep(COMMAND_EXECUTION_DELAY)
-            except Exception as err:
-                _LOGGER.error(
-                    "Error in command processing loop: %s", err, exc_info=True
-                )
+            except Exception:
+                _LOGGER.exception("Command processing loop failed")
 
     def set_bytearray_state(self, address: str, channel: int, value: int) -> None:
         """Update the internal state buffer for a module channel."""
@@ -170,7 +166,7 @@ class NikobusCommandHandler:
         Nikobus-HA #319 IKIKN trace where real modules were being
         misclassified as absent.
         """
-        _LOGGER.debug("Getting output state - Address: %s, Group: %s", address, group)
+        _LOGGER.debug("Getting output state — address %s, group %s", address, group)
         command_code = 0x12 if int(group) == 1 else 0x17
         command = make_pc_link_command(command_code, address)
         loop = asyncio.get_running_loop()
@@ -232,7 +228,7 @@ class NikobusCommandHandler:
         await self.queue_command(
             command, address, completion_handler=completion_handler
         )
-        _LOGGER.debug("Command successfully queued for module %s, channel %d.", address, channel)
+        _LOGGER.debug("Command successfully queued for module %s, channel %d", address, channel)
 
     async def set_output_states(
         self,
@@ -271,7 +267,7 @@ class NikobusCommandHandler:
         completion_handler: Callable[[], Awaitable[None]] | None = None,
     ) -> None:
         """Queue a command for processing."""
-        _LOGGER.debug("Queueing command: %s", command)
+        _LOGGER.debug("Queueing command %s", command)
 
         gid = command[3:5] if len(command) >= 5 else ""
         if gid in ("12", "17") and address:
@@ -290,7 +286,7 @@ class NikobusCommandHandler:
             "completion_handler": completion_handler,
         }
         await self._command_queue.put(command_item)
-        _LOGGER.debug("Command queued: %s", command)
+        _LOGGER.debug("Command queued %s", command)
 
     def drain_queue(self) -> int:
         """Drain all pending commands from the queue.
@@ -310,11 +306,11 @@ class NikobusCommandHandler:
 
     async def _send_command(self, command: str) -> None:
         """Send a command to the Nikobus system."""
-        _LOGGER.debug("Sending command: %s", command)
+        _LOGGER.debug("Sending command %s", command)
         try:
             await self._connection.send(command)
-        except NikobusError as err:
-            _LOGGER.error("Failed to send command %s: %s", command, err, exc_info=True)
+        except NikobusError:
+            _LOGGER.exception("Failed to send command %s", command)
             raise
 
     async def _send_command_get_answer(self, command: str, address: str) -> str:
@@ -374,21 +370,19 @@ class NikobusCommandHandler:
                 try:
                     await self._connection.send(command)
                     _LOGGER.debug(
-                        "Attempt %d/%d waiting for ACK: %s, ANSWER: %s",
+                        "Attempt %d/%d waiting for ACK %s, answer %s",
                         attempt, MAX_ATTEMPTS, wait_ack, wait_answer,
                     )
                     state = await self._wait_for_ack_and_answer_state(wait_ack, wait_answer)
                     if state is not None:
-                        _LOGGER.debug("Received valid state from device.")
+                        _LOGGER.debug("Received valid state from device")
                         return state
                 except (NikobusSendError, NikobusTimeoutError) as err:
-                    _LOGGER.warning("Attempt %d error: %s", attempt, err, exc_info=True)
+                    _LOGGER.warning("Attempt %d failed: %s", attempt, err, exc_info=True)
                     if attempt == MAX_ATTEMPTS:
                         raise
                 except Exception as err:
-                    _LOGGER.error(
-                        "Unhandled exception on attempt %d: %s", attempt, err, exc_info=True
-                    )
+                    _LOGGER.exception("Unhandled exception on attempt %d", attempt)
                     if attempt == MAX_ATTEMPTS:
                         raise NikobusError(f"Unhandled exception: {err}") from err
             raise NikobusTimeoutError(
@@ -419,7 +413,7 @@ class NikobusCommandHandler:
                     timeout=min(per_msg_timeout, remaining),
                 )
                 self._listener.response_queue.task_done()
-                _LOGGER.debug("Message received: %s", message)
+                _LOGGER.debug("Message received %s", message)
                 if wait_ack in message:
                     _LOGGER.debug("ACK received")
                     ack_received = True
@@ -434,18 +428,16 @@ class NikobusCommandHandler:
                         answer_received = True
                     else:
                         _LOGGER.debug(
-                            "Ignoring short get-response (len=%d, need>=%d): %s",
+                            "Ignoring short get-response — len %d, need >= %d, message %s",
                             len(message), len(wait_answer) + 2 + 12, message,
                         )
                 if ack_received and answer_received:
                     return state
             except asyncio.TimeoutError:
-                _LOGGER.debug("Timeout while waiting for ACK/Answer")
+                _LOGGER.debug("Timeout while waiting for ACK/answer")
                 break
             except Exception as err:
-                _LOGGER.error(
-                    "Error while waiting for messages: %s", err, exc_info=True
-                )
+                _LOGGER.exception("Failed while waiting for messages")
                 raise NikobusError(f"Error while waiting for messages: {err}") from err
 
         return None
@@ -454,13 +446,13 @@ class NikobusCommandHandler:
         """Parse and return the state from a received message."""
         idx = message.find(answer_signal)
         if idx == -1:
-            _LOGGER.warning("Answer signal %s not found in message: %s", answer_signal, message)
+            _LOGGER.warning("Answer signal %s not found in message %s", answer_signal, message)
             return ""
         state_index = idx + len(answer_signal) + 2
         state = message[state_index:state_index + 12]
         if len(state) < 12:
             _LOGGER.warning(
-                "State data truncated (%d/12 chars) in message: %s", len(state), message
+                "State data truncated (%d/12 chars) in message %s", len(state), message
             )
             return ""
         return state

@@ -180,8 +180,8 @@ def test_pc_link_decoder_logs_registry_record_at_info(caplog):
     log_text = caplog.text
     assert "PC-Link module-registry record" in log_text
     assert "86F5" in log_text
-    assert "address=940C" in log_text
-    assert "device_type=0x08" in log_text
+    assert "address 940C" in log_text
+    assert "device type 0x08" in log_text
 
 
 def test_pc_link_decoder_logs_link_record_at_info(caplog):
@@ -196,10 +196,10 @@ def test_pc_link_decoder_logs_link_record_at_info(caplog):
     assert result is None
     log_text = caplog.text
     assert "PC-Link link record" in log_text
-    assert "channel_idx=0x04" in log_text
-    assert "mode=0x06" in log_text
-    assert "flag=0x80" in log_text
-    assert "payload=B44318" in log_text
+    assert "channel index 0x04" in log_text
+    assert "mode 0x06" in log_text
+    assert "flag 0x80" in log_text
+    assert "payload B44318" in log_text
 
 
 def test_pc_link_decoder_returns_none_for_any_chunk():

@@ -39,7 +39,7 @@ def decode(payload_hex: str, raw_bytes: list[str], context: Any) -> dict[str, An
 
     if _is_all_ff(payload_hex, 12):
         _LOGGER.debug(
-            "Discovery skipped | type=switch module=%s reason=empty_slot payload=%s",
+            "Skipped switch module %s — empty slot, payload %s",
             context.module_address,
             payload_hex,
         )
@@ -47,7 +47,7 @@ def decode(payload_hex: str, raw_bytes: list[str], context: Any) -> dict[str, An
 
     if len(raw_bytes) != 6:
         _LOGGER.debug(
-            "Discovery skipped | type=switch module=%s reason=invalid_length payload=%s",
+            "Skipped switch module %s — invalid length, payload %s",
             context.module_address,
             payload_hex,
         )
@@ -61,7 +61,7 @@ def decode(payload_hex: str, raw_bytes: list[str], context: Any) -> dict[str, An
 
     if key_raw is None or channel_raw is None or mode_raw is None:
         _LOGGER.debug(
-            "Discovery skipped | type=switch module=%s reason=invalid_payload payload=%s",
+            "Skipped switch module %s — invalid payload %s",
             context.module_address,
             payload_hex,
         )
@@ -69,7 +69,7 @@ def decode(payload_hex: str, raw_bytes: list[str], context: Any) -> dict[str, An
 
     if mode_raw not in SWITCH_MODE_MAPPING:
         _LOGGER.debug(
-            "Discovery skipped | type=switch module=%s reason=unknown_mode payload=%s",
+            "Skipped switch module %s — unknown mode, payload %s",
             context.module_address,
             payload_hex,
         )
@@ -79,7 +79,7 @@ def decode(payload_hex: str, raw_bytes: list[str], context: Any) -> dict[str, An
     channel_decoded = channel_raw + 1
     if channel_count is not None and not (1 <= channel_decoded <= channel_count):
         _LOGGER.debug(
-            "Discovery skipped | type=switch module=%s reason=invalid_channel payload=%s",
+            "Skipped switch module %s — invalid channel, payload %s",
             context.module_address,
             payload_hex,
         )
@@ -121,7 +121,7 @@ def decode(payload_hex: str, raw_bytes: list[str], context: Any) -> dict[str, An
     }
 
     _LOGGER.debug(
-        "Discovery decoded | type=switch module=%s button=%s key=%s channel=%s mode=%s",
+        "Decoded switch module %s — button %s, key %s, channel %s, mode %s",
         context.module_address,
         normalized_button,
         key_raw,
