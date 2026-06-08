@@ -1,5 +1,7 @@
 """NikobusConnect: asynchronous library for Nikobus."""
 
+from importlib.metadata import PackageNotFoundError, version
+
 from .api import NikobusAPI
 from .command import NikobusCommandHandler
 from .connection import NikobusConnect
@@ -50,4 +52,11 @@ __all__ = [
     "reverse_24bit_to_hex",
 ]
 
-__version__ = "2.0.0"
+# Single source of truth: the version declared in pyproject.toml, read
+# from the installed package metadata (avoids the hardcoded literal
+# drifting out of sync, as it had — this said "2.0.0" while the package
+# was 0.24.0).
+try:
+    __version__ = version("nikobus-connect")
+except PackageNotFoundError:  # running from a source tree without an install
+    __version__ = "0.0.0"
