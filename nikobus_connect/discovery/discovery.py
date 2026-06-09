@@ -36,6 +36,7 @@ from .protocol import (
     derive_pc_logic_input_physicals,
     reverse_hex,
 )
+from ..coordinator_protocol import CoordinatorProtocol
 from ..const import (
     COMMAND_EXECUTION_DELAY,
     DEVICE_ADDRESS_INVENTORY,
@@ -716,7 +717,7 @@ class CFBroadcast:
 class NikobusDiscovery:
     def __init__(
         self,
-        coordinator: Any,
+        coordinator: CoordinatorProtocol,
         *,
         config_dir: str,
         create_task: Callable[..., Any],
@@ -950,8 +951,14 @@ class NikobusDiscovery:
         second caller awaits the first.
         """
 
-        listener = self._coordinator.nikobus_command._listener
-        connection = self._coordinator.nikobus_command._connection
+        nikobus_command = self._coordinator.nikobus_command
+        if nikobus_command is None:
+            raise RuntimeError(
+                "Register scan requires the coordinator's command pipeline "
+                "(nikobus_command is None — not connected?)"
+            )
+        listener = nikobus_command._listener
+        connection = nikobus_command._connection
 
         async with self._scan_lock:
             self._scan_active = True
@@ -1998,7 +2005,13 @@ class NikobusDiscovery:
                     bus_order_address,
                     reg,
                 )
-                await self._coordinator.nikobus_command.queue_command(pc_link_command)
+                nikobus_command = self._coordinator.nikobus_command
+                if nikobus_command is None:
+                    raise RuntimeError(
+                        "PC-Link inventory requires the coordinator's command "
+                        "pipeline (nikobus_command is None — not connected?)"
+                    )
+                await nikobus_command.queue_command(pc_link_command)
                 self._progress_module_registers_sent += 1
                 await self._emit_progress(
                     PHASE_IDENTITY,
@@ -2205,7 +2218,13 @@ class NikobusDiscovery:
         self._progress_current_sub_byte = None
         _LOGGER.info("PC-Link inventory enumeration started")
         _LOGGER.debug("Queueing PC-Link inventory command #A")
-        await self._coordinator.nikobus_command.queue_command("#A")
+        nikobus_command = self._coordinator.nikobus_command
+        if nikobus_command is None:
+            raise RuntimeError(
+                "PC-Link inventory requires the coordinator's command "
+                "pipeline (nikobus_command is None — not connected?)"
+            )
+        await nikobus_command.queue_command("#A")
         # Mark the single unit as in-flight so the bar leaves 0 once
         # the command is on the wire. Completion is signalled when
         # PHASE_IDENTITY takes over.
@@ -2302,18 +2321,16 @@ class NikobusDiscovery:
             "orphaned_buttons": [],
         }
 
-        nikobus_command = getattr(self._coordinator, "nikobus_command", None)
-        if nikobus_command is None or not hasattr(
-            nikobus_command, "get_output_state"
-        ):
+        nikobus_command = self._coordinator.nikobus_command
+        if nikobus_command is None:
             _LOGGER.warning(
-                "Stale-inventory detection — coordinator has no nikobus_command "
-                "with get_output_state, returning empty manifest"
+                "Stale-inventory detection — coordinator has no nikobus_command, "
+                "returning empty manifest"
             )
             return empty
 
         addresses: list[str] = []
-        bucket = getattr(self._coordinator, "dict_module_data", {}) or {}
+        bucket = self._coordinator.dict_module_data or {}
         if isinstance(bucket, dict):
             for module_type, modules in bucket.items():
                 if module_type not in self._BUS_PROBE_MODULE_TYPES:
@@ -2519,7 +2536,7 @@ class NikobusDiscovery:
             )
             return
 
-        coordinator_modules = getattr(self._coordinator, "dict_module_data", {}) or {}
+        coordinator_modules = self._coordinator.dict_module_data or {}
         known_pc_links = coordinator_modules.get("pc_link") or {}
         if known_pc_links and address not in known_pc_links:
             _LOGGER.debug(
@@ -2617,7 +2634,7 @@ class NikobusDiscovery:
                     "a specific module address"
                 )
             all_addresses = []
-            dict_data = getattr(self._coordinator, "dict_module_data", {})
+            dict_data = self._coordinator.dict_module_data
             for module_type, modules in dict_data.items():
                 if module_type not in NON_OUTPUT_MODULE_TYPES:
                     module_iter = modules.values() if isinstance(modules, dict) else modules
@@ -3224,7 +3241,7 @@ class NikobusDiscovery:
             await self._on_button_save()
 
 
-def run_decoder_harness(coordinator: Any) -> None:
+def run_decoder_harness(coordinator: CoordinatorProtocol | None) -> None:
     """Lightweight harness to exercise discovery decoders without full HA runtime."""
 
     sample_messages = [

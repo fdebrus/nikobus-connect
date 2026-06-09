@@ -38,6 +38,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from ..coordinator_protocol import CoordinatorProtocol
 from .base import DecodedCommand
 from .chunk_decoder import BaseChunkingDecoder
 from .pc_link_decoder import _ScanCounts, _decode_and_log, _emit_scan_summary
@@ -61,7 +62,7 @@ def decode(payload_hex: str, raw_bytes: list[str], context: Any) -> dict[str, An
     _decode_and_log(
         payload_hex,
         getattr(context, "module_address", None),
-        coordinator=getattr(context, "coordinator", None),
+        coordinator=context.coordinator,
         prefix=_LOG_PREFIX,
         registry=None,
         module_type=None,
@@ -78,7 +79,7 @@ class PcLogicDecoder(BaseChunkingDecoder):
     only difference is the log prefix used for diagnostic lines.
     """
 
-    def __init__(self, coordinator: Any) -> None:
+    def __init__(self, coordinator: CoordinatorProtocol | None) -> None:
         super().__init__(coordinator, "pc_logic")
         self._registry = RegistryBuffer()
         self._scan_counts = _ScanCounts()

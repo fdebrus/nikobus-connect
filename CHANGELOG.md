@@ -2,6 +2,26 @@
 
 ## 0.27.0
 
+**API: formal `CoordinatorProtocol` host contract.**
+
+The contract between the library and its host coordinator was implicit —
+scattered `getattr(coordinator, ...)` calls that silently skipped
+features on a missing member, and cross-object attribute writes
+documented only in comments. `nikobus_connect.CoordinatorProtocol` now
+declares the full surface (6 attributes + `get_module_type` /
+`get_module_channel_count` / `get_button_channels`); every library
+signature that takes a coordinator is typed against it.
+
+- Hosts can declare conformance and have mypy verify they implement
+  everything the library touches.
+- `coordinator=None` remains the supported "no host" form for parsers
+  and the decoder harness; a non-None coordinator must be conformant
+  (the old "object missing get_button_channels" shape is no longer a
+  tolerated input).
+- Typing surfaced three unguarded `nikobus_command` accesses (register
+  scan + the two inventory paths) — they now fail fast with a clear
+  RuntimeError instead of an AttributeError mid-scan.
+
 **Robustness: reconnect-with-backoff primitive + post-reconnect reset APIs.**
 
 The HA integration's reconnect loop owned the transport backoff and had
