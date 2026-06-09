@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
+from collections.abc import Callable
+from typing import Any
 
 import serial_asyncio
 
@@ -73,6 +76,50 @@ class NikobusConnect:
         except Exception as err:
             _LOGGER.error("Handshake failed: %s", err)
             raise NikobusConnectionError(f"Handshake failed: {err}") from err
+
+    async def reconnect_with_backoff(
+        self,
+        *,
+        initial_delay: float = 1.0,
+        max_delay: float = 30.0,
+        on_attempt: Callable[[int, float], Any] | None = None,
+    ) -> int:
+        """Reconnect with exponential backoff until ``connect()`` succeeds.
+
+        Loops ``connect()`` (transport + handshake) forever, sleeping
+        ``initial_delay`` doubled per failure up to ``max_delay``, and
+        returns the number of attempts the successful connect took.
+        Cancellation propagates — callers stop the loop by cancelling
+        the task that awaits this coroutine.
+
+        ``on_attempt(attempt, delay)`` — sync or async — is invoked
+        before each try so callers can surface progress (log lines,
+        availability updates) without owning the loop.
+        """
+        attempt = 0
+        delay = initial_delay
+        while True:
+            attempt += 1
+            if on_attempt is not None:
+                result = on_attempt(attempt, delay)
+                if inspect.isawaitable(result):
+                    await result
+            try:
+                await self.connect()
+            except asyncio.CancelledError:
+                raise
+            except Exception as err:
+                _LOGGER.warning(
+                    "Reconnect attempt %d failed: %s — retrying in %.0fs",
+                    attempt,
+                    err,
+                    delay,
+                )
+                await asyncio.sleep(delay)
+                delay = min(delay * 2, max_delay)
+                continue
+            _LOGGER.info("Reconnected to Nikobus after %d attempt(s)", attempt)
+            return attempt
 
     async def disconnect(self) -> None:
         """Close the connection and cleanup resources."""

@@ -292,17 +292,39 @@ class NikobusCommandHandler:
         """Drain all pending commands from the queue.
 
         Used by discovery to abort remaining register reads after early
-        termination.  Returns the number of discarded commands.
+        termination, and by :meth:`reset` after a reconnect. Any queued
+        command carrying a caller future gets that future cancelled so
+        the awaiter is released instead of hanging until its own
+        timeout. Returns the number of discarded commands.
         """
         count = 0
         while not self._command_queue.empty():
             try:
-                self._command_queue.get_nowait()
-                self._command_queue.task_done()
-                count += 1
+                item = self._command_queue.get_nowait()
             except asyncio.QueueEmpty:
                 break
+            future = item.get("future")
+            if future is not None and not future.done():
+                future.cancel()
+            self._command_queue.task_done()
+            count += 1
         return count
+
+    def reset(self) -> None:
+        """Clear per-connection state after a transport reconnect.
+
+        Drains the queue (cancelling queued caller futures) and clears
+        the GET-dedup key set — commands queued against the dead
+        connection must not block their re-issue on the new one. The
+        processing loop itself keeps running; only the backlog is
+        dropped.
+        """
+        discarded = self.drain_queue()
+        self._queued_get_keys.clear()
+        if discarded:
+            _LOGGER.info(
+                "Command handler reset: %d stale command(s) discarded", discarded
+            )
 
     async def _send_command(self, command: str) -> None:
         """Send a command to the Nikobus system."""

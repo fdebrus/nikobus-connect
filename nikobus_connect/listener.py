@@ -53,6 +53,23 @@ class NikobusEventListener:
         self._last_query_group: dict[str, int] = {}
         self._awaiting_response: bool = False
 
+    def reset(self) -> None:
+        """Clear per-connection state after a transport reconnect.
+
+        Drops the partial-frame buffer (bytes from the dead connection
+        must not prefix frames from the new one), the query-group map,
+        and any unconsumed responses. Call after ``stop()`` / before
+        ``start()`` on the new connection.
+        """
+        self._frame_buffer = ""
+        self._last_query_group.clear()
+        while True:
+            try:
+                self.response_queue.get_nowait()
+                self.response_queue.task_done()
+            except asyncio.QueueEmpty:
+                break
+
     def set_pending_query_group(self, addr: str, group: int) -> None:
         """Record which group is about to be queried for an address.
 
