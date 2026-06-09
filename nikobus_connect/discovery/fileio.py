@@ -591,6 +591,27 @@ def merge_discovered_buttons(
         # bijection across all 24-bit values).
         rt_bus = device.get("remote_transmitter_bus_address")
         if rt_bus is not None:
+            existing = buttons.get(physical_addr)
+            if (
+                isinstance(existing, dict)
+                and "remote_transmitter_bus_address" not in existing
+                and existing.get("type") not in (None, "Remote Code")
+            ):
+                # The clustering pass resolved a remote code onto an
+                # address that already holds a REAL inventory button.
+                # Merging would clobber it (channels forced to 1, its
+                # 1A op-point's bus_address rewritten) — skip and log
+                # instead; the wall button is the authoritative owner.
+                _LOGGER.warning(
+                    "Remote-transmitter code %s collides with existing "
+                    "%s-channel button %s (%s) — skipping the remote "
+                    "merge to protect the wall button",
+                    rt_bus,
+                    existing.get("channels"),
+                    physical_addr,
+                    existing.get("type"),
+                )
+                continue
             generated_phys_desc = description or f"Remote {physical_addr}"
             phys_entry = buttons.setdefault(
                 physical_addr,
@@ -1460,6 +1481,31 @@ def merge_linked_modules(
                 existing_outputs.append(output_entry)
                 outputs_added += 1
                 updated_entry = True
+            elif record_source == "output_module_table":
+                # Dedupe hit, but THIS scan read the record from the
+                # output module's own link table — the authoritative
+                # source. If the stored copy was first seen via PC-Link /
+                # PC-Logic registry memory (or pre-0.5.22 with no source
+                # tag), upgrade its provenance: leaving it registry-tagged
+                # makes the host's residue classifier flag a perfectly
+                # active button as previous-owner residue when every one
+                # of its records happened to be scanned registry-first.
+                for entry in existing_outputs:
+                    if (
+                        isinstance(entry, dict)
+                        and (
+                            entry.get("channel"),
+                            entry.get("mode"),
+                            entry.get("t1"),
+                            entry.get("t2"),
+                            entry.get("ir_code"),
+                            entry.get("ir_button_address"),
+                        )
+                        == dedupe_key
+                        and entry.get("record_source") != "output_module_table"
+                    ):
+                        entry["record_source"] = "output_module_table"
+                        updated_entry = True
 
         if updated_entry:
             linked_modules.sort(

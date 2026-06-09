@@ -812,6 +812,21 @@ class NikobusDiscovery:
         self.discovered_cf_broadcasts: dict[str, "CFBroadcast"] = {}
         self.reset_state()
 
+    def _abort_discovery_run(self, context: str) -> None:
+        """Clean up after an exception escaped a discovery entry point.
+
+        The coordinator flags (``discovery_running`` / ``discovery_module``
+        / ``inventory_query_type``) are set early on every entry path; an
+        exception escaping after that point used to leave them stuck —
+        the host then suppressed polling forever and rejected every new
+        scan with "discovery already running". ``reset_state`` clears the
+        flags, the per-run accumulators and both timers in one place.
+        """
+        _LOGGER.warning(
+            "Discovery aborted (%s) — resetting discovery state", context
+        )
+        self.reset_state()
+
     def reset_state(self, *, update_flags: bool = True) -> None:
         if self._timeout_task:
             self._timeout_task.cancel()
@@ -2074,10 +2089,18 @@ class NikobusDiscovery:
         self._coordinator.discovery_module = True
         self._coordinator.discovery_module_address = normalized_address
         self._progress_module_index += 1
-        await self._emit_progress(
-            PHASE_REGISTER_SCAN, module_address=normalized_address
-        )
-        await self.query_module_inventory(normalized_address, from_queue=True)
+        try:
+            await self._emit_progress(
+                PHASE_REGISTER_SCAN, module_address=normalized_address
+            )
+            await self.query_module_inventory(normalized_address, from_queue=True)
+        except BaseException:
+            # Flags were just set; an escape here (scan failure mid-queue,
+            # cancellation on reload) must not leave them stuck.
+            self._abort_discovery_run(
+                f"register scan of {normalized_address} failed"
+            )
+            raise
 
     async def _complete_discovery_run(self, resolved_address: str | None) -> None:
         self._cancel_inventory_timeout()
@@ -2218,19 +2241,27 @@ class NikobusDiscovery:
         self._progress_current_sub_byte = None
         _LOGGER.info("PC-Link inventory enumeration started")
         _LOGGER.debug("Queueing PC-Link inventory command #A")
-        nikobus_command = self._coordinator.nikobus_command
-        if nikobus_command is None:
-            raise RuntimeError(
-                "PC-Link inventory requires the coordinator's command "
-                "pipeline (nikobus_command is None — not connected?)"
-            )
-        await nikobus_command.queue_command("#A")
-        # Mark the single unit as in-flight so the bar leaves 0 once
-        # the command is on the wire. Completion is signalled when
-        # PHASE_IDENTITY takes over.
-        self._progress_module_registers_sent = 1
-        self._schedule_inventory_timeout()
-        await self._emit_progress(PHASE_INVENTORY)
+        try:
+            nikobus_command = self._coordinator.nikobus_command
+            if nikobus_command is None:
+                raise RuntimeError(
+                    "PC-Link inventory requires the coordinator's command "
+                    "pipeline (nikobus_command is None — not connected?)"
+                )
+            await nikobus_command.queue_command("#A")
+            # Mark the single unit as in-flight so the bar leaves 0 once
+            # the command is on the wire. Completion is signalled when
+            # PHASE_IDENTITY takes over.
+            self._progress_module_registers_sent = 1
+            self._schedule_inventory_timeout()
+            await self._emit_progress(PHASE_INVENTORY)
+        except BaseException:
+            # Flags were set above; without this, a failure here (not
+            # connected, send error, cancellation) leaves
+            # ``discovery_running`` stuck True with no inactivity timer
+            # armed to ever clear it.
+            self._abort_discovery_run("start_inventory_discovery failed")
+            raise
 
     # Output-bearing module types: only these respond predictably to
     # the ``$1012<addr>`` status query that ``detect_stale_inventory``
@@ -2576,6 +2607,46 @@ class NikobusDiscovery:
         )
 
     async def query_module_inventory(
+        self,
+        device_address: str,
+        *,
+        from_queue: bool = False,
+        register_start: int | None = None,
+        register_end: int | None = None,
+        sub_byte: str | None = None,
+    ) -> None:
+        """Scan a module's register space (guarded public entry).
+
+        When called as the run's entry point (``from_queue=False``) this
+        wraps the scan so an escaping exception resets the discovery
+        state — the coordinator flags are set inside and used to be left
+        stuck True on failure. Queue-driven re-entries are guarded by
+        ``_start_next_register_scan`` instead (one reset per run).
+        """
+        if from_queue:
+            await self._query_module_inventory_inner(
+                device_address,
+                from_queue=True,
+                register_start=register_start,
+                register_end=register_end,
+                sub_byte=sub_byte,
+            )
+            return
+        try:
+            await self._query_module_inventory_inner(
+                device_address,
+                from_queue=False,
+                register_start=register_start,
+                register_end=register_end,
+                sub_byte=sub_byte,
+            )
+        except BaseException:
+            self._abort_discovery_run(
+                f"module scan of {device_address} failed"
+            )
+            raise
+
+    async def _query_module_inventory_inner(
         self,
         device_address: str,
         *,

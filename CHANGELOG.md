@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.27.1
+
+**Discovery audit fixes.**
+
+- **Stuck discovery flags on failure** — every discovery entry point
+  (`start_inventory_discovery`, `query_module_inventory`,
+  `_start_next_register_scan`) sets `coordinator.discovery_running`
+  early; an exception escaping after that point (not connected, send
+  failure, cancellation on reload) left the flag stuck True — the host
+  then suppressed polling forever and rejected every new scan with
+  "discovery already running". All three paths now reset the discovery
+  state (flags, accumulators, timers) on the way out and re-raise.
+- **Provenance upgrade on dedupe hit** (fileio) — a link record first
+  scanned via PC-Link / PC-Logic registry memory and later confirmed in
+  the output module's own link table kept its registry tag, which could
+  make the host's residue classifier flag a perfectly-active button as
+  previous-owner residue. The authoritative `output_module_table` tag
+  now wins on a dedupe hit (never downgraded).
+- **Remote-transmitter collision guard** (fileio) — a clustered remote
+  code resolving onto an address already holding a real inventory
+  button used to clobber it (channels forced to 1, its 1A op-point's
+  bus address rewritten). The merge is now skipped with a warning; the
+  wall button stays authoritative.
+- +8 regression tests. Audit notes: the decoder/parser layer was
+  audited clean (bounds, byte order, chunk alignment, mapping tables);
+  the $2E/$1E scan-frame CRC is extracted but deliberately left
+  unvalidated — the trailing-field format is unconfirmed on real
+  hardware and a wrong check would drop legitimate frames.
+
 ## 0.27.0
 
 **API: formal `CoordinatorProtocol` host contract.**
