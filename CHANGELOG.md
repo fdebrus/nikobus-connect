@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.26.0
+
+**New: `.nkb` project-file reader (`nikobus_connect.nkb`).**
+
+Moves the Nikobus `.nkb` parser down from the Home Assistant integration
+into the library, where the other Nikobus vendor-format readers (bus
+frames, PC-Link records) already live. A `.nkb` is the export from
+Niko's PC software — a ZIP holding an MS-Access database with the
+install's user-given names, rooms, per-output names, and Central
+Function (scene) groups; the bus carries none of that, so reading the
+project file is the only way to recover friendly names / Areas / named
+scenes.
+
+- `nikobus_connect.nkb.parse_nkb(path)` → `NkbData(addresses, scenes,
+  outputs)`: `{address: (name, room)}`, scene groups as
+  `(module, channel, mode)` member sets (for member-set matching against
+  discovered CFs), and `{(module, channel): name}` output names.
+- Also exports `find_nkb_file`, `mode_code`, `CANONICAL_NKB_FILENAME`,
+  and the `NkbData` / `SceneDef` types.
+- The MS-Access reader is vendored under `nkb/_access_parser` (the
+  upstream sdist won't build on modern setuptools); the only new runtime
+  dependency is `construct>=2.10`. The vendored reader is excluded from
+  `mypy`/`ruff`, matching its third-party status.
+
+The parser is HA-agnostic; the *apply* side (writing names/Areas into
+the HA registry, matching scenes to CF entities) stays in the
+integration.
+
 ## 0.25.0
 
 **Typed release: `nikobus_connect` is now `mypy --strict` clean and ships a

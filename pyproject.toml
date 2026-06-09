@@ -4,12 +4,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "nikobus-connect"
-version = "0.25.0"
+version = "0.26.0"
 description = "Asynchronous library for Nikobus home automation with device discovery"
 requires-python = ">=3.11"
 license = {text = "MIT"}
 dependencies = [
     "pyserial-asyncio>=0.5",
+    "construct>=2.10",
 ]
 
 [project.optional-dependencies]
@@ -23,17 +24,32 @@ include = ["nikobus_connect*"]
 
 [tool.setuptools.package-data]
 nikobus_connect = ["py.typed"]
+"nikobus_connect.nkb._access_parser" = ["LICENSE"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
 
+[tool.ruff]
+# Vendored third-party MS-Access reader — maintained upstream, not linted here.
+extend-exclude = ["nikobus_connect/nkb/_access_parser"]
+
 [tool.mypy]
 python_version = "3.11"
 files = ["nikobus_connect"]
 strict = true
+# Vendored third-party Access reader (construct DSL) — not type-checked here.
+exclude = "nikobus_connect/nkb/_access_parser/"
 
 # pyserial-asyncio ships no type information (no stubs, no py.typed).
 [[tool.mypy.overrides]]
 module = "serial_asyncio"
 ignore_missing_imports = true
+
+# The vendored Access reader has no type information of its own — don't
+# follow into it or type-check it (mirrors the ruff exclude above).
+[[tool.mypy.overrides]]
+module = "nikobus_connect.nkb._access_parser.*"
+ignore_errors = true
+ignore_missing_imports = true
+follow_imports = "skip"
