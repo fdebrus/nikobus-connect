@@ -25,7 +25,7 @@ from typing import Any
 
 from ..coordinator_protocol import CoordinatorProtocol
 from .base import DecodedCommand
-from .protocol import decode_command_payload, reverse_hex
+from .protocol import decode_command_payload, get_button_address, reverse_hex
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -56,6 +56,10 @@ class BaseChunkingDecoder:
         self.module_type = module_type
         self._module_address: str | None = None
         self._module_channel_count: int | None = None
+        # Stream-alignment decision for the current module scan. Decided
+        # once on the module's first frame (see analyze_frame_payload);
+        # re-armed per module via reset_scan_buffers.
+        self._stream_alignment_decided = False
 
     def can_handle(self, module_type: str) -> bool:
         return module_type == self.module_type
@@ -78,6 +82,7 @@ class BaseChunkingDecoder:
         per-scan state (registry buffers, etc.) and chain back to
         this no-op via ``super().reset_scan_buffers()``.
         """
+        self._stream_alignment_decided = False
 
     def analyze_frame_payload(self, payload_buffer: str, payload_and_crc: str) -> dict[str, Any] | None:
         payload_and_crc = payload_and_crc.upper()
@@ -92,6 +97,32 @@ class BaseChunkingDecoder:
         data_region = payload_and_crc[: len(payload_and_crc) - _CRC_LEN]
         trailing_crc = payload_and_crc[len(payload_and_crc) - _CRC_LEN :]
         combined_payload = (payload_buffer + data_region).upper()
+
+        # Bounded re-alignment, decided ONCE on the module's first frame.
+        # Some tables start mid-record relative to the scanned register
+        # window (production case: module 4707's first frame opened with
+        # the 2-byte tail of a record preceding the window). A fixed-
+        # stride walk then stays phase-shifted for the whole table:
+        # phantom buttons decode "cleanly" while the module's REAL
+        # records are lost. Try each of the 6 byte phases on the first
+        # frame and keep the one that maximises button addresses known
+        # to the host inventory — with strict guards (unique maximum,
+        # >= 2 hits, strictly better than phase 0) so an ambiguous or
+        # inventory-less stream keeps today's behaviour. This is the
+        # narrow, evidence-gated version of the alt-alignment chunking
+        # that was reverted in 0.9.0 for *creating* phantoms: it never
+        # re-decides mid-stream and defaults to phase 0.
+        if not self._stream_alignment_decided and not payload_buffer:
+            self._stream_alignment_decided = True
+            offset = self._inventory_alignment_offset(combined_payload)
+            if offset:
+                _LOGGER.info(
+                    "Module %s link table starts mid-record — re-aligning "
+                    "chunk walk by %d hex chars (inventory-matched phase)",
+                    self._module_address,
+                    offset,
+                )
+                combined_payload = combined_payload[offset:]
 
         expected_len = _CHUNK_LENGTHS.get(self.module_type)
         chunks: list[str] = []
@@ -110,6 +141,55 @@ class BaseChunkingDecoder:
             "chunks": chunks,
             "remainder": remainder,
         }
+
+    def _inventory_alignment_offset(self, stream: str) -> int:
+        """Pick the chunk-walk phase that matches the host inventory.
+
+        Returns the hex offset (0/2/4/6/8/10) to drop from the stream
+        head, or 0 to keep the current behaviour. Only output-module
+        link tables (12-hex records, address in the leading 3 bytes)
+        are eligible; PC-Link / PC-Logic registry layouts have their
+        own structure.
+        """
+        if _CHUNK_LENGTHS.get(self.module_type) != 12:
+            return 0
+        coordinator = self._coordinator
+        if coordinator is None:
+            return 0
+
+        def _hits(offset: int) -> int:
+            count = 0
+            idx = offset
+            while idx + 12 <= len(stream):
+                chunk = stream[idx : idx + 12]
+                idx += 12
+                head = chunk[:6]
+                if head in ("FFFFFF", "000000"):
+                    continue
+                addr = get_button_address(reverse_hex(head))
+                if not addr:
+                    continue
+                try:
+                    channels = coordinator.get_button_channels(addr)
+                except Exception:  # pragma: no cover - defensive
+                    channels = None
+                if isinstance(channels, int) and channels > 0:
+                    count += 1
+            return count
+
+        scores = {offset: _hits(offset) for offset in (0, 2, 4, 6, 8, 10)}
+        baseline = scores[0]
+        best_offset, best_score = max(
+            scores.items(), key=lambda kv: (kv[1], -kv[0])
+        )
+        if (
+            best_offset != 0
+            and best_score >= 2
+            and best_score > baseline
+            and list(scores.values()).count(best_score) == 1
+        ):
+            return best_offset
+        return 0
 
     def decode_chunk(self, chunk: str, module_address: str | None = None) -> list[DecodedCommand]:
         decoded = decode_command_payload(
