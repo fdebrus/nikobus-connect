@@ -116,9 +116,19 @@ class BaseChunkingDecoder:
             self._stream_alignment_decided = True
             offset = self._inventory_alignment_offset(combined_payload)
             if offset:
-                _LOGGER.info(
-                    "Module %s link table starts mid-record — re-aligning "
-                    "chunk walk by %d hex chars (inventory-matched phase)",
+                # Loud on purpose: a mid-record table almost always means
+                # the module's stored programming is damaged — the Nikobus
+                # PC software flags exactly this as "corrupted, reprogram".
+                # Re-aligning recovers the (intact) links so HA stays
+                # usable, but reprogramming the module is the real fix and
+                # the user must not be left unaware of it.
+                _LOGGER.warning(
+                    "Module %s link table is misaligned — its first record "
+                    "starts %d hex chars before the scanned window. This "
+                    "usually means the module's stored programming is "
+                    "corrupt (the Nikobus PC software will flag it for "
+                    "reprogramming). Re-aligned the read to recover the "
+                    "links; reprogramming the module is the proper fix.",
                     self._module_address,
                     offset,
                 )
