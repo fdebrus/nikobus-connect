@@ -23,6 +23,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from ..coordinator_protocol import CoordinatorProtocol
 from .base import DecodedCommand
 from .protocol import decode_command_payload, reverse_hex
 
@@ -50,7 +51,7 @@ _CHUNK_LENGTHS = {
 class BaseChunkingDecoder:
     module_type: str
 
-    def __init__(self, coordinator: Any, module_type: str) -> None:
+    def __init__(self, coordinator: CoordinatorProtocol | None, module_type: str) -> None:
         self._coordinator = coordinator
         self.module_type = module_type
         self._module_address: str | None = None

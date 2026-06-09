@@ -5,6 +5,7 @@ from importlib.metadata import PackageNotFoundError, version
 from .api import NikobusAPI
 from .command import NikobusCommandHandler
 from .connection import NikobusConnect
+from .coordinator_protocol import CoordinatorProtocol
 from .exceptions import (
     NikobusConnectionError,
     NikobusDataError,
@@ -30,6 +31,7 @@ from .protocol import (
 
 __all__ = [
     "NikobusAPI",
+    "CoordinatorProtocol",
     "NikobusCommandHandler",
     "NikobusConnect",
     "NikobusConnectionError",

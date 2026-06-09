@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from ..coordinator_protocol import CoordinatorProtocol
 from .chunk_decoder import BaseChunkingDecoder
 from .mapping import ROLLER_MODE_MAPPING, ROLLER_T3_MAPPING, ROLLER_TIMER_MAPPING
 from .protocol import (
@@ -89,7 +90,11 @@ def decode(payload_hex: str, raw_bytes: list[str], context: Any) -> dict[str, An
         return None
 
     button_address = get_button_address(payload_hex[-6:])
-    coord_get_channels = getattr(context.coordinator, "get_button_channels", None)
+    coord_get_channels = (
+        context.coordinator.get_button_channels
+        if context.coordinator is not None
+        else None
+    )
     push_button_address, normalized_button = get_push_button_address(
         key_raw,
         button_address,
@@ -132,7 +137,7 @@ def decode(payload_hex: str, raw_bytes: list[str], context: Any) -> dict[str, An
 
 
 class ShutterDecoder(BaseChunkingDecoder):
-    def __init__(self, coordinator: Any) -> None:
+    def __init__(self, coordinator: CoordinatorProtocol | None) -> None:
         super().__init__(coordinator, "roller_module")
 
 

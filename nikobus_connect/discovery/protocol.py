@@ -6,6 +6,7 @@ import logging
 from dataclasses import dataclass
 from typing import Any, Callable
 
+from ..coordinator_protocol import CoordinatorProtocol
 from .mapping import CHANNEL_MAPPING, KEY_MAPPING_MODULE
 
 _LOGGER = logging.getLogger(__name__)
@@ -15,7 +16,7 @@ _LOGGER = logging.getLogger(__name__)
 class DecoderContext:
     """Shared context passed to all decoder functions."""
 
-    coordinator: Any
+    coordinator: CoordinatorProtocol | None
     module_address: str | None
     module_channel_count: int | None
 
@@ -390,7 +391,7 @@ def get_push_button_address(
 def decode_command_payload(
     payload_hex: str,
     module_type: str,
-    coordinator: Any,
+    coordinator: CoordinatorProtocol | None,
     *,
     module_address: str | None = None,
     reverse_before_decode: bool = False,
