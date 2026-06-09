@@ -176,3 +176,46 @@ def test_parse_raises_without_mdb(tmp_path):
         zf.writestr("notes.txt", b"no mdb")
     with pytest.raises(ValueError):
         parse_nkb(nkb)
+
+
+# --------------------------------------------------------------------------- #
+# parse_nkb extraction hardening (crafted-.nkb defences)
+# --------------------------------------------------------------------------- #
+def test_parse_nkb_rejects_oversized_mdb(tmp_path, monkeypatch):
+    """A decompression-bomb .mdb is rejected by the byte cap, not extracted."""
+    from nikobus_connect.nkb import parser
+
+    monkeypatch.setattr(parser, "_MAX_MDB_BYTES", 16)
+    bomb = tmp_path / "bomb.nkb"
+    with zipfile.ZipFile(bomb, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("__niko__.mdb", b"A" * 64)  # 64 decompressed > 16 cap
+
+    with pytest.raises(ValueError, match="safety limit"):
+        parse_nkb(str(bomb))
+
+
+def test_parse_nkb_traversal_member_name_stays_in_tmp(tmp_path):
+    """An absolute / `..` .mdb member name cannot redirect the parser read
+    outside the temp dir — it's written under a fixed local name."""
+    evil = tmp_path / "evil.nkb"
+    with zipfile.ZipFile(evil, "w") as zf:
+        zf.writestr("../../../../etc/passwd.mdb", b"not-a-real-mdb")
+
+    captured = {}
+
+    class _Sentinel(Exception):
+        pass
+
+    def _fake_parser(path):
+        captured["path"] = path
+        raise _Sentinel()
+
+    with patch(
+        "nikobus_connect.nkb._access_parser.AccessParser", _fake_parser
+    ):
+        with pytest.raises(_Sentinel):
+            parse_nkb(str(evil))
+
+    p = captured["path"]
+    assert p.endswith("project.mdb")
+    assert "etc/passwd" not in p
