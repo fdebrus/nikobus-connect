@@ -143,20 +143,21 @@ def test_switch_decoder_keeps_8ch_plus_one_alias():
     assert result["button_address"] == "1DF1E1"
 
 
-def test_decoders_run_without_coordinator_button_api():
-    """Bare-metal coordinator without ``get_button_channels`` → decoder
-    still produces records.
+def test_decoders_run_without_coordinator():
+    """``coordinator=None`` → decoder still produces records.
 
-    Mirrors the test-harness path: harnesses don't supply a button
-    inventory and the decoder doesn't need one to produce output.
+    Mirrors the test-harness path: harnesses don't supply a coordinator
+    and the decoder doesn't need one to produce output. (Since the
+    CoordinatorProtocol contract, ``None`` is the supported "no host"
+    form — a non-None coordinator must implement the full Protocol,
+    enforced by mypy on the host side, so the old "object missing
+    get_button_channels" shape is no longer a tolerated input.)
     """
-
-    coord = MagicMock(spec=[])  # no get_button_channels attribute
 
     # Real chunk: 80EE73 → canonical 1CFBA0
     payload = "0530B2" + "80EE73"
     raw = normalize_payload(payload)
 
-    result = switch_decoder.decode(payload, raw, _ctx(coord, channels=12))
+    result = switch_decoder.decode(payload, raw, _ctx(None, channels=12))
     assert result is not None
     assert result["button_address"] == "1CFBA0"

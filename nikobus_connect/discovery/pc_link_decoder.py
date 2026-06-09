@@ -36,6 +36,7 @@ import logging
 from dataclasses import dataclass
 from typing import Any
 
+from ..coordinator_protocol import CoordinatorProtocol
 from .base import DecodedCommand
 from .chunk_decoder import BaseChunkingDecoder
 from .pc_record_parser import (
@@ -100,7 +101,7 @@ def _emit_scan_summary(
     counts.reset()
 
 
-def _known_module_addresses(coordinator: Any) -> set[str]:
+def _known_module_addresses(coordinator: CoordinatorProtocol | None) -> set[str]:
     """Collect bus-form addresses of every module in the live inventory.
 
     Used by ``parse_pc_record`` to identify registry records by shape
@@ -112,7 +113,7 @@ def _known_module_addresses(coordinator: Any) -> set[str]:
 
     if coordinator is None:
         return set()
-    buckets = getattr(coordinator, "dict_module_data", None) or {}
+    buckets = coordinator.dict_module_data or {}
     addresses: set[str] = set()
     for module_map in buckets.values():
         if isinstance(module_map, dict):
@@ -138,7 +139,7 @@ def decode(payload_hex: str, raw_bytes: list[str], context: Any) -> dict[str, An
     return _log_record(
         payload_hex,
         getattr(context, "module_address", None),
-        coordinator=getattr(context, "coordinator", None),
+        coordinator=context.coordinator,
     )
 
 
@@ -161,7 +162,7 @@ class PcLinkDecoder(BaseChunkingDecoder):
     module reports the registry / link / resolved tallies.
     """
 
-    def __init__(self, coordinator: Any) -> None:
+    def __init__(self, coordinator: CoordinatorProtocol | None) -> None:
         super().__init__(coordinator, "pc_link")
         self._registry = RegistryBuffer()
         self._scan_counts = _ScanCounts()
@@ -206,7 +207,7 @@ def _log_record(
     chunk_hex: str,
     module_address: str | None,
     *,
-    coordinator: Any = None,
+    coordinator: CoordinatorProtocol | None = None,
     prefix: str = _LOG_PREFIX,
     registry: RegistryBuffer | None = None,
     logger: logging.Logger | None = None,
@@ -236,7 +237,7 @@ def _decode_and_log(
     chunk_hex: str,
     module_address: str | None,
     *,
-    coordinator: Any,
+    coordinator: CoordinatorProtocol | None,
     prefix: str,
     registry: RegistryBuffer | None,
     module_type: str | None,

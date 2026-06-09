@@ -39,6 +39,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Iterable, Union
 
+from ..coordinator_protocol import CoordinatorProtocol
 from .mapping import (
     DEVICE_TYPES,
     DIMMER_MODE_MAPPING,
@@ -437,7 +438,7 @@ class RegistryBuffer:
 
 def build_flat_channel_map(
     registry: RegistryBuffer,
-    coordinator: Any,
+    coordinator: CoordinatorProtocol | None,
 ) -> list[tuple[str, int]]:
     """Build the flat output-channel map a PC-Link link record's byte 0
     indexes into.
@@ -458,12 +459,11 @@ def build_flat_channel_map(
     if coordinator is None:
         return flat
 
-    get_count = getattr(coordinator, "get_module_channel_count", None)
     for record in registry.records:
         if record.device_type not in OUTPUT_BEARING_DEVICE_TYPES:
             continue
         try:
-            count = get_count(record.address) if get_count else None
+            count: int | None = coordinator.get_module_channel_count(record.address)
         except Exception:  # pragma: no cover - defensive
             count = None
         if not isinstance(count, int) or count <= 0:
@@ -476,7 +476,7 @@ def build_flat_channel_map(
 def resolve_link_target(
     channel_index: int,
     registry: RegistryBuffer,
-    coordinator: Any,
+    coordinator: CoordinatorProtocol | None,
 ) -> tuple[str, int] | None:
     """Resolve a link record's byte 0 to ``(target_address, channel)``.
 
@@ -561,7 +561,7 @@ def _key_raw_from_flag_byte(
 def link_record_to_decoded_metadata(
     record: LinkRecord,
     registry: RegistryBuffer,
-    coordinator: Any,
+    coordinator: CoordinatorProtocol | None,
     *,
     record_source: str | None = None,
 ) -> dict[str, Any] | None:
@@ -630,14 +630,12 @@ def link_record_to_decoded_metadata(
 
     num_channels: int | None = None
     if coordinator is not None:
-        get_btn_channels = getattr(coordinator, "get_button_channels", None)
-        if get_btn_channels is not None:
-            try:
-                lookup = get_btn_channels(button_address)
-            except Exception:  # pragma: no cover - defensive
-                lookup = None
-            if isinstance(lookup, int) and lookup > 0:
-                num_channels = lookup
+        try:
+            lookup = coordinator.get_button_channels(button_address)
+        except Exception:  # pragma: no cover - defensive
+            lookup = None
+        if isinstance(lookup, int) and lookup > 0:
+            num_channels = lookup
 
     key_raw = _key_raw_from_flag_byte(record.flag_byte, num_channels)
     if key_raw is None:
