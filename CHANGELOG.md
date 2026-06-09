@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.27.0
+
+**Robustness: reconnect-with-backoff primitive + post-reconnect reset APIs.**
+
+The HA integration's reconnect loop owned the transport backoff and had
+to reach into library privates to clear per-connection state. Both
+concerns now live in the library:
+
+- `NikobusConnect.reconnect_with_backoff(initial_delay=1.0,
+  max_delay=30.0, on_attempt=None)` — loop `connect()` (transport +
+  handshake) with exponential capped backoff until success; returns the
+  attempt count; cancellation propagates; `on_attempt(attempt, delay)`
+  (sync or async) surfaces progress without the caller owning the loop.
+- `NikobusEventListener.reset()` — clear the partial-frame buffer, the
+  query-group map and unconsumed responses after a reconnect.
+- `NikobusCommandHandler.reset()` — drain the queue and clear the
+  GET-dedup keys. `drain_queue()` now cancels queued caller futures so
+  awaiters are released instead of hanging until their own timeout.
+- +20 tests over the previously-untested transport/listener/command
+  core (connect/handshake/send/read error paths, backoff
+  doubling/cap/cancellation, frame buffering, dispatch gating, resets).
+
 ## 0.26.0
 
 **New: `.nkb` project-file reader (`nikobus_connect.nkb`).**
