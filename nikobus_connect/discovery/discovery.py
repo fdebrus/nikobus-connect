@@ -2972,14 +2972,23 @@ class NikobusDiscovery:
 
             # --- FIX: Skip deleted or uninitialized memory slots ---
             # Real Nikobus device addresses have a non-FF high byte
-            # (observed range: 0x05-0xC9 across product families). An
-            # address that normalizes to FFxxxx — including the
-            # specific FFFF / FFFFFF "all bits set" patterns — is
-            # padding from an empty PC-Link inventory slot, not a
-            # real module. Filter on the high-byte prefix so we catch
-            # variants like FF0CED (seen in the May 2026 log audit)
-            # in addition to the exact FFFF / FFFFFF matches.
-            if converted_address.startswith("FF"):
+            # (observed range: 0x05-0xC9 across product families) and
+            # don't bottom out in all-FF filler. Two padding signatures
+            # seen in real PC-Link inventories:
+            #   * high byte FF (``FFxxxx``) — empty slot, e.g. FF0CED
+            #     (May 2026 log audit);
+            #   * low 20 bits all set (``xFFFFF``) — the PC-Link returns
+            #     a near-all-FF slot whose type byte coincidentally
+            #     classifies (0x23 -> 05-304), producing a PHANTOM RF
+            #     push button at 3FFFFF / 7FFFFF / BFFFFF / FFFFFF (the
+            #     four key forms share the FFFFF tail). Confirmed
+            #     deterministic across two scans of the fdebrus install,
+            #     June 2026 — not corruption, an empty inventory slot.
+            # Neither shape is a real device; both are filler.
+            if (
+                converted_address.startswith("FF")
+                or converted_address.endswith("FFFFF")
+            ):
                 _LOGGER.debug(
                     "Skipped inventory record — deleted or empty address %s, type %s",
                     converted_address,

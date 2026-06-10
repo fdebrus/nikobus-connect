@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.27.3
+
+**Fix: near-all-FF inventory slots no longer become phantom devices.**
+
+A real PC-Link inventory frame (fdebrus install, deterministic across
+two scans) carried a slot whose address normalises to ``3FFFFF`` (low
+20 bits all set) with a type byte 0x23 that classifies as a 05-304 RF
+push button. The empty-slot guard only skipped ``FFxxxx`` high-byte
+filler, so this slot leaked through and created a phantom 4-key RF
+button (keys 3FFFFF / 7FFFFF / BFFFFF / FFFFFF — the last being the
+universal empty-slot value) that decodes no links and shows up as
+``legacy_undecoded`` on every scan. The guard now also skips addresses
+ending in ``FFFFF`` (the low-20-bits-set filler signature). Pinned with
+the exact production frame.
+
+
 ## 0.27.2
 
 **Detect corrupt module link tables and skip them (no phantom records).**
