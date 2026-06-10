@@ -2,28 +2,27 @@
 
 ## 0.27.2
 
-**Fix: inventory-guided chunk re-alignment for mid-record link tables.**
+**Detect corrupt module link tables and skip them (no phantom records).**
 
-A production scan log (fdebrus install, 2026-06-09) showed module 4707's
-link table starting mid-record relative to the scanned register window:
-the first response frame opens with the 2-byte tail of a record that
-precedes the window. The fixed-stride 12-hex chunk walk never re-aligned,
-so the whole table decoded phase-shifted — ~21 phantom buttons decoded
-"cleanly" into the unmatched accumulator while the module's REAL records
-(28 links across ~12 buttons, including the symmetric general-off pairs)
-were silently lost.
+A production scan (fdebrus install, 2026-06-09) had one module (4707)
+whose link table read mid-record relative to the scanned register
+window: a fixed-stride walk produced ~21 phantom buttons and lost every
+real record. The Nikobus PC software independently flagged the install
+as corrupt and asked for reprogramming; after the user reprogrammed
+4707 it read cleanly — confirming the misalignment was genuine module
+corruption, not a decoder issue.
 
-The chunk walk now decides its phase ONCE per module, on the first
-frame: each of the 6 byte phases is scored by how many decoded button
-addresses exist in the host inventory, with strict guards — unique
-maximum, at least 2 hits, strictly better than phase 0 — and defaults
-to today's behaviour for ambiguous or inventory-less streams (a fresh
-install's very first scan is unchanged; the second scan, with the
-inventory populated, recovers such tables). This is the narrow,
-evidence-gated version of the alt-alignment chunking reverted in 0.9.0
-for creating phantoms; the production frames are pinned as regression
-fixtures (4707 misaligned + 9105 aligned control).
-
+Policy: we do NOT try to recover a corrupt table (re-aligning a corrupt
+scan only yields a partial/uncertain picture — records pushed out of
+the scanned window are gone, and the proper fix is reprogramming).
+Instead the decoder DETECTS the misalignment — evidence-gated: a
+non-phase-0 byte offset decodes >= 2 host-inventory button addresses,
+strictly more than phase 0, as the unique maximum — SKIPS the module's
+link decode (no phantom buttons enter the store), and FLAGS the module
+on ``NikobusDiscovery.corrupt_link_tables`` so the host can tell the
+user to reprogram it. A WARNING is logged. With no inventory to score
+against, or ambiguous evidence, behaviour is unchanged (best-effort,
+never guesses). Aligned modules are never flagged.
 
 ## 0.27.1
 

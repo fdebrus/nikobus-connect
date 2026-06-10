@@ -56,10 +56,13 @@ class BaseChunkingDecoder:
         self.module_type = module_type
         self._module_address: str | None = None
         self._module_channel_count: int | None = None
-        # Stream-alignment decision for the current module scan. Decided
-        # once on the module's first frame (see analyze_frame_payload);
-        # re-armed per module via reset_scan_buffers.
+        # Corruption detection for the current module scan, decided once
+        # on the module's first frame (see analyze_frame_payload) and
+        # re-armed per module via reset_scan_buffers. When set, the
+        # module's link table doesn't align with the scanned window
+        # (corrupt programming) and its decode is skipped wholesale.
         self._stream_alignment_decided = False
+        self._module_misaligned = False
 
     def can_handle(self, module_type: str) -> bool:
         return module_type == self.module_type
@@ -83,6 +86,7 @@ class BaseChunkingDecoder:
         this no-op via ``super().reset_scan_buffers()``.
         """
         self._stream_alignment_decided = False
+        self._module_misaligned = False
 
     def analyze_frame_payload(self, payload_buffer: str, payload_and_crc: str) -> dict[str, Any] | None:
         payload_and_crc = payload_and_crc.upper()
@@ -98,41 +102,46 @@ class BaseChunkingDecoder:
         trailing_crc = payload_and_crc[len(payload_and_crc) - _CRC_LEN :]
         combined_payload = (payload_buffer + data_region).upper()
 
-        # Bounded re-alignment, decided ONCE on the module's first frame.
-        # Some tables start mid-record relative to the scanned register
-        # window (production case: module 4707's first frame opened with
-        # the 2-byte tail of a record preceding the window). A fixed-
-        # stride walk then stays phase-shifted for the whole table:
-        # phantom buttons decode "cleanly" while the module's REAL
-        # records are lost. Try each of the 6 byte phases on the first
-        # frame and keep the one that maximises button addresses known
-        # to the host inventory — with strict guards (unique maximum,
-        # >= 2 hits, strictly better than phase 0) so an ambiguous or
-        # inventory-less stream keeps today's behaviour. This is the
-        # narrow, evidence-gated version of the alt-alignment chunking
-        # that was reverted in 0.9.0 for *creating* phantoms: it never
-        # re-decides mid-stream and defaults to phase 0.
+        # Corruption detection, decided ONCE on the module's first frame.
+        # Some link tables start mid-record relative to the scanned
+        # register window (production case: module 4707's first frame
+        # opened with the 2-byte tail of a record preceding the window).
+        # A fixed-stride walk then stays phase-shifted for the whole
+        # table: phantom buttons decode "cleanly" while the module's real
+        # records are lost. This is exactly what the Nikobus PC software
+        # flags as a corrupt module needing reprogramming.
+        #
+        # We DON'T try to recover such a table — re-aligning a corrupt
+        # scan can only ever yield a partial/uncertain picture (the
+        # records pushed out of the scan window are simply gone), and
+        # the proper fix is reprogramming. Instead we DETECT it (a
+        # non-phase-0 byte offset matches the host inventory far better
+        # than phase 0, under strict guards), skip the module's link
+        # decode entirely so no phantom buttons enter the store, and
+        # flag the module so the host can tell the user to reprogram it.
         if not self._stream_alignment_decided and not payload_buffer:
             self._stream_alignment_decided = True
-            offset = self._inventory_alignment_offset(combined_payload)
-            if offset:
-                # Loud on purpose: a mid-record table almost always means
-                # the module's stored programming is damaged — the Nikobus
-                # PC software flags exactly this as "corrupted, reprogram".
-                # Re-aligning recovers the (intact) links so HA stays
-                # usable, but reprogramming the module is the real fix and
-                # the user must not be left unaware of it.
+            if self._looks_misaligned(combined_payload):
+                self._module_misaligned = True
                 _LOGGER.warning(
-                    "Module %s link table is misaligned — its first record "
-                    "starts %d hex chars before the scanned window. This "
-                    "usually means the module's stored programming is "
-                    "corrupt (the Nikobus PC software will flag it for "
-                    "reprogramming). Re-aligned the read to recover the "
-                    "links; reprogramming the module is the proper fix.",
+                    "Module %s link table looks corrupt — its records do "
+                    "not align with the scanned register window (the "
+                    "Nikobus PC software flags this as a module needing "
+                    "reprogramming). Skipping its link decode; reprogram "
+                    "the module in the Nikobus PC software to fix it.",
                     self._module_address,
-                    offset,
                 )
-                combined_payload = combined_payload[offset:]
+
+        if self._module_misaligned:
+            # Consume the stream so the scan loop still completes, but
+            # emit no chunks (no phantom buttons) and carry nothing over.
+            return {
+                "crc": trailing_crc,
+                "payload_region": data_region,
+                "chunks": [],
+                "remainder": "",
+                "misaligned": True,
+            }
 
         expected_len = _CHUNK_LENGTHS.get(self.module_type)
         chunks: list[str] = []
@@ -148,24 +157,28 @@ class BaseChunkingDecoder:
         return {
             "crc": trailing_crc,
             "payload_region": data_region,
+            "misaligned": False,
             "chunks": chunks,
             "remainder": remainder,
         }
 
-    def _inventory_alignment_offset(self, stream: str) -> int:
-        """Pick the chunk-walk phase that matches the host inventory.
+    def _looks_misaligned(self, stream: str) -> bool:
+        """True when the link table doesn't align with the scanned window.
 
-        Returns the hex offset (0/2/4/6/8/10) to drop from the stream
-        head, or 0 to keep the current behaviour. Only output-module
-        link tables (12-hex records, address in the leading 3 bytes)
-        are eligible; PC-Link / PC-Logic registry layouts have their
-        own structure.
+        Evidence-gated, inventory-based: a non-phase-0 byte offset would
+        decode far more host-known button addresses than phase 0 itself.
+        That means phase 0 (what we actually decode) is reading records
+        mid-stride — i.e. a corrupt table. Only output-module link tables
+        (12-hex records, address in the leading 3 bytes) are eligible;
+        PC-Link / PC-Logic registry layouts have their own structure.
+        Returns False (decode normally) when there's no inventory to
+        score against or the evidence is ambiguous.
         """
         if _CHUNK_LENGTHS.get(self.module_type) != 12:
-            return 0
+            return False
         coordinator = self._coordinator
         if coordinator is None:
-            return 0
+            return False
 
         def _hits(offset: int) -> int:
             count = 0
@@ -192,14 +205,14 @@ class BaseChunkingDecoder:
         best_offset, best_score = max(
             scores.items(), key=lambda kv: (kv[1], -kv[0])
         )
-        if (
+        # A shifted phase decodes >= 2 inventory buttons, strictly more
+        # than phase 0, and is the unique maximum → phase 0 is misaligned.
+        return (
             best_offset != 0
             and best_score >= 2
             and best_score > baseline
             and list(scores.values()).count(best_score) == 1
-        ):
-            return best_offset
-        return 0
+        )
 
     def decode_chunk(self, chunk: str, module_address: str | None = None) -> list[DecodedCommand]:
         decoded = decode_command_payload(

@@ -849,6 +849,11 @@ class NikobusDiscovery:
         self._accumulated_unmatched = set()
         self._accumulated_command_mapping = {}
         self.discovered_cf_broadcasts = {}
+        #: Module addresses whose link table the decoder flagged as
+        #: corrupt (misaligned with the scanned window) — the host
+        #: surfaces these to the user as needing reprogramming. Their
+        #: link decode was skipped (no phantom records produced).
+        self.corrupt_link_tables: set[str] = set()
         if update_flags:
             self._coordinator.discovery_running = False
             self._coordinator.discovery_module = False
@@ -3136,6 +3141,12 @@ class NikobusDiscovery:
 
             self._module_address = address
             self._payload_buffer = analysis["remainder"]
+            if analysis.get("misaligned"):
+                # The decoder flagged this module's link table as
+                # corrupt (records don't align with the scanned window).
+                # Record it so the host can surface a "reprogram this
+                # module" message; nothing was decoded for it.
+                self.corrupt_link_tables.add(address)
             self._scan_response_index += 1
             response_index = self._scan_response_index
 
