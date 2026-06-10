@@ -849,6 +849,11 @@ class NikobusDiscovery:
         self._accumulated_unmatched = set()
         self._accumulated_command_mapping = {}
         self.discovered_cf_broadcasts = {}
+        #: Module addresses whose link table the decoder flagged as
+        #: corrupt (misaligned with the scanned window) — the host
+        #: surfaces these to the user as needing reprogramming. Their
+        #: link decode was skipped (no phantom records produced).
+        self.corrupt_link_tables: set[str] = set()
         if update_flags:
             self._coordinator.discovery_running = False
             self._coordinator.discovery_module = False
@@ -2967,14 +2972,23 @@ class NikobusDiscovery:
 
             # --- FIX: Skip deleted or uninitialized memory slots ---
             # Real Nikobus device addresses have a non-FF high byte
-            # (observed range: 0x05-0xC9 across product families). An
-            # address that normalizes to FFxxxx — including the
-            # specific FFFF / FFFFFF "all bits set" patterns — is
-            # padding from an empty PC-Link inventory slot, not a
-            # real module. Filter on the high-byte prefix so we catch
-            # variants like FF0CED (seen in the May 2026 log audit)
-            # in addition to the exact FFFF / FFFFFF matches.
-            if converted_address.startswith("FF"):
+            # (observed range: 0x05-0xC9 across product families) and
+            # don't bottom out in all-FF filler. Two padding signatures
+            # seen in real PC-Link inventories:
+            #   * high byte FF (``FFxxxx``) — empty slot, e.g. FF0CED
+            #     (May 2026 log audit);
+            #   * low 20 bits all set (``xFFFFF``) — the PC-Link returns
+            #     a near-all-FF slot whose type byte coincidentally
+            #     classifies (0x23 -> 05-304), producing a PHANTOM RF
+            #     push button at 3FFFFF / 7FFFFF / BFFFFF / FFFFFF (the
+            #     four key forms share the FFFFF tail). Confirmed
+            #     deterministic across two scans of the fdebrus install,
+            #     June 2026 — not corruption, an empty inventory slot.
+            # Neither shape is a real device; both are filler.
+            if (
+                converted_address.startswith("FF")
+                or converted_address.endswith("FFFFF")
+            ):
                 _LOGGER.debug(
                     "Skipped inventory record — deleted or empty address %s, type %s",
                     converted_address,
@@ -3136,6 +3150,12 @@ class NikobusDiscovery:
 
             self._module_address = address
             self._payload_buffer = analysis["remainder"]
+            if analysis.get("misaligned"):
+                # The decoder flagged this module's link table as
+                # corrupt (records don't align with the scanned window).
+                # Record it so the host can surface a "reprogram this
+                # module" message; nothing was decoded for it.
+                self.corrupt_link_tables.add(address)
             self._scan_response_index += 1
             response_index = self._scan_response_index
 

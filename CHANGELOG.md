@@ -1,5 +1,45 @@
 # Changelog
 
+## 0.27.3
+
+**Fix: near-all-FF inventory slots no longer become phantom devices.**
+
+A real PC-Link inventory frame (fdebrus install, deterministic across
+two scans) carried a slot whose address normalises to ``3FFFFF`` (low
+20 bits all set) with a type byte 0x23 that classifies as a 05-304 RF
+push button. The empty-slot guard only skipped ``FFxxxx`` high-byte
+filler, so this slot leaked through and created a phantom 4-key RF
+button (keys 3FFFFF / 7FFFFF / BFFFFF / FFFFFF — the last being the
+universal empty-slot value) that decodes no links and shows up as
+``legacy_undecoded`` on every scan. The guard now also skips addresses
+ending in ``FFFFF`` (the low-20-bits-set filler signature). Pinned with
+the exact production frame.
+
+
+## 0.27.2
+
+**Detect corrupt module link tables and skip them (no phantom records).**
+
+A production scan (fdebrus install, 2026-06-09) had one module (4707)
+whose link table read mid-record relative to the scanned register
+window: a fixed-stride walk produced ~21 phantom buttons and lost every
+real record. The Nikobus PC software independently flagged the install
+as corrupt and asked for reprogramming; after the user reprogrammed
+4707 it read cleanly — confirming the misalignment was genuine module
+corruption, not a decoder issue.
+
+Policy: we do NOT try to recover a corrupt table (re-aligning a corrupt
+scan only yields a partial/uncertain picture — records pushed out of
+the scanned window are gone, and the proper fix is reprogramming).
+Instead the decoder DETECTS the misalignment — evidence-gated: a
+non-phase-0 byte offset decodes >= 2 host-inventory button addresses,
+strictly more than phase 0, as the unique maximum — SKIPS the module's
+link decode (no phantom buttons enter the store), and FLAGS the module
+on ``NikobusDiscovery.corrupt_link_tables`` so the host can tell the
+user to reprogram it. A WARNING is logged. With no inventory to score
+against, or ambiguous evidence, behaviour is unchanged (best-effort,
+never guesses). Aligned modules are never flagged.
+
 ## 0.27.1
 
 **Discovery audit fixes.**
