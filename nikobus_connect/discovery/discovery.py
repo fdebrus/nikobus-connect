@@ -44,6 +44,7 @@ from ..const import (
     MODULE_SCAN_ACK_TIMEOUT,
     MODULE_SCAN_CONSECUTIVE_GIVE_UP_LIMIT,
     MODULE_SCAN_DATA_TIMEOUT,
+    MODULE_SCAN_FF_TERMINATOR_STREAK_LIMIT,
     MODULE_SCAN_RETRY_LIMIT,
     MODULE_SCAN_TRAILER_PREFIX,
     PC_LINK_INVENTORY_SIGNATURE_BYTE,
@@ -81,10 +82,12 @@ _IR_MAX_CHANNEL = 39
 # order during the per-module scan.
 #
 # The parser-driven early-stop (``_FF_TERMINATOR_TAIL_HEX`` below) trims
-# each pass as soon as the response shows the table-end terminator, so
-# the safety ceilings here are rarely reached in practice. They exist
-# so a malformed or unrecognised terminator doesn't run the scan past
-# the end of usable memory.
+# each pass once it sees a RUN of consecutive empty (all-FF) registers
+# (``MODULE_SCAN_FF_TERMINATOR_STREAK_LIMIT``) — a single empty register
+# is a mid-table gap to skip, not the end — so the safety ceilings here
+# are rarely reached in practice. They exist so a malformed or
+# unrecognised terminator doesn't run the scan past the end of usable
+# memory.
 #
 # ``broad_scan=True`` widens each default pass to a full 0x00..0xFF sweep
 # of the same sub-bytes — diagnostic mode for installs whose firmware
@@ -796,6 +799,11 @@ class NikobusDiscovery:
         # arrives, without rewriting the listener.
         self._scan_event: asyncio.Event = asyncio.Event()
         self._scan_trailer_seen: bool = False
+        # Consecutive all-FF ("empty") data registers seen in the current
+        # pass. The pass short-circuits only once this reaches
+        # ``MODULE_SCAN_FF_TERMINATOR_STREAK_LIMIT`` — a single empty
+        # register is a gap to skip, not the end of the table.
+        self._scan_ff_terminator_streak: int = 0
         self._scan_active: bool = False
         self._scan_lock: asyncio.Lock = asyncio.Lock()
         # Cross-module accumulators for the remote-transmitter synthesis
@@ -983,6 +991,7 @@ class NikobusDiscovery:
         async with self._scan_lock:
             self._scan_active = True
             self._scan_trailer_seen = False
+            self._scan_ff_terminator_streak = 0
             self._scan_event.clear()
             # Suppress the inactivity timer that scan-response parsing
             # keeps rescheduling. Without this, the first register of a
@@ -1104,6 +1113,7 @@ class NikobusDiscovery:
             finally:
                 self._scan_active = False
                 self._scan_trailer_seen = False
+                self._scan_ff_terminator_streak = 0
 
     async def _read_register_once(
         self,
@@ -3202,12 +3212,18 @@ class NikobusDiscovery:
             if decoded_commands:
                 await self._handle_decoded_commands(address, decoded_commands)
 
-            # COM-trace-aligned early-stop: if the response's full data
-            # region ends with the per-module-type FF terminator tail,
-            # this is the last-record-in-the-table sentinel. Stop the
-            # current pass (the register loop checks ``_scan_trailer_seen``
-            # at the top of each iteration). Existing chunks for this
-            # register were already decoded above.
+            # COM-trace-aligned early-stop: a response whose full data
+            # region ends with the per-module-type FF terminator tail and
+            # carried no records is an empty register. Historically the
+            # first such register ended the pass — which dropped every
+            # record sitting after a mid-table gap. Instead, require a run
+            # of ``MODULE_SCAN_FF_TERMINATOR_STREAK_LIMIT`` consecutive
+            # empty registers before concluding end-of-table; an isolated
+            # gap (deleted slot, or a central function written past such a
+            # gap) resets the run and the scan continues. Existing chunks
+            # for this register were already decoded above. (The explicit
+            # ``$18`` all-FF trailer frame still short-circuits immediately
+            # — that's the module signalling end-of-memory, not inference.)
             tail_len = (
                 _FF_TERMINATOR_TAIL_HEX.get(self._module_type)
                 if self._module_type
@@ -3215,16 +3231,33 @@ class NikobusDiscovery:
             )
             if tail_len:
                 data_region = analysis.get("payload_region", "")
-                if len(data_region) >= tail_len and data_region[-tail_len:] == "F" * tail_len:
+                is_empty_register = (
+                    not decoded_commands
+                    and len(data_region) >= tail_len
+                    and data_region[-tail_len:] == "F" * tail_len
+                )
+                if is_empty_register:
+                    self._scan_ff_terminator_streak += 1
                     _LOGGER.debug(
-                        "Register scan FF-tail terminator detected for module %s "
-                        "— response index %d, tail len %d, data region %s",
+                        "Register scan FF-tail terminator for module %s — "
+                        "response index %d, tail len %d, streak %d/%d, data region %s",
                         address,
                         response_index,
                         tail_len,
+                        self._scan_ff_terminator_streak,
+                        MODULE_SCAN_FF_TERMINATOR_STREAK_LIMIT,
                         data_region,
                     )
-                    self._scan_trailer_seen = True
+                    if (
+                        self._scan_ff_terminator_streak
+                        >= MODULE_SCAN_FF_TERMINATOR_STREAK_LIMIT
+                    ):
+                        self._scan_trailer_seen = True
+                else:
+                    # A register that carried records (or any non-empty
+                    # data) breaks the empty run — reset so an isolated gap
+                    # doesn't end the scan prematurely.
+                    self._scan_ff_terminator_streak = 0
 
             if await self._check_early_termination(address, bool(decoded_commands)):
                 return

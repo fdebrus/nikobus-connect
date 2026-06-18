@@ -488,3 +488,68 @@ async def test_scan_cancels_pending_inactivity_timeout(tmp_path, monkeypatch):
     assert cancelled == [True]
     # And cleared from the instance.
     assert discovery._timeout_task is None
+
+
+# --- gap-tolerant data-region FF terminator ------------------------------
+#
+# A roller module's link table can have an empty (all-FF) register *gap*
+# mid-table (deleted slot, or a central function whose records sit past
+# the gap). The data-region FF-tail must NOT end the scan on the first
+# empty register — only a run of MODULE_SCAN_FF_TERMINATOR_STREAK_LIMIT
+# consecutive empties is end-of-table. Regression: a close-only roller
+# central function was dropped because the scan stopped at the first gap.
+
+_EMPTY_ROLLER_FRAME = "$2E9C8B" + "F" * 32 + "17FC9E"  # all-FF data region
+_RECORD_ROLLER_FRAME = "$2E9C8B" + "42" * 12 + "0000AA"  # non-FF data region
+
+
+def _roller_scan_discovery(tmp_path) -> NikobusDiscovery:
+    d = _make_discovery(tmp_path)
+    # discovery_module=True keeps the parser from finalising (and resetting
+    # state) after each frame — mirrors an in-progress scan.
+    d._coordinator.discovery_module = True
+    d._module_type = "roller_module"
+    d._scan_active = True
+    d._scan_trailer_seen = False
+    d._scan_ff_terminator_streak = 0
+    d._payload_buffer = ""
+    return d
+
+
+@pytest.mark.asyncio
+async def test_single_ff_gap_does_not_stop_scan(tmp_path):
+    d = _roller_scan_discovery(tmp_path)
+    await d.parse_module_inventory_response(_EMPTY_ROLLER_FRAME)
+    assert d._scan_ff_terminator_streak == 1
+    assert d._scan_trailer_seen is False  # one gap is not the end
+
+
+@pytest.mark.asyncio
+async def test_consecutive_ff_gaps_stop_scan(tmp_path):
+    d = _roller_scan_discovery(tmp_path)
+    for _ in range(const.MODULE_SCAN_FF_TERMINATOR_STREAK_LIMIT):
+        await d.parse_module_inventory_response(_EMPTY_ROLLER_FRAME)
+    assert (
+        d._scan_ff_terminator_streak
+        == const.MODULE_SCAN_FF_TERMINATOR_STREAK_LIMIT
+    )
+    assert d._scan_trailer_seen is True  # a full run ends the scan
+
+
+@pytest.mark.asyncio
+async def test_record_register_resets_ff_streak(tmp_path):
+    """An empty gap followed by a non-empty register resets the run, so
+    records after the gap keep the scan alive (the NEER-function case)."""
+    d = _roller_scan_discovery(tmp_path)
+    await d.parse_module_inventory_response(_EMPTY_ROLLER_FRAME)
+    await d.parse_module_inventory_response(_EMPTY_ROLLER_FRAME)
+    assert d._scan_ff_terminator_streak == 2
+    # A register carrying data breaks the empty run.
+    d._payload_buffer = ""  # ignore the carried partial-FF tail for clarity
+    await d.parse_module_inventory_response(_RECORD_ROLLER_FRAME)
+    assert d._scan_ff_terminator_streak == 0
+    assert d._scan_trailer_seen is False
+    # One more gap must not immediately terminate.
+    await d.parse_module_inventory_response(_EMPTY_ROLLER_FRAME)
+    assert d._scan_ff_terminator_streak == 1
+    assert d._scan_trailer_seen is False
