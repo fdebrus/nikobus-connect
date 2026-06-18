@@ -56,6 +56,18 @@ MODULE_SCAN_TRAILER_PREFIX: Final[str] = "$18"
 # within ~24 s instead of ~48 s.
 MODULE_SCAN_CONSECUTIVE_GIVE_UP_LIMIT: Final[int] = 8
 
+# Per-module register scan: number of CONSECUTIVE all-FF ("empty") data
+# registers that must be seen before the scan concludes end-of-table and
+# short-circuits the current pass. Set to 1 historically (stop on the
+# first empty register), which dropped every link record sitting after a
+# mid-table FF gap — e.g. a deleted-slot gap, or a central function whose
+# records are written past such a gap. Real installs do have these gaps
+# (the PC-Link inventory scan already tolerates them), so a single empty
+# register is no longer treated as the end; only a run of consecutive
+# empties is. Bounded above by the per-module scan band, so a clean
+# end-of-table still stops within a few extra reads.
+MODULE_SCAN_FF_TERMINATOR_STREAK_LIMIT: Final[int] = 3
+
 # Message prefixes and markers
 BUTTON_COMMAND_PREFIX: Final[str] = "#N"
 COMMAND_PROCESSED: Final[tuple[str, str]] = ("$0515", "$0516")

@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.28.0
+
+**Fix: register scan no longer stops at the first empty register, so link
+records past a mid-table gap are read.**
+
+The per-module register scan concluded end-of-table on the *first*
+register whose data region was all-FF (empty). Real installs have empty
+gaps mid-table — a deleted-slot gap, or a central function whose link
+records are written past such a gap — and every record after the gap was
+silently dropped. Observed on a production roller module (8B9C): the scan
+short-circuited at register ``0x1C`` after 12 reads on an all-FF register,
+so a close-only ("NEER") roller central function whose records sit beyond
+that gap never decoded and never surfaced.
+
+The data-region FF-tail terminator is now gap-tolerant: it requires a run
+of ``MODULE_SCAN_FF_TERMINATOR_STREAK_LIMIT`` (3) *consecutive* empty
+registers before concluding end-of-table; an isolated gap resets the run
+and the scan continues (still bounded by the per-module scan band). This
+mirrors the PC-Link inventory scan, which already tolerates mid-project
+FF gaps. The explicit ``$18`` all-FF trailer frame still short-circuits
+immediately — that is the module signalling end-of-memory, not an
+inference.
+
+
 ## 0.27.3
 
 **Fix: near-all-FF inventory slots no longer become phantom devices.**
