@@ -14,6 +14,7 @@ won't build on modern setuptools), so the only runtime dependency is
 
 from __future__ import annotations
 
+from .config_builder import NkbConfig, build_config, build_config_from_nkb
 from .parser import (
     CANONICAL_NKB_FILENAME,
     NkbData,
@@ -25,8 +26,11 @@ from .parser import (
 
 __all__ = [
     "CANONICAL_NKB_FILENAME",
+    "NkbConfig",
     "NkbData",
     "SceneDef",
+    "build_config",
+    "build_config_from_nkb",
     "find_nkb_file",
     "mode_code",
     "parse_nkb",
