@@ -26,6 +26,8 @@ import logging
 import re
 import tempfile
 import zipfile
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, NamedTuple
 
@@ -127,11 +129,15 @@ def find_nkb_file(config_dir: str) -> Path | None:
     return None
 
 
-def parse_nkb(nkb_path: str | Path) -> NkbData:
-    """Parse ``nkb_path``. Blocking — run in an executor.
+@contextmanager
+def open_nkb_db(nkb_path: str | Path) -> Iterator[Any]:
+    """Yield an Access reader for the ``.mdb`` inside a ``.nkb`` archive.
 
-    Raises on a genuinely unreadable file (bad zip / no mdb / parser
-    failure); the caller is expected to catch and degrade gracefully.
+    Shared by :func:`parse_nkb` and the config-file builder so the archive
+    handling — and its hardening against a crafted ``.nkb`` — lives in one
+    place. The reader is only valid inside the ``with`` block (a temp copy
+    of the ``.mdb`` backs it). Raises ``ValueError`` on a bad zip / missing
+    or oversized ``.mdb``.
     """
     from ._access_parser import AccessParser
 
@@ -160,7 +166,16 @@ def parse_nkb(nkb_path: str | Path) -> NkbData:
                 )
             mdb_path = Path(tmp) / "project.mdb"
             mdb_path.write_bytes(data)
-        db = AccessParser(str(mdb_path))
+        yield AccessParser(str(mdb_path))
+
+
+def parse_nkb(nkb_path: str | Path) -> NkbData:
+    """Parse ``nkb_path``. Blocking — run in an executor.
+
+    Raises on a genuinely unreadable file (bad zip / no mdb / parser
+    failure); the caller is expected to catch and degrade gracefully.
+    """
+    with open_nkb_db(nkb_path) as db:
         components = _rows(db, "Component")
         locations = {
             r["KeyLocation"]: r["StrUserName"] for r in _rows(db, "Location")
