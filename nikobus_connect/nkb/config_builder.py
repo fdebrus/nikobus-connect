@@ -17,15 +17,27 @@ What is / isn't derivable from the ``.nkb``:
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any, NamedTuple
 
+from ..discovery.mapping import KEY_MAPPING
 from .parser import (
     _OUTPUT_PLACEHOLDERS,
     _OUTPUT_PREFIX_RE,
     _rows,
     open_nkb_db,
 )
+
+# A single button key face in the ``.nkb`` (``A``..``D`` for 2/4-button
+# plates, ``1A``..``2D`` for 8-button plates). Combos (``AB``, ``ABCD`` …)
+# and output prefixes (``O01``) are excluded.
+_SINGLE_KEY_RE = re.compile(r"^([12]?)([A-D])$")
+
+# Physical-identity mask per key count: the bits NOT in the mask are the
+# key face carried in the first nibble (2 bits for ≤4-key, 3 bits for
+# 8-key). Mirrors the integration's own consolidation convention.
+_PHYSICAL_ID_MASK: dict[int, int] = {2: 0x3FFFFF, 4: 0x3FFFFF, 8: 0x1FFFFF}
 
 # Niko reference number (``ProductBase.NikoRefNr``) → (HA category, channels)
 # for the output modules the integration supports.
@@ -58,6 +70,53 @@ class NkbConfig(NamedTuple):
 def _is_placeholder_name(name: str) -> bool:
     low = name.strip().lower()
     return not low or low in _OUTPUT_PLACEHOLDERS or low in _EXTRA_OUTPUT_PLACEHOLDERS
+
+
+def _key_labels(prefixes: set[str]) -> list[str]:
+    """Key labels (``1A``..``2D``) for a button's single-key op-points.
+
+    ``.nkb`` prefixes are ``A``..``D`` on 2/4-button plates (mapped to
+    ``1A``..``1D``) and ``1A``..``2D`` on 8-button plates (used as-is).
+    """
+    labels: set[str] = set()
+    for pfx in prefixes:
+        m = _SINGLE_KEY_RE.match(pfx)
+        if m:
+            labels.add(f"{m.group(1) or '1'}{m.group(2)}")
+    return sorted(labels)
+
+
+def _channels_for(labels: list[str]) -> int:
+    """Key count (1/2/4/8) whose ``KEY_MAPPING`` contains every label.
+
+    Picked by the label *pattern*, not the raw count: a device exposing a
+    ``2X`` face is 8-key even if only some faces are wired; ``1C``/``1D``
+    implies 4-key; ``1B`` implies 2-key. This keeps every label inside
+    ``KEY_MAPPING[channels]`` so no two faces collapse to the same address.
+    """
+    if any(lbl[0] == "2" for lbl in labels):
+        return 8
+    if "1C" in labels or "1D" in labels:
+        return 4
+    if "1B" in labels:
+        return 2
+    return 1
+
+
+def _per_key_bus_address(physical: int, channels: int, label: str) -> str:
+    """Bus address the plate emits when key ``label`` is pressed.
+
+    The key face lives in the top bits of the first nibble; the rest is
+    the physical identity. ``KEY_MAPPING[channels][label]`` gives the
+    first-nibble hex for the face (validated against a real consolidated
+    multi-key button). Falls back to the bare physical address if the
+    channel/label pair isn't known.
+    """
+    hexchar = KEY_MAPPING.get(channels, {}).get(label)
+    mask = _PHYSICAL_ID_MASK.get(channels)
+    if hexchar is None or mask is None:
+        return f"{physical:06X}"
+    return f"{(int(hexchar, 16) << 20) | (physical & mask):06X}"
 
 
 def build_config(
@@ -93,6 +152,22 @@ def build_config(
             o.get("StrUserName") or ""
         )
 
+    # {BUTTON_ADDR: {key labels}} — the single-key faces each wall plate has,
+    # so a multi-key plate becomes a button with one op-point per key
+    # (without this, every plate collapses to a single ``1A`` and only that
+    # key's link records survive the scan merge).
+    button_key_prefixes: dict[str, set[str]] = {}
+    for o in objecten:
+        comp = comp_by_key.get(o.get("KeyComponent"))
+        if not comp:
+            continue
+        pa = comp.get("PhysicalAddress")
+        if not (isinstance(pa, int) and pa >= 0x10000):
+            continue
+        pfx = str(objectbase.get(o.get("KeyObjectBase"), {}).get("Prefix") or "")
+        if _SINGLE_KEY_RE.match(pfx):
+            button_key_prefixes.setdefault(f"{pa:06X}", set()).add(pfx)
+
     module_config: dict[str, list[dict[str, Any]]] = {
         "switch_module": [],
         "dimmer_module": [],
@@ -113,7 +188,31 @@ def build_config(
                 continue
             seen_buttons.add(addr)
             name = (r.get("StrUserName") or "").strip() or f"Button {addr}"
-            buttons.append({"address": addr, "description": name})
+            model = ref_by_kpb.get(r.get("KeyProductBase")) or ""
+            labels = _key_labels(button_key_prefixes.get(addr, set()))
+            channels = _channels_for(labels)
+            faces = [lbl for lbl in labels if lbl in KEY_MAPPING.get(channels, {})]
+            if channels in (2, 4, 8) and faces:
+                # Multi-key plate: one entry per key face. The loader groups
+                # them onto a single physical button (keyed by ``addr``) with
+                # ``channels`` op-points, so the scan can route each key's
+                # link records to the right face.
+                for label in faces:
+                    buttons.append({
+                        "address": _per_key_bus_address(pa, channels, label),
+                        "description": f"{name} ({label})",
+                        "linked_button": [{
+                            "address": addr,
+                            "key": label,
+                            "channels": channels,
+                            "type": "Push button",
+                            "model": str(model),
+                        }],
+                    })
+            else:
+                # Single face (sensor / IR / interface): the loader makes a
+                # 1-channel button keyed on the bus address itself.
+                buttons.append({"address": addr, "description": name})
             continue
 
         # Output modules are 16-bit (4-hex).
