@@ -90,6 +90,64 @@ def test_build_config_buttons_named_and_sorted():
     assert btns[0] == {"address": "1CB4F8", "description": "Button 1CB4F8"}
 
 
+def test_build_config_multi_key_button():
+    """A 4-button plate (single-key faces A/B/C/D in the .nkb) becomes four
+    entries — one per key — that group onto one physical button with
+    ``channels=4`` op-points, so the scan can route each key's links."""
+    comps = [
+        {"KeyComponent": 1, "KeyProductBase": 4, "PhysicalAddress": 0x1CB502,
+         "StrUserName": "4BP - Kitchen"},
+    ]
+    pb = [{"KeyProductBase": 4, "NikoRefNr": "05-064"}]
+    # button faces A/B/C/D plus a combo (AB) that must be ignored
+    objecten = [
+        {"KeyComponent": 1, "KeyObjectBase": k} for k in (10, 11, 12, 13, 14)
+    ]
+    objectbase = {
+        10: {"KeyObjectBase": 10, "Prefix": "A"},
+        11: {"KeyObjectBase": 11, "Prefix": "B"},
+        12: {"KeyObjectBase": 12, "Prefix": "C"},
+        13: {"KeyObjectBase": 13, "Prefix": "D"},
+        14: {"KeyObjectBase": 14, "Prefix": "AB"},   # combo — ignored
+    }
+    cfg = build_config(comps, pb, objecten, objectbase)
+    btns = cfg.button_config["nikobus_button"]
+    assert len(btns) == 4
+    # each entry carries a linked_button with physical + key + channels=4
+    keys = sorted(b["linked_button"][0]["key"] for b in btns)
+    assert keys == ["1A", "1B", "1C", "1D"]
+    for b in btns:
+        lb = b["linked_button"][0]
+        assert lb["address"] == "1CB502" and lb["channels"] == 4
+        assert b["address"] != ""  # per-key bus address
+    # no two faces share an address
+    assert len({b["address"] for b in btns}) == 4
+
+
+def test_build_config_two_button_plate():
+    comps = [{"KeyComponent": 1, "KeyProductBase": 5, "PhysicalAddress": 0x1CB68C,
+              "StrUserName": "2BP - Room"}]
+    pb = [{"KeyProductBase": 5, "NikoRefNr": "05-060"}]
+    objecten = [{"KeyComponent": 1, "KeyObjectBase": k} for k in (10, 11)]
+    objectbase = {10: {"KeyObjectBase": 10, "Prefix": "A"},
+                  11: {"KeyObjectBase": 11, "Prefix": "B"}}
+    cfg = build_config(comps, pb, objecten, objectbase)
+    btns = cfg.button_config["nikobus_button"]
+    assert sorted(b["linked_button"][0]["key"] for b in btns) == ["1A", "1B"]
+    assert all(b["linked_button"][0]["channels"] == 2 for b in btns)
+
+
+def test_build_config_single_face_stays_simple():
+    """A device with no key faces (or only ``1A``) stays a simple
+    address-only entry (the loader makes a 1-channel button)."""
+    comps = [{"KeyComponent": 1, "KeyProductBase": 9, "PhysicalAddress": 0x134C67,
+              "StrUserName": "Motion sensor"}]
+    pb = [{"KeyProductBase": 9, "NikoRefNr": "430-00502"}]
+    cfg = build_config(comps, pb, [], {})
+    btns = cfg.button_config["nikobus_button"]
+    assert btns == [{"address": "134C67", "description": "Motion sensor"}]
+
+
 def test_build_config_skips_unknown_module_model():
     """A module whose product isn't a supported switch/dimmer/roller (e.g. a
     colour-plinth controller) is skipped, not mis-categorised."""
