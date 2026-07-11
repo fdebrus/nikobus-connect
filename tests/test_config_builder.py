@@ -122,6 +122,12 @@ def test_build_config_multi_key_button():
         assert b["address"] != ""  # per-key bus address
     # no two faces share an address
     assert len({b["address"] for b in btns}) == 4
+    # per-key bus addresses match the library's inventory derivation
+    # (convert_nikobus_address('1CB502') = '102B4E', + first-nibble offset):
+    by_key = {b["linked_button"][0]["key"]: b["address"] for b in btns}
+    assert by_key == {
+        "1A": "902B4E", "1B": "D02B4E", "1C": "102B4E", "1D": "502B4E",
+    }
 
 
 def test_build_config_two_button_plate():

@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any, NamedTuple
 
 from ..discovery.mapping import KEY_MAPPING
+from ..discovery.protocol import convert_nikobus_address
 from .parser import (
     _OUTPUT_PLACEHOLDERS,
     _OUTPUT_PREFIX_RE,
@@ -33,11 +34,6 @@ from .parser import (
 # plates, ``1A``..``2D`` for 8-button plates). Combos (``AB``, ``ABCD`` …)
 # and output prefixes (``O01``) are excluded.
 _SINGLE_KEY_RE = re.compile(r"^([12]?)([A-D])$")
-
-# Physical-identity mask per key count: the bits NOT in the mask are the
-# key face carried in the first nibble (2 bits for ≤4-key, 3 bits for
-# 8-key). Mirrors the integration's own consolidation convention.
-_PHYSICAL_ID_MASK: dict[int, int] = {2: 0x3FFFFF, 4: 0x3FFFFF, 8: 0x1FFFFF}
 
 # Niko reference number (``ProductBase.NikoRefNr``) → (HA category, channels)
 # for the output modules the integration supports.
@@ -103,20 +99,25 @@ def _channels_for(labels: list[str]) -> int:
     return 1
 
 
-def _per_key_bus_address(physical: int, channels: int, label: str) -> str:
+def _per_key_bus_address(physical_hex: str, channels: int, label: str) -> str:
     """Bus address the plate emits when key ``label`` is pressed.
 
-    The key face lives in the top bits of the first nibble; the rest is
-    the physical identity. ``KEY_MAPPING[channels][label]`` gives the
-    first-nibble hex for the face (validated against a real consolidated
-    multi-key button). Falls back to the bare physical address if the
-    channel/label pair isn't known.
+    Reproduces the library's own inventory derivation
+    (:func:`merge_discovered_buttons`): bit-reverse the physical address
+    with :func:`convert_nikobus_address`, then **add** the key face's
+    first-nibble offset (``KEY_MAPPING[channels][label]``) to the first
+    nibble (wrapping mod 16). This is what a PC-Link inventory would store,
+    so the router matches real presses on it. Falls back to the converted /
+    physical address when the channel/label pair isn't known.
     """
+    converted = convert_nikobus_address(physical_hex)
+    if converted.startswith("["):  # convert_nikobus_address failure marker
+        return physical_hex
     hexchar = KEY_MAPPING.get(channels, {}).get(label)
-    mask = _PHYSICAL_ID_MASK.get(channels)
-    if hexchar is None or mask is None:
-        return f"{physical:06X}"
-    return f"{(int(hexchar, 16) << 20) | (physical & mask):06X}"
+    if hexchar is None:
+        return converted
+    new_nibble = (int(converted[0], 16) + int(hexchar, 16)) & 0xF
+    return f"{new_nibble:X}{converted[1:]}"
 
 
 def build_config(
@@ -199,7 +200,7 @@ def build_config(
                 # link records to the right face.
                 for label in faces:
                     buttons.append({
-                        "address": _per_key_bus_address(pa, channels, label),
+                        "address": _per_key_bus_address(addr, channels, label),
                         "description": f"{name} ({label})",
                         "linked_button": [{
                             "address": addr,
