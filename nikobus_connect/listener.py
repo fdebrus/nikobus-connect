@@ -208,10 +208,19 @@ class NikobusEventListener:
                 self._enqueue_response(message)
             return
 
-        # Discovery frames ($18 inventory, $2E/$1E register answers)
-        # Forward to event callback so the integration can route them.
+        # Discovery frames ($18 inventory, $2E/$1E register answers).
+        # CRC-validated like every other answer class below — an
+        # uncaught bit error here used to sail straight through to the
+        # device classifier and surface as a spurious "Unknown device
+        # detected" warning (and could seed a phantom module/button in
+        # storage). The 2-char frame-type code doubles as the frame's
+        # declared total length (same scheme validate_crc() already
+        # checks for outbound-command answers), so no new CRC logic is
+        # needed here — just gating the existing check on this branch
+        # too, matching FEEDBACK_MODULE_ANSWER / MANUAL_REFRESH_COMMAND.
         if message.startswith(("$18", "$2E", "$1E")):
-            await self._invoke(self._event_callback, message)
+            if self.validate_crc(message):
+                await self._invoke(self._event_callback, message)
             return
 
         # All other PC-Link responses. Only enqueue while a caller is
