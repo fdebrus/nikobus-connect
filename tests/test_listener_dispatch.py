@@ -75,10 +75,42 @@ async def test_ack_enqueued_only_while_awaiting() -> None:
 
 
 async def test_discovery_frames_routed_to_event_callback() -> None:
+    """CRC-valid $18/$2E/$1E frames reach the event callback.
+
+    Real frames, not placeholders: ``$187E8F0040073FFFB65305`` and
+    ``$2E498C19000000010000002A3D000005000000F7F27F`` were captured off
+    real Nikobus installs; the $1E frame is synthesised with a matching
+    CRC (no real capture was on hand, but the construction is identical).
+    """
     listener, events = _listener()
-    for frame in ("$18AABB", "$2E01", "$1E02"):
+    frames = (
+        "$187E8F0040073FFFB65305",
+        "$2E498C19000000010000002A3D000005000000F7F27F",
+        "$1E4242424242424242424257C4C1",
+    )
+    for frame in frames:
         await listener._dispatch_message(frame)
-    assert events == ["$18AABB", "$2E01", "$1E02"]
+    assert events == list(frames)
+
+
+async def test_corrupted_discovery_frames_are_dropped() -> None:
+    """A bit-flipped $18/$2E/$1E frame must NOT reach the event callback.
+
+    Regression for the "Unknown device detected" false-positive bug: an
+    uncaught bit error on the wire used to sail straight through to the
+    device classifier and get logged as a spurious new device (and could
+    seed a phantom module/button in storage). One flipped hex nibble in
+    each frame's payload should now fail CRC and be silently dropped.
+    """
+    listener, events = _listener()
+    corrupted = (
+        "$187E8F0040073FFEB65305",  # FF -> FE in the payload
+        "$2E498C19000000010000002A3D000005000000F7F27E",  # trailing nibble flipped
+        "$1E4242424242424242424157C4C1",  # payload nibble flipped
+    )
+    for frame in corrupted:
+        await listener._dispatch_message(frame)
+    assert events == []
 
 
 def test_enqueue_drops_oldest_when_full() -> None:
