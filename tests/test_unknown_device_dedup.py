@@ -61,7 +61,7 @@ def _make_discovery(tmp_path) -> NikobusDiscovery:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("device_type_hex", ["05", "3B", "46"])
+@pytest.mark.parametrize("device_type_hex", ["3B", "46"])
 def test_reserved_device_types_are_catalogued(device_type_hex):
     """Types observed in the user-attachments log that remain
     unidentified carry Category=Reserved entries so the inventory
@@ -73,7 +73,11 @@ def test_reserved_device_types_are_catalogued(device_type_hex):
     - ``0x14`` / ``0x24`` / ``0x34`` were originally on this list;
       removed in 0.5.24 after the pre-Gen3 PC-Link forensic confirmed
       they're firmware diagnostic-echo artifacts, not real device
-      types. Inventory frames containing them are now treated as
+      types.
+    - ``0x05`` was originally on this list; promoted to ``05-061``
+      (2-button plate with feedback LEDs) in 0.32.0 after the #478
+      registry decode matched three type-05 records to the install's
+      .nkb 05-061 components on both address and BP index. Inventory frames containing them are now treated as
       genuinely uncatalogued (which they are) — the WARNING that
       results is correct, surfacing the malformed frame for
       investigation rather than silently swallowing it as
@@ -122,9 +126,10 @@ async def test_reserved_category_does_not_trigger_unknown_warning(tmp_path, capl
     # Frame layout for parse_inventory_response: bytes [0-6] padding,
     # byte [7] device-type, bytes [8-10] padding, bytes [11-13] address
     # (Button-style 3-byte slice). Min frame length is 15 bytes; we pad
-    # to 16 for headroom. Use 0x05 (still Reserved) — 0x14 used to be
-    # Reserved but was removed in 0.5.24 as an echo-pattern artifact.
-    payload_hex = "00" * 7 + "05" + "00" * 3 + "1A1918" + "00" * 2
+    # to 16 for headroom. Use 0x46 (still Reserved) — 0x14 used to be
+    # Reserved but was removed in 0.5.24 as an echo-pattern artifact,
+    # and 0x05 was promoted to the 05-061 button in 0.32.0.
+    payload_hex = "00" * 7 + "46" + "00" * 3 + "1A1918" + "00" * 2
 
     caplog.set_level(logging.WARNING, logger="nikobus_connect.discovery.discovery")
     await discovery.parse_inventory_response(payload_hex)
@@ -135,7 +140,7 @@ async def test_reserved_category_does_not_trigger_unknown_warning(tmp_path, capl
         if rec.levelno == logging.WARNING and "Unknown device detected" in rec.message
     ]
     assert unknown_warnings == [], (
-        f"Reserved type 0x05 should not trigger Unknown-device warning; "
+        f"Reserved type 0x46 should not trigger Unknown-device warning; "
         f"got {len(unknown_warnings)} warnings"
     )
 
