@@ -63,6 +63,7 @@ def test_vendor_refs_match_product_mdb() -> None:
         "S_DB_PC_FEEDBACK_MODULE",
         # Buttons / inputs
         "S_DB_BUSDRUKKNOP_2",
+        "S_DB_BUSDRUKKNOP_2_LED",
         "S_DB_BUSDRUKKNOP_4",
         "S_DB_KNOP_4_IR_UNIQUE",
         "S_DB_KNOP_8_GRAFIET",
@@ -123,6 +124,14 @@ def test_specific_product_mdb_anchors() -> None:
     assert DEVICE_TYPES["04"]["Model"] == "05-060"
     assert DEVICE_TYPES["04"]["ModelAlt"] == "4*-072"
     assert DEVICE_TYPES["04"]["VendorRef"] == "S_DB_BUSDRUKKNOP_2"
+
+    # 0x05 — the feedback-LED sibling of the 0x04 05-060. Promoted
+    # from Reserved after the #478 registry decode matched three
+    # type-05 records to the install's .nkb 05-061 components on both
+    # address and BP index. ProductBase KeyProductBase=5.
+    assert DEVICE_TYPES["05"]["Model"] == "05-061"
+    assert DEVICE_TYPES["05"]["Channels"] == 2
+    assert DEVICE_TYPES["05"]["VendorRef"] == "S_DB_BUSDRUKKNOP_2_LED"
 
     assert DEVICE_TYPES["06"]["Model"] == "05-064"
     assert DEVICE_TYPES["06"]["ModelAlt"] == "4*-074"

@@ -547,6 +547,86 @@ async def _notify_discovery_finished(
     await callback(**kwargs)
 
 
+# ---------------------------------------------------------------------------
+# PC-Link registry header / diagnostic-echo detection
+# ---------------------------------------------------------------------------
+#
+# Forensic on a Nikobus-HA #478 install (2026-08-25, full A0..FF register
+# dump cross-referenced against the install's .nkb) mapped the PC-Link
+# inventory region completely:
+#
+#   * registers A0..A3 — a HEADER page: byte-ramp filler (each byte equals
+#     its offset, the firmware's "diagnostic echo") terminated by the
+#     8-byte tail ``5E 55 AA AA <count u32 LE>``, where <count> is the
+#     number of registry records that follow (0x17 = 23 on that install:
+#     18 live devices + 3 then-unrecognised 05-061 plates + 2 deleted
+#     slots — every number closed);
+#   * registers A4..A4+count-1 — one 16-byte record per register;
+#   * reads past the last record wrap back into repeating (and partially
+#     unstable) ramp pages.
+#
+# Parsing the ramp pages as records is what produced the phantom
+# "05-060 @ 0A0908" button (byte 7 of the 00..0F ramp is 0x04 — a real
+# catalogued type by coincidence) and the "Unknown device type
+# 14/24/34" warnings (byte 7 of the following ramps). Both detectors
+# below are pattern-gated so genuinely programmed registers on other
+# PC-Link generations — which may not carry this header at all — are
+# unaffected: a real 16-byte record never contains a 6-byte ascending
+# run, and the 5E55AAAA magic colliding with real record content is
+# vanishingly unlikely.
+
+#: The registry-header end marker preceding the record count.
+_REGISTRY_HEADER_MAGIC = b"\x5e\x55\xaa\xaa"
+
+#: Sanity ceiling for the header's record count — a "count" beyond this
+#: is treated as a magic-collision false positive, not a real header.
+_REGISTRY_MAX_RECORDS = 512
+
+#: Minimum length of a strictly-ascending (+1 per byte) run for a frame
+#: to be classified as diagnostic-echo filler. Full ramp pages run 15;
+#: the observed corrupted variants still carry runs of 6+; real records
+#: top out around 2–3.
+_ECHO_RAMP_MIN_RUN = 6
+
+
+def _registry_header_count(data: bytes) -> int | None:
+    """Record count from a registry-header frame, or ``None``.
+
+    Looks for the ``5E 55 AA AA`` magic anywhere in the data region with
+    at least four bytes after it (the count, little-endian). Returns the
+    count only when it passes the sanity ceiling.
+    """
+    idx = data.find(_REGISTRY_HEADER_MAGIC)
+    if idx < 0 or idx + 8 > len(data):
+        return None
+    count = int.from_bytes(data[idx + 4 : idx + 8], "little")
+    if 0 < count <= _REGISTRY_MAX_RECORDS:
+        return count
+    return None
+
+
+def _looks_like_echo_ramp(data: bytes) -> bool:
+    """True when the data region is diagnostic-echo (byte-ramp) filler.
+
+    Detects the longest run of consecutive ``+1`` byte steps; a run of
+    ``_ECHO_RAMP_MIN_RUN`` steps or more marks the frame as echo filler.
+    Tolerant of the partially-corrupted ramp variants observed in the
+    wild (single flipped bytes, FF-spans splicing a ramp) while never
+    matching a real registry record.
+    """
+    if len(data) < _ECHO_RAMP_MIN_RUN + 1:
+        return False
+    run = 0
+    for i in range(1, len(data)):
+        if data[i] == (data[i - 1] + 1) & 0xFF:
+            run += 1
+            if run >= _ECHO_RAMP_MIN_RUN:
+                return True
+        else:
+            run = 0
+    return False
+
+
 def _is_inventory_trailer(message: str) -> bool:
     """Detect a "$18<all-FF><CRC>" trailer frame.
 
@@ -850,6 +930,11 @@ class NikobusDiscovery:
         self._register_scan_queue = []
         self._inventory_addresses = set()
         self._inventory_identity_queued: set[str] = set()
+        #: Registry record count from the PC-Link header page (None until
+        #: a ``5E55AAAA``-tagged header frame is seen this scan).
+        self._registry_record_limit: int | None = None
+        #: Registry slots parsed since the header (live + deleted alike).
+        self._registry_records_seen = 0
         self._module_found_data = False
         self._module_consecutive_empties = 0
         self.discovery_stage = None
@@ -2926,6 +3011,24 @@ class NikobusDiscovery:
 
             self._schedule_inventory_timeout()
 
+            # Past the registry's end (header told us how many records
+            # exist and we've parsed them all): reads wrap back into the
+            # PC-Link's echo/filler pages — never real devices. Skip
+            # everything until the scan finishes. Only active when a
+            # header was actually seen this scan; units without the
+            # header page behave exactly as before.
+            if (
+                self._registry_record_limit is not None
+                and self._registry_records_seen >= self._registry_record_limit
+            ):
+                _LOGGER.debug(
+                    "Skipped inventory frame — past registry end "
+                    "(%d/%d records parsed)",
+                    self._registry_records_seen,
+                    self._registry_record_limit,
+                )
+                return result
+
             # All-FF response = no record at this slot. Skip and continue
             # the sweep — don't treat it as end-of-project. Real installs
             # have FF gaps mid-project (e.g. user deleted a module and
@@ -2941,12 +3044,43 @@ class NikobusDiscovery:
                 )
                 return result
 
+            # Registry header page: ramp filler ending in the
+            # ``5E55AAAA <count>`` tail. Capture the record count (it
+            # bounds the scan via the past-end guard above) and skip —
+            # this is metadata, not a device record.
+            header_count = _registry_header_count(data_bytes)
+            if header_count is not None:
+                self._registry_record_limit = header_count
+                self._registry_records_seen = 0
+                _LOGGER.info(
+                    "PC-Link registry header detected — %d record(s) follow",
+                    header_count,
+                )
+                return result
+
+            # Diagnostic-echo filler (byte-ramp content from the header
+            # page or the wrap-around region past the registry). Byte 7
+            # of a ramp lands on 0x04/0x14/0x24/... — parsing it as a
+            # record used to seed a phantom 05-060 button and spurious
+            # "Unknown device type 14/24/34" warnings.
+            if _looks_like_echo_ramp(data_bytes):
+                _LOGGER.debug(
+                    "Skipped inventory frame — diagnostic-echo ramp filler "
+                    "(%s)",
+                    data_bytes.hex().upper(),
+                )
+                return result
+
             if len(payload_bytes) < 15:
                 _LOGGER.debug(
                     "Skipped inventory record — payload too short, length %d",
                     len(payload_bytes),
                 )
                 return result
+
+            # Frame occupies a registry slot (live, deleted, or padding
+            # alike) — count it against the header's record limit.
+            self._registry_records_seen += 1
 
             device_type_hex = f"{payload_bytes[7]:02X}"
 

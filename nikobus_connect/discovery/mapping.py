@@ -370,10 +370,24 @@ DEVICE_TYPES: dict[str, dict[str, Any]] = {
     # Only ``0x04`` is a real device type (05-342 push button), and
     # only by coincidence. The others were echo-pattern phantoms
     # that we'd kept as Reserved for years to silence the warning.
-    # Now removed. ``0x05`` and ``0x46`` stay Reserved pending more
-    # evidence — they may or may not be similar artifacts.
+    # Now removed. ``0x46`` stays Reserved pending more evidence.
     # ------------------------------------------------------------------
-    "05": {"Category": "Reserved", "Model": "Unknown", "Name": "Reserved 0x05"},
+    # 0x05 = 05-061, the classic-series 2-button push button WITH
+    # feedback LEDs (the LED sibling of the 0x04 05-060, vendor ref
+    # ``S_DB_BUSDRUKKNOP_2_LED`` / KeyProductBase 5 in product.mdb).
+    # Identified 2026-08-25 from a Nikobus-HA #478 install: three
+    # registry records with type 0x05 whose addresses (3D8F7C /
+    # 3D8F5B / 3C8BFE) AND trailing BP-index fields (2 / 5 / 14) both
+    # match the install's .nkb 05-061 components exactly. While this
+    # sat as Reserved, those plates were silently dropped from every
+    # inventory (Reserved is excluded from the button merge).
+    "05": {
+        "Category": "Button",
+        "Model": "05-061",
+        "Channels": 2,
+        "Name": "Bus push button, 2 control buttons with feedback LEDs",
+        "VendorRef": "S_DB_BUSDRUKKNOP_2_LED",
+    },
     "46": {"Category": "Reserved", "Model": "Unknown", "Name": "Reserved 0x46"},
     # 0x3B records appear at addresses 3CF000, 3CF010, 3CF020, ... on
     # the same install — a 16-byte stride starting at 3CF000 that's

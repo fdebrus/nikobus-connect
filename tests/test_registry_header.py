@@ -1,0 +1,343 @@
+"""PC-Link registry header + diagnostic-echo ramp handling; 05-061 mapping.
+
+Decoded 2026-08-25 from a Nikobus-HA #478 install's full discovery log:
+
+* Registers A0..A3 of the PC-Link hold a *header page*, not records:
+  byte-ramp filler (each byte equals its offset — the firmware's
+  diagnostic echo) ending in the magic tail ``5E 55 AA AA`` followed by
+  a u32 little-endian record count (0x17 = 23 on the reference
+  install).
+* Registers A4..A4+count-1 hold one 16-byte record per register:
+  ``[page u32][device_type u32][addr 3 bytes + pad][Component.Number
+  u32]``.
+* Reads past the last record wrap back into repeating ramp pages.
+
+Before this fix the parser read byte 7 of a ramp page as a device
+type — a 00..0F ramp yields 0x04 (coincidentally the real 05-060
+type) at "address" 0A0908, seeding a phantom button, and later ramps
+yield types 0x14/0x24/0x34, firing spurious "Unknown device type"
+warnings. All four ramp frames CRC-validate: they are genuine stored
+content, so the 0.30.2 CRC gate cannot filter them — only content
+awareness can.
+
+The same install also proved device type ``0x05`` is the 05-061
+(2-button plate WITH feedback LEDs): three type-05 records match the
+install's .nkb 05-061 components on both bus address and BP index.
+It had sat as Reserved (excluded from the button merge) for years.
+
+Tests below pin:
+* the header frame sets the record limit and is not classified;
+* ramp frames (clean and corrupted) are skipped — no devices, no
+  unknown-type warnings;
+* frames past the header's record count are skipped (wrap-around);
+* deleted (FFFFFF-address) slots still count toward the record limit;
+* type 0x05 classifies as a discovered 05-061 Button;
+* installs without a header page behave exactly as before.
+"""
+
+from __future__ import annotations
+
+from unittest.mock import MagicMock
+
+import pytest
+
+from nikobus_connect.discovery.discovery import (
+    NikobusDiscovery,
+    _looks_like_echo_ramp,
+    _registry_header_count,
+)
+from nikobus_connect.discovery.mapping import DEVICE_TYPES
+
+
+def _drop_coro(coro):
+    try:
+        coro.close()
+    except AttributeError:
+        pass
+    task = MagicMock()
+    task.cancel = MagicMock()
+    return task
+
+
+def _make_coordinator() -> MagicMock:
+    coord = MagicMock()
+    coord.dict_module_data = {}
+    coord.discovery_running = False
+    coord.discovery_module = False
+    coord.discovery_module_address = None
+    coord.inventory_query_type = None
+    coord.get_module_channel_count = MagicMock(return_value=0)
+    coord.nikobus_command = MagicMock()
+    coord.nikobus_command.drain_queue = MagicMock(return_value=0)
+    return coord
+
+
+def _make_discovery(coord, tmp_path) -> NikobusDiscovery:
+    return NikobusDiscovery(
+        coord,
+        config_dir=str(tmp_path),
+        create_task=_drop_coro,
+        button_data={"nikobus_button": {}},
+        on_button_save=None,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Frames captured verbatim from the #478 install's debug log (PC-Link
+# C798). Layout: "2E" + 2-byte responder + 16 data bytes + 3-byte CRC.
+# ---------------------------------------------------------------------------
+
+# Register A3 — header page: ramp prefix 30..37, magic 5E55AAAA,
+# count 0x17 = 23 records.
+HEADER_FRAME = "2EC79830313233343536375E55AAAA17000000BFD70D"
+
+# Registers A0..A2 / wrap-around region — pure byte-ramp filler.
+# Byte 7 of each is what the old parser read as a "device type".
+RAMP_FRAME_00 = "2EC798000102030405060708090A0B0C0D0E0F91DABA"  # type 0x04 phantom
+RAMP_FRAME_10 = "2EC798101112131415161718191A1B1C1D1E1FD48B92"  # "unknown 14"
+RAMP_FRAME_20 = "2EC798202122232425262728292A2B2C2D2E2F1B78EF"  # "unknown 24"
+RAMP_FRAME_30 = "2EC798303132333435363738393A3B3C3D3E3F5E292A"
+
+# Wrap-around ramps re-read on later passes come back partially
+# unstable — mid-ramp corruption must not defeat the detector.
+RAMP_FRAME_CORRUPT_FF = "2EC7983031323334FFFFFFFF393A3B3C3D3E3F2796DC"
+RAMP_FRAME_CORRUPT_BYTE = "2EC798303130333435363738393A3B3C3D3E3FA8EBDA"
+
+# Register A5 — real record: switch module B655, type 01, number 1.
+RECORD_B655 = "2EC798020000000100000055B600000100000025C4B5"
+
+# Register A9 — real record: 05-061 button plate 3D8F7C, type 05,
+# Component.Number 2 (matches the .nkb's "BP 2").
+RECORD_05_061 = "2EC79805000000050000007C8F3D0002000000EABC01"
+
+# Register A8 — deleted slot: address FFFFFF, but it still occupies a
+# registry slot and must count toward the header's record limit.
+RECORD_DELETED = "2EC7980400000006000000FFFFFFFF09000000875297"
+
+# Synthetic header with count = 2, for exercising the past-end guard
+# without feeding 23 records. parse_inventory_response does not check
+# CRC (the listener's CRC gate runs upstream), so the trailer bytes
+# are irrelevant here.
+HEADER_FRAME_COUNT_2 = "2EC79830313233343536375E55AAAA02000000000000"
+
+
+# ---------------------------------------------------------------------------
+# Helper-level tests
+# ---------------------------------------------------------------------------
+
+
+def test_header_count_parses_reference_install():
+    data = bytes.fromhex(HEADER_FRAME)[3:19]
+    assert _registry_header_count(data) == 23
+
+
+def test_header_count_absent_on_pure_ramp():
+    data = bytes.fromhex(RAMP_FRAME_00)[3:19]
+    assert _registry_header_count(data) is None
+
+
+def test_header_count_rejects_implausible_counts():
+    # count 0 and count > 512 are both rejected.
+    zero = bytes.fromhex("30313233343536375E55AAAA00000000")
+    huge = bytes.fromhex("30313233343536375E55AAAAFFFF0000")
+    assert _registry_header_count(zero) is None
+    assert _registry_header_count(huge) is None
+
+
+def test_ramp_detector_hits_all_logged_filler_frames():
+    for frame in (
+        RAMP_FRAME_00,
+        RAMP_FRAME_10,
+        RAMP_FRAME_20,
+        RAMP_FRAME_30,
+        RAMP_FRAME_CORRUPT_FF,
+        RAMP_FRAME_CORRUPT_BYTE,
+    ):
+        data = bytes.fromhex(frame)[3:19]
+        assert _looks_like_echo_ramp(data), frame
+
+
+def test_ramp_detector_passes_real_records():
+    for frame in (RECORD_B655, RECORD_05_061, RECORD_DELETED):
+        data = bytes.fromhex(frame)[3:19]
+        assert not _looks_like_echo_ramp(data), frame
+
+
+# ---------------------------------------------------------------------------
+# Mapping
+# ---------------------------------------------------------------------------
+
+
+def test_type_05_is_the_05_061_button():
+    entry = DEVICE_TYPES["05"]
+    assert entry["Category"] == "Button"
+    assert entry["Model"] == "05-061"
+    assert entry["Channels"] == 2
+
+
+# ---------------------------------------------------------------------------
+# parse_inventory_response integration
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_05_061_record_discovers_button(tmp_path):
+    """The real type-05 record decodes into a discovered 05-061 Button
+    at bus address 3D8F7C — previously silently dropped (Reserved)."""
+
+    coord = _make_coordinator()
+    discovery = _make_discovery(coord, tmp_path)
+    discovery.discovery_stage = "inventory_addresses"
+
+    result = await discovery.parse_inventory_response(RECORD_05_061)
+
+    assert "3D8F7C" in discovery.discovered_devices
+    entry = discovery.discovered_devices["3D8F7C"]
+    assert entry["category"] == "Button"
+    assert entry["model"] == "05-061"
+    assert entry["channels"] == 2
+    assert [b["address"] for b in result.buttons] == ["3D8F7C"]
+
+
+@pytest.mark.asyncio
+async def test_header_frame_is_metadata_not_a_device(tmp_path):
+    coord = _make_coordinator()
+    discovery = _make_discovery(coord, tmp_path)
+    discovery.discovery_stage = "inventory_addresses"
+
+    result = await discovery.parse_inventory_response(HEADER_FRAME)
+
+    assert discovery._registry_record_limit == 23
+    assert discovery._registry_records_seen == 0
+    assert discovery.discovered_devices == {}
+    assert not result.buttons and not result.modules
+
+
+@pytest.mark.asyncio
+async def test_ramp_frames_seed_no_phantoms_and_no_warnings(tmp_path):
+    """The four logged ramp frames used to produce a phantom "05-060 @
+    0A0908" button plus "Unknown device type 14/24/34" warnings. Now:
+    nothing discovered, nothing warned."""
+
+    coord = _make_coordinator()
+    discovery = _make_discovery(coord, tmp_path)
+    discovery.discovery_stage = "inventory_addresses"
+
+    for frame in (
+        RAMP_FRAME_00,
+        RAMP_FRAME_10,
+        RAMP_FRAME_20,
+        RAMP_FRAME_30,
+        RAMP_FRAME_CORRUPT_FF,
+        RAMP_FRAME_CORRUPT_BYTE,
+    ):
+        await discovery.parse_inventory_response(frame)
+
+    assert discovery.discovered_devices == {}
+    assert discovery._unknown_device_types_warned == set()
+
+
+@pytest.mark.asyncio
+async def test_full_reference_sequence(tmp_path):
+    """Replay the reference install's shape: leading ramp pages, the
+    header, real records (module + 05-061 + deleted slot), then
+    wrap-around ramps. Exactly the real devices land."""
+
+    coord = _make_coordinator()
+    discovery = _make_discovery(coord, tmp_path)
+    discovery.discovery_stage = "inventory_addresses"
+
+    for frame in (
+        RAMP_FRAME_00,
+        RAMP_FRAME_10,
+        RAMP_FRAME_20,
+        HEADER_FRAME,
+        RECORD_B655,
+        RECORD_05_061,
+        RECORD_DELETED,
+    ):
+        await discovery.parse_inventory_response(frame)
+
+    assert set(discovery.discovered_devices) == {"B655", "3D8F7C"}
+    # Live records + the deleted slot all consumed registry slots.
+    assert discovery._registry_records_seen == 3
+
+
+@pytest.mark.asyncio
+async def test_past_end_guard_skips_wrapped_records(tmp_path):
+    """Once ``count`` slots have been parsed, later frames are the
+    wrap-around region — skipped even if they'd otherwise classify."""
+
+    coord = _make_coordinator()
+    discovery = _make_discovery(coord, tmp_path)
+    discovery.discovery_stage = "inventory_addresses"
+
+    await discovery.parse_inventory_response(HEADER_FRAME_COUNT_2)
+    await discovery.parse_inventory_response(RECORD_B655)
+    await discovery.parse_inventory_response(RECORD_DELETED)  # slot 2 of 2
+    # Past the end: a frame that WOULD decode as a fresh 05-061.
+    await discovery.parse_inventory_response(RECORD_05_061)
+
+    assert "3D8F7C" not in discovery.discovered_devices
+    assert set(discovery.discovered_devices) == {"B655"}
+
+
+@pytest.mark.asyncio
+async def test_no_header_means_unbounded_sweep_as_before(tmp_path):
+    """Installs whose PC-Link has no header page (never observed to
+    emit 5E55AAAA) keep the pre-header behaviour: every frame parses,
+    no limit applies."""
+
+    coord = _make_coordinator()
+    discovery = _make_discovery(coord, tmp_path)
+    discovery.discovery_stage = "inventory_addresses"
+
+    for _ in range(4):
+        await discovery.parse_inventory_response(RECORD_B655)
+    await discovery.parse_inventory_response(RECORD_05_061)
+
+    assert discovery._registry_record_limit is None
+    assert set(discovery.discovered_devices) == {"B655", "3D8F7C"}
+
+
+@pytest.mark.asyncio
+async def test_all_ff_slots_do_not_count_toward_limit(tmp_path):
+    """All-FF frames are 'no record at this slot' (pre-existing skip)
+    and must not consume registry slots — only frames that reach the
+    record parser count."""
+
+    coord = _make_coordinator()
+    discovery = _make_discovery(coord, tmp_path)
+    discovery.discovery_stage = "inventory_addresses"
+
+    all_ff = "2EC798" + "FF" * 16 + "CC98D0"
+    await discovery.parse_inventory_response(HEADER_FRAME_COUNT_2)
+    await discovery.parse_inventory_response(all_ff)
+    await discovery.parse_inventory_response(all_ff)
+    await discovery.parse_inventory_response(RECORD_B655)
+    await discovery.parse_inventory_response(RECORD_05_061)
+
+    assert set(discovery.discovered_devices) == {"B655", "3D8F7C"}
+
+
+@pytest.mark.asyncio
+async def test_reset_state_clears_registry_bounds(tmp_path):
+    """A new scan starts clean — the previous scan's header count must
+    not suppress the next scan's records."""
+
+    coord = _make_coordinator()
+    discovery = _make_discovery(coord, tmp_path)
+    discovery.discovery_stage = "inventory_addresses"
+
+    await discovery.parse_inventory_response(HEADER_FRAME_COUNT_2)
+    await discovery.parse_inventory_response(RECORD_B655)
+    await discovery.parse_inventory_response(RECORD_DELETED)
+
+    discovery.reset_state()
+    discovery.discovery_stage = "inventory_addresses"
+
+    assert discovery._registry_record_limit is None
+    assert discovery._registry_records_seen == 0
+
+    await discovery.parse_inventory_response(RECORD_05_061)
+    assert "3D8F7C" in discovery.discovered_devices
