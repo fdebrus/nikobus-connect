@@ -72,6 +72,7 @@ class _FakeParser:
             "KeyLocation": [10, 11, 99, 10],
             "PhysicalAddress": [3692, 1590196, -1, 0],  # 0E6C, 1843B4, scene, skip
             "StrUserName": ["Dimcontroller", "Entree", "Scene - Test", ""],
+            "Number": [1, 7, 1, 1],
         },
         "Location": {
             "KeyLocation": [10, 11, 99],
@@ -136,6 +137,32 @@ def test_parse_addresses_with_rooms(tmp_path):
         "0E6C": ("Dimcontroller", "Centrale"),
         "1843B4": ("Entree", "Living"),
     }
+
+
+def test_parse_extracts_component_numbers(tmp_path):
+    """``Component.Number`` — the per-product index the Niko software
+    prefixes as ``BP7`` / ``S1`` — is surfaced per address so a consumer
+    can render the same index the user sees in the Nikobus application."""
+    data = _parse(tmp_path)
+    assert data.numbers == {"0E6C": 1, "1843B4": 7}
+
+
+def test_extract_addresses_empty_name_falls_back_to_room():
+    """An installer-unnamed component that IS placed in a room is kept
+    (name ``""``, room set) so a consumer can display the room instead;
+    a component with neither name nor room is still skipped."""
+    from nikobus_connect.nkb.parser import _extract_addresses
+
+    components = [
+        {"PhysicalAddress": 3692, "StrUserName": "", "KeyLocation": 10,
+         "Number": 3},
+        {"PhysicalAddress": 1590196, "StrUserName": "  ", "KeyLocation": None},
+        {"PhysicalAddress": -1, "StrUserName": "Scene - X", "KeyLocation": 99},
+    ]
+    locations = {10: "Cave", 99: "S_DB_GROUPS"}
+    addresses, numbers = _extract_addresses(components, locations)
+    assert addresses == {"0E6C": ("", "Cave")}
+    assert numbers == {"0E6C": 3}
 
 
 def test_parse_scene_member_set(tmp_path):
