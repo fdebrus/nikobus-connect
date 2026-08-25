@@ -91,6 +91,9 @@ class NkbData(NamedTuple):
     """Everything we extract from a ``.nkb``."""
 
     #: ``{ADDRESS_HEX_UPPER: (name, room)}`` — room is ``""`` if none.
+    #: ``name`` may be ``""`` when the installer left the component
+    #: unnamed but placed it in a room; consumers should fall back to
+    #: the room for display in that case.
     addresses: dict[str, tuple[str, str]]
     #: Named scene groups with member sets, for member-set matching.
     scenes: list[SceneDef]
@@ -98,6 +101,12 @@ class NkbData(NamedTuple):
     #: (the light / cover / switch the user actually toggles). Read-only, so
     #: the empty-dict default is safe.
     outputs: dict[tuple[str, int], str] = {}
+    #: ``{ADDRESS_HEX_UPPER: number}`` — the per-product index the Niko
+    #: PC software prefixes onto each component's label (``BP7``, ``S1``
+    #: … the ``BP``/``S`` part is locale UI decoration; ``Number`` is the
+    #: stable data). Lets a consumer render the same index the user sees
+    #: in the Nikobus application. Read-only default, safe to share.
+    numbers: dict[str, int] = {}
 
 
 # Generic per-output placeholders in the .nkb that aren't real names.
@@ -189,12 +198,14 @@ def parse_nkb(nkb_path: str | Path) -> NkbData:
 
     comp_by_key = {c["KeyComponent"]: c for c in components}
 
-    addresses = _extract_addresses(components, locations)
+    addresses, numbers = _extract_addresses(components, locations)
     scenes = _extract_scenes(
         components, comp_by_key, objecten, connections, linkmodes, objectbase
     )
     outputs = _extract_outputs(comp_by_key, objecten, objectbase)
-    return NkbData(addresses=addresses, scenes=scenes, outputs=outputs)
+    return NkbData(
+        addresses=addresses, scenes=scenes, outputs=outputs, numbers=numbers
+    )
 
 
 def _extract_outputs(
@@ -222,21 +233,37 @@ def _extract_outputs(
 
 def _extract_addresses(
     components: list[_Row], locations: dict[Any, Any]
-) -> dict[str, tuple[str, str]]:
-    """``{ADDRESS: (name, room)}`` for the physically-addressed components."""
+) -> tuple[dict[str, tuple[str, str]], dict[str, int]]:
+    """``({ADDRESS: (name, room)}, {ADDRESS: number})`` for the
+    physically-addressed components.
+
+    A component with an empty ``StrUserName`` is still included when it
+    has a room — the consumer can fall back to the room name so the
+    device stays identifiable (some installs leave plates unnamed but
+    correctly placed). Components with neither are skipped as before.
+
+    ``numbers`` carries ``Component.Number`` — the per-product index the
+    Niko PC software shows as ``BP7`` / ``S1`` etc. (prefix is locale UI
+    text; the number is the data).
+    """
     out: dict[str, tuple[str, str]] = {}
+    numbers: dict[str, int] = {}
     for comp in components:
-        name = (comp.get("StrUserName") or "").strip()
-        if not name:
-            continue
         pa = comp.get("PhysicalAddress")
         if not (isinstance(pa, int) and pa > 0):
             continue  # -1 == a scene group (no bus address)
+        name = (comp.get("StrUserName") or "").strip()
         room = locations.get(comp.get("KeyLocation")) or ""
         if room == _GROUP_LOCATION_SENTINEL:
             room = ""
-        out[_fmt_addr(pa)] = (name, room)
-    return out
+        if not name and not room:
+            continue  # nothing displayable at all
+        addr = _fmt_addr(pa)
+        out[addr] = (name, room)
+        number = comp.get("Number")
+        if isinstance(number, int) and number > 0:
+            numbers[addr] = number
+    return out, numbers
 
 
 def _extract_scenes(
