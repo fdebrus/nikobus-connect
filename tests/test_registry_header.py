@@ -341,3 +341,103 @@ async def test_reset_state_clears_registry_bounds(tmp_path):
 
     await discovery.parse_inventory_response(RECORD_05_061)
     assert "3D8F7C" in discovery.discovered_devices
+
+
+# ---------------------------------------------------------------------------
+# Early-stop: the header count bounds not just parsing but the sweep itself
+#
+# Reference-install timing: registers A0..BB (header + 23 records) took
+# ~4 s; the remaining 68 filler reads took ~10 s more, plus the 10 s
+# inactivity window before finalize — ~20 s of pure wait for 4 s of
+# data. Once the last header-declared record is parsed, the sweep drops
+# this PC-Link's still-queued reads and shortens the inactivity window.
+# Unlike the removed 0.5.13 all-FF terminator, the condition is exact
+# (the device's own header count), not a register-value heuristic.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_early_stop_drains_queue_when_last_record_parsed(tmp_path):
+    coord = _make_coordinator()
+    discovery = _make_discovery(coord, tmp_path)
+    discovery.discovery_stage = "inventory_addresses"
+
+    await discovery.parse_inventory_response(HEADER_FRAME_COUNT_2)
+    await discovery.parse_inventory_response(RECORD_B655)
+    assert coord.nikobus_command.drain_queue.call_count == 0  # 1 of 2 — keep going
+    await discovery.parse_inventory_response(RECORD_05_061)   # 2 of 2 — stop
+
+    coord.nikobus_command.drain_queue.assert_called_once_with(prefix="$1410C798")
+    # The last record itself still classified normally.
+    assert "3D8F7C" in discovery.discovered_devices
+
+
+@pytest.mark.asyncio
+async def test_early_stop_shortens_inactivity_window(tmp_path):
+    from nikobus_connect.discovery.discovery import (
+        _INVENTORY_TIMEOUT_SECONDS,
+        _REGISTRY_EARLY_STOP_TIMEOUT,
+    )
+
+    coord = _make_coordinator()
+    discovery = _make_discovery(coord, tmp_path)
+    discovery.discovery_stage = "inventory_addresses"
+
+    assert discovery._inventory_timeout_seconds == _INVENTORY_TIMEOUT_SECONDS
+    await discovery.parse_inventory_response(HEADER_FRAME_COUNT_2)
+    await discovery.parse_inventory_response(RECORD_B655)
+    assert discovery._inventory_timeout_seconds == _INVENTORY_TIMEOUT_SECONDS
+    await discovery.parse_inventory_response(RECORD_05_061)
+    assert discovery._inventory_timeout_seconds == _REGISTRY_EARLY_STOP_TIMEOUT
+
+    # A fresh scan gets the full window back.
+    discovery.reset_state()
+    assert discovery._inventory_timeout_seconds == _INVENTORY_TIMEOUT_SECONDS
+
+
+@pytest.mark.asyncio
+async def test_no_early_stop_without_header(tmp_path):
+    """Units that never emit the 5E55AAAA header keep the full sweep —
+    the drain must never fire on record count alone."""
+    coord = _make_coordinator()
+    discovery = _make_discovery(coord, tmp_path)
+    discovery.discovery_stage = "inventory_addresses"
+
+    for _ in range(30):
+        await discovery.parse_inventory_response(RECORD_B655)
+
+    assert coord.nikobus_command.drain_queue.call_count == 0
+
+
+@pytest.mark.asyncio
+async def test_no_early_stop_on_all_ff_or_ramp_frames(tmp_path):
+    """Skipped frames (empty slots, filler) don't count as records, so
+    they can't trigger the stop prematurely."""
+    coord = _make_coordinator()
+    discovery = _make_discovery(coord, tmp_path)
+    discovery.discovery_stage = "inventory_addresses"
+
+    all_ff = "2EC798" + "FF" * 16 + "CC98D0"
+    await discovery.parse_inventory_response(HEADER_FRAME_COUNT_2)
+    await discovery.parse_inventory_response(all_ff)
+    await discovery.parse_inventory_response(RAMP_FRAME_00)
+    await discovery.parse_inventory_response(RECORD_B655)
+
+    assert coord.nikobus_command.drain_queue.call_count == 0
+
+
+@pytest.mark.asyncio
+async def test_early_stop_fires_once_and_stragglers_stay_skipped(tmp_path):
+    coord = _make_coordinator()
+    discovery = _make_discovery(coord, tmp_path)
+    discovery.discovery_stage = "inventory_addresses"
+
+    await discovery.parse_inventory_response(HEADER_FRAME_COUNT_2)
+    await discovery.parse_inventory_response(RECORD_B655)
+    await discovery.parse_inventory_response(RECORD_DELETED)  # 2 of 2 — stop
+    # In-flight stragglers after the drain: still skipped, no re-drain.
+    await discovery.parse_inventory_response(RECORD_05_061)
+    await discovery.parse_inventory_response(RAMP_FRAME_00)
+
+    assert coord.nikobus_command.drain_queue.call_count == 1
+    assert "3D8F7C" not in discovery.discovered_devices

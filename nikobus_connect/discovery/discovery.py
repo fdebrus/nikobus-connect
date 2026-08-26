@@ -588,6 +588,17 @@ _REGISTRY_MAX_RECORDS = 512
 #: top out around 2–3.
 _ECHO_RAMP_MIN_RUN = 6
 
+#: Inactivity window (s) for the PC-Link inventory sweep. Reset to this
+#: at the start of every scan; shortened to
+#: ``_REGISTRY_EARLY_STOP_TIMEOUT`` once the header-declared record
+#: count has been fully parsed (see ``_early_stop_registry_sweep``).
+_INVENTORY_TIMEOUT_SECONDS = 10.0
+
+#: Shortened inactivity window used after the registry is fully read —
+#: long enough for the last in-flight response to land, short enough
+#: that finalize follows almost immediately instead of idling 10 s.
+_REGISTRY_EARLY_STOP_TIMEOUT = 1.5
+
 
 def _registry_header_count(data: bytes) -> int | None:
     """Record count from a registry-header frame, or ``None``.
@@ -856,7 +867,7 @@ class NikobusDiscovery:
             if not isinstance(existing, dict):
                 button_data["nikobus_button"] = {}
         self._module_timeout_seconds = 5.0
-        self._inventory_timeout_seconds = 10.0
+        self._inventory_timeout_seconds = _INVENTORY_TIMEOUT_SECONDS
         self._decoders = [
             DimmerDecoder(coordinator),
             SwitchDecoder(coordinator),
@@ -935,6 +946,9 @@ class NikobusDiscovery:
         self._registry_record_limit: int | None = None
         #: Registry slots parsed since the header (live + deleted alike).
         self._registry_records_seen = 0
+        #: Restore the full inactivity window — an early-stop on a
+        #: previous scan shortened it (``_early_stop_registry_sweep``).
+        self._inventory_timeout_seconds = _INVENTORY_TIMEOUT_SECONDS
         self._module_found_data = False
         self._module_consecutive_empties = 0
         self.discovery_stage = None
@@ -1346,6 +1360,46 @@ class NikobusDiscovery:
         self._cancel_inventory_timeout()
         self._inventory_timeout_task = self._create_task(
             self._inventory_timeout_after()
+        )
+
+    def _early_stop_registry_sweep(self, responder: bytes) -> None:
+        """Cut the A0..FF sweep short once the registry is fully read.
+
+        Called from ``parse_inventory_response`` on the frame that
+        carries the LAST header-declared record. Registers past it hold
+        only the wrap-around echo/filler pages, so the ~68 still-queued
+        reads plus the full 10 s inactivity window are pure wait (on the
+        reference install: ~4 s of real data followed by ~20 s of
+        filler + idle). Two actions:
+
+        * drain this PC-Link's remaining ``$1410<addr>…`` reads from the
+          command queue — prefix-filtered on the responder address so a
+          user command queued mid-scan (or another module's reads) is
+          never cancelled;
+        * shorten the inventory inactivity window to
+          ``_REGISTRY_EARLY_STOP_TIMEOUT`` and re-arm it, so finalize
+          follows as soon as the (at most one) in-flight response lands
+          — the past-end guard skips that straggler either way.
+
+        Unlike the 0.5.13 all-FF terminator this removed (it misread
+        legitimate mid-project gaps as end-of-project, issue #319), the
+        stop condition here is exact: the record count is the PC-Link's
+        own header metadata, not a register-value heuristic. Units that
+        never emit the ``5E55AAAA`` header keep the full sweep.
+        """
+        responder_hex = responder.hex().upper()
+        drained = 0
+        nikobus_command = getattr(self._coordinator, "nikobus_command", None)
+        if nikobus_command is not None:
+            drained = nikobus_command.drain_queue(prefix=f"$1410{responder_hex}")
+        self._inventory_timeout_seconds = _REGISTRY_EARLY_STOP_TIMEOUT
+        self._schedule_inventory_timeout()
+        _LOGGER.info(
+            "PC-Link registry fully read — %d/%d record(s) parsed, "
+            "%d queued filler read(s) dropped, finalizing shortly",
+            self._registry_records_seen,
+            self._registry_record_limit,
+            drained,
         )
 
     async def _check_early_termination(self, address: str, had_data: bool) -> bool:
@@ -3081,6 +3135,17 @@ class NikobusDiscovery:
             # Frame occupies a registry slot (live, deleted, or padding
             # alike) — count it against the header's record limit.
             self._registry_records_seen += 1
+            if (
+                self._registry_record_limit is not None
+                and self._registry_records_seen >= self._registry_record_limit
+            ):
+                # This frame is the registry's LAST record — everything
+                # still queued for this PC-Link can only return the
+                # wrap-around filler pages. Stop the sweep now; the
+                # current frame continues through classification below
+                # unaffected. Fires at most once per scan: the past-end
+                # guard returns before this counter can increment again.
+                self._early_stop_registry_sweep(payload_bytes[1:3])
 
             device_type_hex = f"{payload_bytes[7]:02X}"
 
