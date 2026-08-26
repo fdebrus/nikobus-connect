@@ -441,3 +441,61 @@ async def test_early_stop_fires_once_and_stragglers_stay_skipped(tmp_path):
 
     assert coord.nikobus_command.drain_queue.call_count == 1
     assert "3D8F7C" not in discovery.discovered_devices
+
+
+# ---------------------------------------------------------------------------
+# Second reference install (fdebrus, 3.11.0 field log, PC-Link F586) —
+# same registry contract, different cosmetics:
+#
+# * the header page is FF-filled before the magic (no byte ramp);
+# * count 0x2E = 46, and the records occupied exactly A4..D1 in the
+#   field log ("past registry end (46/46)" fired on the D2 read);
+# * past-end reads return ECHOES of recent records (D2/D3 repeated the
+#   D1 record) and FF pages with single-byte corruption — no ramp
+#   pages at all on this unit.
+#
+# Pins that the header detector keys on the magic, not the ramp
+# prefix, and that record-echo wrap frames are handled by the
+# past-end guard (the ramp detector rightly ignores them).
+# ---------------------------------------------------------------------------
+
+HEADER_FRAME_FF_PREFIX = "2EF586FFFFFFFFFFFFFFFF5E55AAAA2E00000032C88D"
+# Register D1 — the 46th and last record on that install (05-302 RF at
+# 2E58F6); registers D2/D3 returned this exact frame again (echo wrap).
+RECORD_LAST_F586 = "2EF586210000001F000080F6582E00060000009FA654"
+# Register A2 — pre-header noise: FF fill with one corrupted byte (BF).
+NOISE_FRAME_BF = "2EF586FFFFFFFFFFFFFFFFBFFFFFFFFFFFFFFF3A4806"
+
+
+def test_header_detector_keys_on_magic_not_ramp_prefix():
+    data = bytes.fromhex(HEADER_FRAME_FF_PREFIX)[3:19]
+    assert _registry_header_count(data) == 46
+    # The noise frame has no magic — never mistaken for a header.
+    assert _registry_header_count(bytes.fromhex(NOISE_FRAME_BF)[3:19]) is None
+
+
+@pytest.mark.asyncio
+async def test_ff_prefix_header_bounds_scan_and_echo_wrap_is_skipped(tmp_path):
+    """Replay the second install's shape with a shrunken count: header
+    (FF-prefix), records, then the last record echoed again (this
+    unit's wrap behavior) — the echo must not re-parse or re-drain."""
+    coord = _make_coordinator()
+    discovery = _make_discovery(coord, tmp_path)
+    discovery.discovery_stage = "inventory_addresses"
+
+    # Real header declares 46; synthesize count=2 to keep the test small.
+    header_count_2 = "2EF586FFFFFFFFFFFFFFFF5E55AAAA02000000000000"
+    await discovery.parse_inventory_response(header_count_2)
+    await discovery.parse_inventory_response(RECORD_B655)
+    await discovery.parse_inventory_response(RECORD_LAST_F586)  # 2/2 — stop
+    # Echo wrap: the same last-record frame arrives again (real D2/D3
+    # behavior), then an FF page with a corrupted byte.
+    await discovery.parse_inventory_response(RECORD_LAST_F586)
+    await discovery.parse_inventory_response(NOISE_FRAME_BF)
+
+    assert coord.nikobus_command.drain_queue.call_count == 1
+    # Drain was filtered on THIS responder's address (F586, not C798).
+    coord.nikobus_command.drain_queue.assert_called_once_with(prefix="$1410F586")
+    # The last record itself decoded (05-302 at 2E58F6), echoes didn't
+    # add anything new.
+    assert "2E58F6" in discovery.discovered_devices
