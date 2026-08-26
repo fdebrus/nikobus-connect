@@ -288,26 +288,41 @@ class NikobusCommandHandler:
         await self._command_queue.put(command_item)
         _LOGGER.debug("Command queued %s", command)
 
-    def drain_queue(self) -> int:
-        """Drain all pending commands from the queue.
+    def drain_queue(self, prefix: str | None = None) -> int:
+        """Drain pending commands from the queue.
 
         Used by discovery to abort remaining register reads after early
-        termination, and by :meth:`reset` after a reconnect. Any queued
+        termination, and by :meth:`reset` after a reconnect. Any drained
         command carrying a caller future gets that future cancelled so
         the awaiter is released instead of hanging until its own
         timeout. Returns the number of discarded commands.
+
+        ``prefix`` limits the drain to commands starting with it (e.g.
+        ``"$1410C798"`` — one PC-Link's register reads), requeueing the
+        rest in their original order; ``None`` drains everything. The
+        filter exists so a mid-scan drain can't cancel unrelated user
+        commands (a light toggle queued while discovery runs).
         """
         count = 0
+        keep: list[dict[str, Any]] = []
         while not self._command_queue.empty():
             try:
                 item = self._command_queue.get_nowait()
             except asyncio.QueueEmpty:
                 break
+            if prefix is not None and not str(
+                item.get("command") or ""
+            ).startswith(prefix):
+                keep.append(item)
+                self._command_queue.task_done()
+                continue
             future = item.get("future")
             if future is not None and not future.done():
                 future.cancel()
             self._command_queue.task_done()
             count += 1
+        for item in keep:
+            self._command_queue.put_nowait(item)
         return count
 
     def reset(self) -> None:

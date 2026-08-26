@@ -341,3 +341,232 @@ async def test_reset_state_clears_registry_bounds(tmp_path):
 
     await discovery.parse_inventory_response(RECORD_05_061)
     assert "3D8F7C" in discovery.discovered_devices
+
+
+# ---------------------------------------------------------------------------
+# Early-stop: the header count bounds not just parsing but the sweep itself
+#
+# Reference-install timing: registers A0..BB (header + 23 records) took
+# ~4 s; the remaining 68 filler reads took ~10 s more, plus the 10 s
+# inactivity window before finalize — ~20 s of pure wait for 4 s of
+# data. Once the last header-declared record is parsed, the sweep drops
+# this PC-Link's still-queued reads and shortens the inactivity window.
+# Unlike the removed 0.5.13 all-FF terminator, the condition is exact
+# (the device's own header count), not a register-value heuristic.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_early_stop_drains_queue_when_last_record_parsed(tmp_path):
+    coord = _make_coordinator()
+    discovery = _make_discovery(coord, tmp_path)
+    discovery.discovery_stage = "inventory_addresses"
+
+    await discovery.parse_inventory_response(HEADER_FRAME_COUNT_2)
+    await discovery.parse_inventory_response(RECORD_B655)
+    assert coord.nikobus_command.drain_queue.call_count == 0  # 1 of 2 — keep going
+    await discovery.parse_inventory_response(RECORD_05_061)   # 2 of 2 — stop
+
+    coord.nikobus_command.drain_queue.assert_called_once_with(prefix="$1410C798")
+    # The last record itself still classified normally.
+    assert "3D8F7C" in discovery.discovered_devices
+
+
+@pytest.mark.asyncio
+async def test_early_stop_shortens_inactivity_window(tmp_path):
+    from nikobus_connect.discovery.discovery import (
+        _INVENTORY_TIMEOUT_SECONDS,
+        _REGISTRY_EARLY_STOP_TIMEOUT,
+    )
+
+    coord = _make_coordinator()
+    discovery = _make_discovery(coord, tmp_path)
+    discovery.discovery_stage = "inventory_addresses"
+
+    assert discovery._inventory_timeout_seconds == _INVENTORY_TIMEOUT_SECONDS
+    await discovery.parse_inventory_response(HEADER_FRAME_COUNT_2)
+    await discovery.parse_inventory_response(RECORD_B655)
+    assert discovery._inventory_timeout_seconds == _INVENTORY_TIMEOUT_SECONDS
+    await discovery.parse_inventory_response(RECORD_05_061)
+    assert discovery._inventory_timeout_seconds == _REGISTRY_EARLY_STOP_TIMEOUT
+
+    # A fresh scan gets the full window back.
+    discovery.reset_state()
+    assert discovery._inventory_timeout_seconds == _INVENTORY_TIMEOUT_SECONDS
+
+
+@pytest.mark.asyncio
+async def test_no_early_stop_without_header(tmp_path):
+    """Units that never emit the 5E55AAAA header keep the full sweep —
+    the drain must never fire on record count alone."""
+    coord = _make_coordinator()
+    discovery = _make_discovery(coord, tmp_path)
+    discovery.discovery_stage = "inventory_addresses"
+
+    for _ in range(30):
+        await discovery.parse_inventory_response(RECORD_B655)
+
+    assert coord.nikobus_command.drain_queue.call_count == 0
+
+
+@pytest.mark.asyncio
+async def test_no_early_stop_on_all_ff_or_ramp_frames(tmp_path):
+    """Skipped frames (empty slots, filler) don't count as records, so
+    they can't trigger the stop prematurely."""
+    coord = _make_coordinator()
+    discovery = _make_discovery(coord, tmp_path)
+    discovery.discovery_stage = "inventory_addresses"
+
+    all_ff = "2EC798" + "FF" * 16 + "CC98D0"
+    await discovery.parse_inventory_response(HEADER_FRAME_COUNT_2)
+    await discovery.parse_inventory_response(all_ff)
+    await discovery.parse_inventory_response(RAMP_FRAME_00)
+    await discovery.parse_inventory_response(RECORD_B655)
+
+    assert coord.nikobus_command.drain_queue.call_count == 0
+
+
+@pytest.mark.asyncio
+async def test_early_stop_fires_once_and_stragglers_stay_skipped(tmp_path):
+    coord = _make_coordinator()
+    discovery = _make_discovery(coord, tmp_path)
+    discovery.discovery_stage = "inventory_addresses"
+
+    await discovery.parse_inventory_response(HEADER_FRAME_COUNT_2)
+    await discovery.parse_inventory_response(RECORD_B655)
+    await discovery.parse_inventory_response(RECORD_DELETED)  # 2 of 2 — stop
+    # In-flight stragglers after the drain: still skipped, no re-drain.
+    await discovery.parse_inventory_response(RECORD_05_061)
+    await discovery.parse_inventory_response(RAMP_FRAME_00)
+
+    assert coord.nikobus_command.drain_queue.call_count == 1
+    assert "3D8F7C" not in discovery.discovered_devices
+
+
+# ---------------------------------------------------------------------------
+# Second reference install (fdebrus, 3.11.0 field log, PC-Link F586) —
+# same registry contract, different cosmetics:
+#
+# * the header page is FF-filled before the magic (no byte ramp);
+# * count 0x2E = 46, and the records occupied exactly A4..D1 in the
+#   field log ("past registry end (46/46)" fired on the D2 read);
+# * past-end reads return ECHOES of recent records (D2/D3 repeated the
+#   D1 record) and FF pages with single-byte corruption — no ramp
+#   pages at all on this unit.
+#
+# Pins that the header detector keys on the magic, not the ramp
+# prefix, and that record-echo wrap frames are handled by the
+# past-end guard (the ramp detector rightly ignores them).
+# ---------------------------------------------------------------------------
+
+HEADER_FRAME_FF_PREFIX = "2EF586FFFFFFFFFFFFFFFF5E55AAAA2E00000032C88D"
+# Register D1 — the 46th and last record on that install (05-302 RF at
+# 2E58F6); registers D2/D3 returned this exact frame again (echo wrap).
+RECORD_LAST_F586 = "2EF586210000001F000080F6582E00060000009FA654"
+# Register A2 — pre-header noise: FF fill with one corrupted byte (BF).
+NOISE_FRAME_BF = "2EF586FFFFFFFFFFFFFFFFBFFFFFFFFFFFFFFF3A4806"
+
+
+def test_header_detector_keys_on_magic_not_ramp_prefix():
+    data = bytes.fromhex(HEADER_FRAME_FF_PREFIX)[3:19]
+    assert _registry_header_count(data) == 46
+    # The noise frame has no magic — never mistaken for a header.
+    assert _registry_header_count(bytes.fromhex(NOISE_FRAME_BF)[3:19]) is None
+
+
+@pytest.mark.asyncio
+async def test_ff_prefix_header_bounds_scan_and_echo_wrap_is_skipped(tmp_path):
+    """Replay the second install's shape with a shrunken count: header
+    (FF-prefix), records, then the last record echoed again (this
+    unit's wrap behavior) — the echo must not re-parse or re-drain."""
+    coord = _make_coordinator()
+    discovery = _make_discovery(coord, tmp_path)
+    discovery.discovery_stage = "inventory_addresses"
+
+    # Real header declares 46; synthesize count=2 to keep the test small.
+    header_count_2 = "2EF586FFFFFFFFFFFFFFFF5E55AAAA02000000000000"
+    await discovery.parse_inventory_response(header_count_2)
+    await discovery.parse_inventory_response(RECORD_B655)
+    await discovery.parse_inventory_response(RECORD_LAST_F586)  # 2/2 — stop
+    # Echo wrap: the same last-record frame arrives again (real D2/D3
+    # behavior), then an FF page with a corrupted byte.
+    await discovery.parse_inventory_response(RECORD_LAST_F586)
+    await discovery.parse_inventory_response(NOISE_FRAME_BF)
+
+    assert coord.nikobus_command.drain_queue.call_count == 1
+    # Drain was filtered on THIS responder's address (F586, not C798).
+    coord.nikobus_command.drain_queue.assert_called_once_with(prefix="$1410F586")
+    # The last record itself decoded (05-302 at 2E58F6), echoes didn't
+    # add anything new.
+    assert "2E58F6" in discovery.discovered_devices
+
+
+# ---------------------------------------------------------------------------
+# Component.Number — the registry record's trailing u32 is the index the
+# Niko software shows as "BP7" / "S1". Verified byte-for-byte against
+# the .nkb Component table on both reference installs. Extracted only
+# when the scan saw the registry header (header-less units give no
+# basis to trust the layout), and persisted through the button merge so
+# the HA side can number plates like the Niko app without an .nkb.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_component_number_extracted_after_header(tmp_path):
+    coord = _make_coordinator()
+    discovery = _make_discovery(coord, tmp_path)
+    discovery.discovery_stage = "inventory_addresses"
+
+    await discovery.parse_inventory_response(HEADER_FRAME)
+    await discovery.parse_inventory_response(RECORD_B655)
+    await discovery.parse_inventory_response(RECORD_05_061)
+
+    # B655 switch module is Component.Number 1; the 05-061 plate is
+    # BP 2 — both match the install's .nkb.
+    assert discovery.discovered_devices["B655"]["component_number"] == 1
+    assert discovery.discovered_devices["3D8F7C"]["component_number"] == 2
+
+
+@pytest.mark.asyncio
+async def test_component_number_absent_without_header(tmp_path):
+    """A unit that never emitted the 5E55AAAA header gets no numbers —
+    the trailing bytes' meaning is only established for the registry
+    format the header identifies."""
+    coord = _make_coordinator()
+    discovery = _make_discovery(coord, tmp_path)
+    discovery.discovery_stage = "inventory_addresses"
+
+    await discovery.parse_inventory_response(RECORD_05_061)
+
+    assert "component_number" not in discovery.discovered_devices["3D8F7C"]
+
+
+def test_component_number_persists_through_button_merge():
+    from nikobus_connect.discovery.fileio import merge_discovered_buttons
+    from nikobus_connect.discovery.mapping import KEY_MAPPING_MODULE
+    from nikobus_connect.discovery.protocol import convert_nikobus_address
+
+    button_data: dict = {"nikobus_button": {}}
+    devices = {
+        "3D8F7C": {
+            "category": "Button",
+            "description": "Bus push button, 2 control buttons with feedback LEDs",
+            "model": "05-061",
+            "channels": 2,
+            "device_type": "05",
+            "component_number": 2,
+        }
+    }
+    merge_discovered_buttons(
+        button_data, devices, KEY_MAPPING_MODULE, convert_nikobus_address
+    )
+    phys = button_data["nikobus_button"]["3D8F7C"]
+    assert phys["component_number"] == 2
+
+    # Re-merge without a number (e.g. a later header-less scan) keeps
+    # the stored one rather than dropping it.
+    del devices["3D8F7C"]["component_number"]
+    merge_discovered_buttons(
+        button_data, devices, KEY_MAPPING_MODULE, convert_nikobus_address
+    )
+    assert button_data["nikobus_button"]["3D8F7C"]["component_number"] == 2

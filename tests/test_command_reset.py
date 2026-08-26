@@ -39,3 +39,35 @@ async def test_drain_queue_returns_discard_count() -> None:
         handler._command_queue.put_nowait({"command": f"cmd{i}"})
     assert handler.drain_queue() == 3
     assert handler.drain_queue() == 0
+
+
+async def test_drain_queue_prefix_drains_only_matching_commands() -> None:
+    """The prefix filter (0.33.0, registry early-stop) drains one
+    PC-Link's register reads while leaving unrelated queued commands —
+    e.g. a user's light toggle queued mid-scan — in their original
+    order."""
+    handler = _handler()
+    loop = asyncio.get_running_loop()
+    inv_fut: asyncio.Future[str] = loop.create_future()
+    handler._command_queue.put_nowait(
+        {"command": "$1410C798BC04AABBCC", "future": inv_fut}
+    )
+    handler._command_queue.put_nowait({"command": "$1512340100FFDDEE"})  # user cmd
+    handler._command_queue.put_nowait({"command": "$1410C798BD04AABBCC"})
+    handler._command_queue.put_nowait({"command": "$14105599A004AABBCC"})  # other addr
+
+    assert handler.drain_queue(prefix="$1410C798") == 2
+    assert inv_fut.cancelled()
+
+    remaining = []
+    while not handler._command_queue.empty():
+        remaining.append(handler._command_queue.get_nowait()["command"])
+    assert remaining == ["$1512340100FFDDEE", "$14105599A004AABBCC"]
+
+
+async def test_drain_queue_without_prefix_still_drains_everything() -> None:
+    handler = _handler()
+    handler._command_queue.put_nowait({"command": "$1410C798BC04AABBCC"})
+    handler._command_queue.put_nowait({"command": "$1512340100FFDDEE"})
+    assert handler.drain_queue() == 2
+    assert handler._command_queue.empty()
