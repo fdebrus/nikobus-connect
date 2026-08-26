@@ -705,6 +705,11 @@ def merge_discovered_buttons(
         phys_entry["type"] = description or phys_entry.get("type") or ""
         phys_entry["model"] = model or phys_entry.get("model") or ""
         phys_entry["channels"] = num_channels or phys_entry.get("channels")
+        # Component.Number from the PC-Link registry record — the index
+        # the Niko software shows as "BP7". Refreshed on every scan so a
+        # renumbered project propagates; absent on header-less units.
+        if device.get("component_number"):
+            phys_entry["component_number"] = device["component_number"]
         # Carry through PC-Logic provenance fields when present —
         # synthesized PC-Logic logical-input entries set
         # ``pc_logic_parent_address`` + ``pc_logic_slot_index`` so the

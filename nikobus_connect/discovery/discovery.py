@@ -3229,6 +3229,23 @@ class NikobusDiscovery:
                     converted_address,
                 )
 
+            # Trailing u32 of a registry record is the Niko software's
+            # Component.Number — the index the app shows as "BP7" / "S1".
+            # Verified byte-for-byte against the .nkb Component table on
+            # two installs (#478 C798 and the maintainer's F586). Only
+            # trusted when this scan saw the registry header page: the
+            # record layout is a registry structure, and a unit that
+            # never emits the ``5E55AAAA`` header gives us no basis to
+            # assume these bytes mean the same thing.
+            component_number: int | None = None
+            if (
+                self._registry_record_limit is not None
+                and len(payload_bytes) >= 19
+            ):
+                number = int.from_bytes(payload_bytes[15:19], "little")
+                if 0 < number <= 0xFFFF:
+                    component_number = number
+
             last_seen = datetime.now(timezone.utc).isoformat()
             device_entry = {
                 "description": name,
@@ -3243,6 +3260,8 @@ class NikobusDiscovery:
                 "discovered": True,
                 "last_discovered": last_seen,
             }
+            if component_number is not None:
+                device_entry["component_number"] = component_number
 
             if category == "Button":
                 result.buttons.append(device_entry)

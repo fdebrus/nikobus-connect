@@ -499,3 +499,74 @@ async def test_ff_prefix_header_bounds_scan_and_echo_wrap_is_skipped(tmp_path):
     # The last record itself decoded (05-302 at 2E58F6), echoes didn't
     # add anything new.
     assert "2E58F6" in discovery.discovered_devices
+
+
+# ---------------------------------------------------------------------------
+# Component.Number — the registry record's trailing u32 is the index the
+# Niko software shows as "BP7" / "S1". Verified byte-for-byte against
+# the .nkb Component table on both reference installs. Extracted only
+# when the scan saw the registry header (header-less units give no
+# basis to trust the layout), and persisted through the button merge so
+# the HA side can number plates like the Niko app without an .nkb.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_component_number_extracted_after_header(tmp_path):
+    coord = _make_coordinator()
+    discovery = _make_discovery(coord, tmp_path)
+    discovery.discovery_stage = "inventory_addresses"
+
+    await discovery.parse_inventory_response(HEADER_FRAME)
+    await discovery.parse_inventory_response(RECORD_B655)
+    await discovery.parse_inventory_response(RECORD_05_061)
+
+    # B655 switch module is Component.Number 1; the 05-061 plate is
+    # BP 2 — both match the install's .nkb.
+    assert discovery.discovered_devices["B655"]["component_number"] == 1
+    assert discovery.discovered_devices["3D8F7C"]["component_number"] == 2
+
+
+@pytest.mark.asyncio
+async def test_component_number_absent_without_header(tmp_path):
+    """A unit that never emitted the 5E55AAAA header gets no numbers —
+    the trailing bytes' meaning is only established for the registry
+    format the header identifies."""
+    coord = _make_coordinator()
+    discovery = _make_discovery(coord, tmp_path)
+    discovery.discovery_stage = "inventory_addresses"
+
+    await discovery.parse_inventory_response(RECORD_05_061)
+
+    assert "component_number" not in discovery.discovered_devices["3D8F7C"]
+
+
+def test_component_number_persists_through_button_merge():
+    from nikobus_connect.discovery.fileio import merge_discovered_buttons
+    from nikobus_connect.discovery.mapping import KEY_MAPPING_MODULE
+    from nikobus_connect.discovery.protocol import convert_nikobus_address
+
+    button_data: dict = {"nikobus_button": {}}
+    devices = {
+        "3D8F7C": {
+            "category": "Button",
+            "description": "Bus push button, 2 control buttons with feedback LEDs",
+            "model": "05-061",
+            "channels": 2,
+            "device_type": "05",
+            "component_number": 2,
+        }
+    }
+    merge_discovered_buttons(
+        button_data, devices, KEY_MAPPING_MODULE, convert_nikobus_address
+    )
+    phys = button_data["nikobus_button"]["3D8F7C"]
+    assert phys["component_number"] == 2
+
+    # Re-merge without a number (e.g. a later header-less scan) keeps
+    # the stored one rather than dropping it.
+    del devices["3D8F7C"]["component_number"]
+    merge_discovered_buttons(
+        button_data, devices, KEY_MAPPING_MODULE, convert_nikobus_address
+    )
+    assert button_data["nikobus_button"]["3D8F7C"]["component_number"] == 2
