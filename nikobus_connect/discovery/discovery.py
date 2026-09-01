@@ -1580,7 +1580,7 @@ class NikobusDiscovery:
                 continue
             try:
                 input_physicals = derive_pc_logic_input_physicals(
-                    module_addr, channels_count
+                    module_addr, channels_count, module_type=module_type
                 )
             except ValueError as err:
                 _LOGGER.warning(
@@ -1593,6 +1593,41 @@ class NikobusDiscovery:
                 continue
 
             description, model = type_metadata[module_type]
+
+            # Purge stale synthesized entries for this module: stores
+            # written before 0.34.0 hold interface_module inputs at
+            # pc_logic-formula addresses (e.g. 602A41 for module 0548)
+            # that the hardware never emits — issue #485. Any stored
+            # entry claiming this module as its input parent but not
+            # matching the freshly derived set is such residue; drop it
+            # so the corrected entries below replace it instead of
+            # coexisting as dead devices. Real wall buttons never carry
+            # the pc_logic_parent_address provenance, so they can't
+            # match.
+            if self._button_data is not None:
+                buttons_store = self._button_data.get("nikobus_button")
+                if isinstance(buttons_store, dict):
+                    valid = set(input_physicals)
+                    stale = [
+                        key
+                        for key, entry in buttons_store.items()
+                        if isinstance(entry, dict)
+                        and str(entry.get("pc_logic_parent_address") or "").upper()
+                        == str(module_addr).upper()
+                        and key not in valid
+                    ]
+                    for key in stale:
+                        del buttons_store[key]
+                    if stale:
+                        _LOGGER.info(
+                            "Purged %d stale synthesized input(s) for %s %s "
+                            "(pre-0.34.0 address scheme): %s",
+                            len(stale),
+                            module_type,
+                            module_addr,
+                            ", ".join(sorted(stale)),
+                        )
+
             for slot_index, input_phys in enumerate(input_physicals, start=1):
                 if input_phys in self.discovered_devices:
                     # Real button already discovered at this address —
