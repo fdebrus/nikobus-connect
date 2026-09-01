@@ -194,13 +194,34 @@ def convert_nikobus_address(address_string: str) -> str:
 
 
 def derive_pc_logic_input_physicals(
-    pc_logic_address: str, channel_count: int = 6
+    pc_logic_address: str,
+    channel_count: int = 6,
+    module_type: str = "pc_logic",
 ) -> list[str]:
-    """Compute the physical addresses of a PC-Logic module's logical inputs.
+    """Compute the physical addresses of an input module's inputs.
 
     Returns ``channel_count`` 6-char hex addresses, one per input slot
-    (1-indexed). Empirically validated against two installs:
-    ``940C → 64A061..64A066`` and ``8DC8 → 646E41..646E46``.
+    (1-indexed). The two input-module families use DIFFERENT firmware
+    schemes — both hardware-validated from wire captures:
+
+    * ``pc_logic`` (05-201): ``0x600000 | ((addr >> 1) << 4) | slot``.
+      Validated on three installs: ``940C → 64A061..64A066`` (12 bus
+      events, 2026-05-18), ``8DC8 → 646E41..646E46``, and ``8806``
+      (issue #485 — its slot-2 pair ``13008B/53008B`` captured from a
+      physical contact matches this scheme exactly).
+    * ``interface_module`` (05-206): ``0x180000 + addr + slot``.
+      Derived and validated from issue #485's captures on unit
+      ``0548``: slot 1 emits ``24A806/64A806`` and slot 2 emits
+      ``14A806/54A806`` on the wire — both reproduced byte-for-byte
+      by this scheme through the standard conversion + key-offset
+      pipeline, while NO input to the pc_logic scheme can produce
+      them (verified by exhaustive search over all 2^16 module
+      addresses). The 0x18 high byte is the canonical choice among
+      the conversion's non-bijective preimages; the resulting wire
+      addresses are identical for any of them.
+
+    Any other ``module_type`` falls back to the pc_logic scheme (the
+    pre-0.34.0 behaviour for both types).
 
     Raises ``ValueError`` if ``pc_logic_address`` is malformed.
     """
@@ -221,6 +242,12 @@ def derive_pc_logic_input_physicals(
         raise ValueError(
             f"channel_count {channel_count} out of plausible range 1..16"
         )
+
+    if module_type == "interface_module":
+        return [
+            f"{0x180000 + addr + slot:06X}"
+            for slot in range(1, channel_count + 1)
+        ]
 
     base = 0x600000 | ((addr >> 1) << 4)
     return [f"{base | slot:06X}" for slot in range(1, channel_count + 1)]

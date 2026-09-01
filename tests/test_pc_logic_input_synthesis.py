@@ -174,22 +174,26 @@ def test_inverse_pc_logic_slot_index_8dc8():
 
 
 # ---------------------------------------------------------------------------
-# Interface-module synthesis (05-206) — same formula, hypothesis pending
-# hardware confirmation
+# Interface-module synthesis (05-206) — OWN address scheme, hardware-
+# validated (issue #485)
 # ---------------------------------------------------------------------------
 #
-# The 05-206 Modular Interface has the same 6-input shape as PC-Logic but
-# wired contacts instead of logical engine. We're applying the same
-# address-derivation formula to it on the working hypothesis that the
-# firmware uses the same scheme. The user with interface_module at 0x6E40
-# can confirm against real bus events; these tests pin the predicted
-# addresses so any future correction is immediately visible.
+# The pre-0.34.0 hypothesis (same formula as PC-Logic) was pinned here
+# with a "fails loudly if hardware disagrees" test. Hardware disagreed:
+# unit 0548's inputs emit 24A806/64A806 (slot 1) and 14A806/54A806
+# (slot 2) on the wire — reproduced exactly by
+# ``0x180000 + module_addr + slot``, and provably unreachable by the
+# pc_logic scheme (exhaustive search over all 2^16 module addresses).
+# The PC-Logic scheme itself was re-validated on the SAME install
+# (module 8806, physical contact capture) — the two families genuinely
+# use different firmware derivations.
 
 
 def test_synthesize_extends_to_interface_module(tmp_path):
-    """A 05-206 interface_module discovery entry should now trigger
-    the same synthesis path as pc_logic — six button entries, each
-    carrying provenance tagged with module_type='interface_module'."""
+    """A 05-206 interface_module discovery entry triggers the same
+    synthesis path as pc_logic — six button entries, each carrying
+    provenance tagged with module_type='interface_module' — but with
+    the interface-specific address scheme."""
 
     discovery = _make_discovery(tmp_path)
     discovery.discovered_devices = {
@@ -205,7 +209,7 @@ def test_synthesize_extends_to_interface_module(tmp_path):
 
     discovery._synthesize_pc_logic_inputs()
 
-    expected_physicals = [f"63720{slot}" for slot in range(1, 7)]
+    expected_physicals = [f"186E4{slot}" for slot in range(1, 7)]
     for slot, phys in enumerate(expected_physicals, start=1):
         assert phys in discovery.discovered_devices, phys
         entry = discovery.discovered_devices[phys]
@@ -218,23 +222,20 @@ def test_synthesize_extends_to_interface_module(tmp_path):
         assert entry["description"] == NikobusDiscovery.INTERFACE_MODULE_INPUT_TYPE
 
 
-def test_interface_module_predicted_bus_addresses_pending_verification(tmp_path):
-    """Pin the predicted 1A / 1B bus addresses for the user's
-    interface_module at 0x6E40. These come from applying the
-    PC-Logic formula to the module address; they need confirmation
-    against actual bus events.
-
-    If hardware later reports different addresses, this test fails
-    loudly — that's the signal to revisit the assumption that the
-    same formula applies to 05-206."""
+def test_interface_module_bus_addresses_through_the_merge(tmp_path):
+    """End-to-end: interface_module 0x6E40 synthesized and merged must
+    listen on the addresses the 05-206 scheme produces. (The previous
+    revision of this test pinned the pc_logic-formula prediction with a
+    'fails loudly if hardware disagrees' note — hardware disagreed in
+    issue #485, which is exactly how the wrong assumption surfaced.)"""
 
     expected = {
-        "637201": {"1A": "2013B3", "1B": "6013B3"},
-        "637202": {"1A": "1013B3", "1B": "5013B3"},
-        "637203": {"1A": "3013B3", "1B": "7013B3"},
-        "637204": {"1A": "0813B3", "1B": "4813B3"},
-        "637205": {"1A": "2813B3", "1B": "6813B3"},
-        "637206": {"1A": "1813B3", "1B": "5813B3"},
+        "186E41": {"1A": "209D86", "1B": "609D86"},
+        "186E42": {"1A": "109D86", "1B": "509D86"},
+        "186E43": {"1A": "309D86", "1B": "709D86"},
+        "186E44": {"1A": "089D86", "1B": "489D86"},
+        "186E45": {"1A": "289D86", "1B": "689D86"},
+        "186E46": {"1A": "189D86", "1B": "589D86"},
     }
 
     discovery = _make_discovery(tmp_path)
@@ -631,3 +632,105 @@ def test_regular_2channel_button_still_uses_standard_offsets(tmp_path):
     # +C -> F. From the real-install dump shared by the user.
     assert ops["1A"]["bus_address"] == "B46642"
     assert ops["1B"]["bus_address"] == "F46642"
+
+
+# ---------------------------------------------------------------------------
+# Issue #485 hardware anchors — interface_module 0548 + pc_logic 8806
+#
+# All wire addresses below were captured from PHYSICAL contact toggles
+# on the reporter's install (window sensor / terminal short), not from
+# HA-side presses — the first true inbound validation for the 05-206.
+# ---------------------------------------------------------------------------
+
+
+def test_issue_485_interface_module_0548_matches_captured_frames():
+    """Unit 0548's slot-1 pair (24A806/64A806, window contact) and
+    slot-2 pair (14A806/54A806, requested confirmation capture) must
+    both be reproduced by derivation + conversion + key offsets."""
+
+    physicals = derive_pc_logic_input_physicals(
+        "0548", 6, module_type="interface_module"
+    )
+    assert physicals == [
+        "180549", "18054A", "18054B", "18054C", "18054D", "18054E",
+    ]
+
+    def pair(phys):
+        c = convert_nikobus_address(phys)
+        n = int(c[0], 16)
+        return {f"{n:X}{c[1:]}", f"{(n + 4) & 0xF:X}{c[1:]}"}
+
+    assert pair("180549") == {"24A806", "64A806"}  # slot 1, captured
+    assert pair("18054A") == {"14A806", "54A806"}  # slot 2, captured
+
+
+def test_issue_485_pc_logic_8806_still_uses_classic_scheme():
+    """The SAME install's Logic Module capture emitted 13008B/53008B —
+    the classic pc_logic scheme's slot-2 pair — proving the two
+    module families use different derivations (not a firmware
+    generation split)."""
+
+    physicals = derive_pc_logic_input_physicals("8806", 6)
+    assert physicals[1] == "644032"
+
+    c = convert_nikobus_address("644032")
+    n = int(c[0], 16)
+    assert {f"{n:X}{c[1:]}", f"{(n + 4) & 0xF:X}{c[1:]}"} == {
+        "13008B", "53008B",
+    }
+
+
+def test_synthesis_purges_pre_0_34_interface_entries(tmp_path):
+    """Stores written before 0.34.0 hold interface inputs at
+    pc_logic-formula addresses (602A41.. for module 0548). Re-running
+    synthesis must drop them so the corrected entries replace them
+    instead of coexisting as dead devices — while leaving real wall
+    buttons and correctly-addressed pc_logic entries untouched."""
+
+    discovery = _make_discovery(tmp_path)
+    buttons_store = discovery._button_data["nikobus_button"]
+    # Stale pre-0.34.0 synthesized interface entry (issue #485's store):
+    buttons_store["602A41"] = {
+        "description": "Modular Interface Input #N602A41",
+        "pc_logic_parent_address": "0548",
+        "pc_logic_parent_type": "interface_module",
+        "pc_logic_slot_index": 1,
+    }
+    # Correct pc_logic entry for another module — must survive:
+    buttons_store["644031"] = {
+        "description": "PC-Logic Logical Input #N644031",
+        "pc_logic_parent_address": "8806",
+        "pc_logic_parent_type": "pc_logic",
+        "pc_logic_slot_index": 1,
+    }
+    # Real wall button — no provenance, must survive:
+    buttons_store["1843B4"] = {
+        "description": "Bus push button, 4 control buttons #N1843B4",
+    }
+
+    discovery.discovered_devices = {
+        "0548": {
+            "category": "Module",
+            "module_type": "interface_module",
+            "model": "05-206",
+            "address": "0548",
+            "channels": 6,
+            "channels_count": 6,
+        },
+        "8806": {
+            "category": "Module",
+            "module_type": "pc_logic",
+            "model": "05-201",
+            "address": "8806",
+            "channels": 6,
+            "channels_count": 6,
+        },
+    }
+    discovery._synthesize_pc_logic_inputs()
+
+    assert "602A41" not in buttons_store          # stale scheme purged
+    assert "644031" in buttons_store              # correct pc_logic kept
+    assert "1843B4" in buttons_store              # real button kept
+    # Corrected interface physicals synthesized for the merge to land:
+    assert "180549" in discovery.discovered_devices
+    assert "18054A" in discovery.discovered_devices
