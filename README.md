@@ -134,6 +134,10 @@ from nikobus_connect.discovery import NikobusDiscovery
 
 `NikobusDiscovery` is designed to be driven by a coordinator that owns the command handler and a background task scheduler — see the [Home Assistant integration](https://github.com/fdebrus/Nikobus-Home-Assistant) for a complete reference implementation.
 
+## Protocol documentation
+
+The Nikobus protocol has never been published by Niko NV. Everything this library implements is reverse-engineered and hardware-validated; [PROTOCOL.md](PROTOCOL.md) consolidates what is known — frame formats, checksums, address encodings, controller register layouts, and the logical-input address schemes — with the evidence behind each claim.
+
 ## Package structure
 
 ```
