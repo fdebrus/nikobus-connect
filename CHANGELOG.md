@@ -9,7 +9,6 @@
 - **Discovery reads exactly the records a module holds.** Before scanning an output module the engine asks it for its record counts (0x11) and reads only those blocks — switch/roller from block 0x10, dimmer bank 0 from 0x20, bank 1 from sub 01/0x20 plus the configuration blocks — instead of a fixed band. Modules with more links than the old band covered are now read completely; modules that don't answer 0x11 keep the fixed band. An EEPROM-error flag is logged.
 - **Dimmer T2 (ramp time) is decoded** from the record's third byte instead of being reported as unknown.
 - **Registry header accepts every header version.** The PC-Link registry marker is `<ver> 55 AA AA <count>` with `ver` in 0x49..0x5E; only 0x5E was recognised before, so older units never got the count-bounded sweep.
-- PROTOCOL.md rewritten: full command table (status, block read, CRC, clock), acknowledgement scheme, module memory layouts (hash index, record bit layout, dimmer banks and configuration block), controller register bands and the versioned header.
 
 
 ## 0.28.0
