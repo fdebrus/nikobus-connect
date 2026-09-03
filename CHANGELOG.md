@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.35.1
+
+- **Fix: dimmer integrity check reported a false CRC mismatch.** A dimmer module's self-reported CRC16 (function 0x13) covers both link banks but skips the six bytes between them (0x7FA..0x7FF); `verify_module_memory()` computed it over the whole image, so every dimmer failed the check. Validated on a real 05-007: only that coverage reproduces the module's CRC. New `image_crc()` / `MODULE_CRC_RANGES` hold the per-module coverage.
+
+
 ## 0.35.0
 
 **Module status, integrity and clock commands; scans sized by the module itself.**

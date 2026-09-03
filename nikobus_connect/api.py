@@ -42,6 +42,24 @@ MODULE_IMAGE_SIZES: Final[dict[str, int]] = {
     "dimmer_module": 0xFD0,
 }
 
+# Byte ranges a module includes in the CRC16 it reports for function
+# 0x13. Switch/roller modules cover their whole image. Dimmers cover
+# both banks but skip the six bytes between them (0x7FA..0x7FF, a
+# version/flags word) — validated on a real 05-007: only this coverage
+# reproduces the module-reported CRC. Absent entry = whole image.
+MODULE_CRC_RANGES: Final[dict[str, tuple[tuple[int, int], ...]]] = {
+    "dimmer_module": ((0x000, 0x7FA), (0x800, 0xFD0)),
+}
+
+
+def image_crc(image: bytes, module_type: str) -> int:
+    """CRC16 over the parts of ``image`` the module itself checksums."""
+    ranges = MODULE_CRC_RANGES.get(module_type)
+    covered = (
+        image if ranges is None else b"".join(image[start:end] for start, end in ranges)
+    )
+    return calc_crc1(covered.hex())
+
 
 class NikobusAPI:
     """Nikobus API with optimistic state updates and consolidated logic."""
@@ -268,6 +286,6 @@ class NikobusAPI:
         """
         if image is None:
             image = await self.read_module_memory(address, module_type)
-        computed = calc_crc1(image.hex())
+        computed = image_crc(image, module_type)
         reported = await self.get_module_crc(address)
         return reported == computed, reported, computed
