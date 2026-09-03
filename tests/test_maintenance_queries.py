@@ -154,3 +154,29 @@ def test_query_ignores_unrelated_frames():
         assert payload[:2] == bytes.fromhex("F586")
 
     asyncio.run(scenario())
+
+
+# --- image CRC coverage ----------------------------------------------------
+
+
+def test_dimmer_crc_skips_inter_bank_gap():
+    from nikobus_connect.api import MODULE_IMAGE_SIZES, image_crc
+
+    image = bytearray(b"\xff" * MODULE_IMAGE_SIZES["dimmer_module"])
+    image[0x100:0x108] = b"\x12\x34\x56\x70\x21\x05\x00\x00"  # a bank-0 record
+    image[0x900:0x908] = b"\x12\x34\x56\x70\x21\x05\x00\x00"  # a bank-1 record
+    base = image_crc(bytes(image), "dimmer_module")
+    # The six bytes between the banks (version/flags word) are not covered…
+    image[0x7FA:0x800] = b"\x08\x03\xff\xff\xff\xff"
+    assert image_crc(bytes(image), "dimmer_module") == base
+    # …but every bank byte is.
+    image[0x901] ^= 0xFF
+    assert image_crc(bytes(image), "dimmer_module") != base
+
+
+def test_switch_crc_covers_whole_image():
+    from nikobus_connect.api import MODULE_IMAGE_SIZES, image_crc
+    from nikobus_connect.protocol import calc_crc1
+
+    image = bytes(range(256)) * (MODULE_IMAGE_SIZES["switch_module"] // 256)
+    assert image_crc(image, "switch_module") == calc_crc1(image.hex())
