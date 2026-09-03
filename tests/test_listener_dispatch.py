@@ -138,3 +138,37 @@ def test_reset_clears_all_per_connection_state() -> None:
     assert listener._frame_buffer == ""
     assert listener._last_query_group == {}
     assert listener.response_queue.empty()
+
+
+async def test_awaited_clock_reply_skips_feedback_callback() -> None:
+    """A PC-Link clock reply ($1CFF...) has the frame code of an output
+    state answer. While the command layer waits for it, it must reach the
+    response queue only — the feedback callback would file it as the
+    state of a phantom module (the PC-Link address, byte-swapped)."""
+    from nikobus_connect.protocol import append_crc1, append_crc2
+
+    feedback: list[tuple[int, str]] = []
+
+    async def _feedback(group: int, message: str) -> None:
+        feedback.append((group, message))
+
+    listener = NikobusEventListener(
+        connection=MagicMock(),
+        event_callback=lambda _m: None,
+        feedback_callback=_feedback,
+        has_feedback_module=True,
+    )
+    data = "FFF5861A09030C0E03"  # FF, PC-Link 86F5, 2026-09-03 12:14:03
+    frame = append_crc2(f"${len(data) + 10:02X}{append_crc1(data)}")
+
+    listener._awaiting_response = True
+    listener._awaited_answer = "$1CFFF586"
+    await listener._dispatch_message(frame)
+    assert feedback == []
+    assert listener.response_queue.qsize() == 1
+
+    # Same frame with nothing awaited behaves as before (feedback path).
+    listener._awaiting_response = False
+    listener._awaited_answer = None
+    await listener._dispatch_message(frame)
+    assert len(feedback) == 1
