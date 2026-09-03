@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.35.0
+
+**Module status, integrity and clock commands; scans sized by the module itself.**
+
+- New `NikobusCommandHandler.query()` sends any PC-Link function and returns the reply payload; the listener now hands `$18`/`$2E`/`$1E` answers to a waiting caller as well as to discovery.
+- `NikobusAPI` gains `get_module_status()` (function 0x11: EEPROM-error flag, type signature, link-record counts), `get_module_crc()` (0x13), `get_pc_link_time()` / `set_pc_link_time()` (0x1D / 0x1E), `read_module_memory()` (block reads of the whole programming image: 0x700 bytes for switch/roller, 0xFD0 for dimmers) and `verify_module_memory()` (module CRC vs. a locally computed CRC16).
+- **Discovery reads exactly the records a module holds.** Before scanning an output module the engine asks it for its record counts (0x11) and reads only those blocks — switch/roller from block 0x10, dimmer bank 0 from 0x20, bank 1 from sub 01/0x20 plus the configuration blocks — instead of a fixed band. Modules with more links than the old band covered are now read completely; modules that don't answer 0x11 keep the fixed band. An EEPROM-error flag is logged.
+- **Dimmer T2 (ramp time) is decoded** from the record's third byte instead of being reported as unknown.
+- **Registry header accepts every header version.** The PC-Link registry marker is `<ver> 55 AA AA <count>` with `ver` in 0x49..0x5E; only 0x5E was recognised before, so older units never got the count-bounded sweep.
+- PROTOCOL.md rewritten: full command table (status, block read, CRC, clock), acknowledgement scheme, module memory layouts (hash index, record bit layout, dimmer banks and configuration block), controller register bands and the versioned header.
+
+
 ## 0.28.0
 
 **Fix: register scan no longer stops at the first empty register, so link

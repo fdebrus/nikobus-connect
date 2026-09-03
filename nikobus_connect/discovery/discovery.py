@@ -47,6 +47,7 @@ from ..const import (
     MODULE_SCAN_FF_TERMINATOR_STREAK_LIMIT,
     MODULE_SCAN_RETRY_LIMIT,
     MODULE_SCAN_TRAILER_PREFIX,
+    MODULE_STATUS_TIMEOUT,
     PC_LINK_INVENTORY_SIGNATURE_BYTE,
 )
 from .fileio import (
@@ -54,7 +55,12 @@ from .fileio import (
     merge_discovered_modules,
     merge_linked_modules,
 )
-from ..protocol import make_pc_link_inventory_command
+from ..protocol import (
+    FUNC_MODULE_STATUS,
+    ModuleStatus,
+    make_pc_link_inventory_command,
+    parse_module_status,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -236,6 +242,45 @@ def _scan_passes_for_module_type(
         if extras:
             plan = _merge_passes((*plan, *extras))
     return plan
+
+
+#: Highest 16-byte block index of the switch/roller link table
+#: (0x100 + 255 records × 6 bytes ends at 0x6F9 → block 0x6F).
+_SWITCH_LINK_BLOCK_END = 0x70
+#: Records per dimmer link bank (bank 0: 0x100..0x7C7, bank 1: 0x900..0xFCF,
+#: one 8-byte record per 8-byte block).
+_DIMMER_BANK_RECORDS = 0xD9
+
+
+def _count_driven_passes(
+    module_type: str | None, status: ModuleStatus
+) -> tuple[ScanSection, ...] | None:
+    """Scan plan bounded by the record counts a module reports (function 0x11).
+
+    Replaces the fixed vendor band with exactly the blocks that hold
+    programmed records: switch/roller link records are 6 bytes from
+    0x100 in 16-byte blocks; dimmer records are 8 bytes in 8-byte
+    blocks from 0x100 (bank 0) and 0x900 (bank 1), plus the per-channel
+    configuration block at 0x7C0. One extra block is read so a record
+    straddling the last block boundary is never cut. ``None`` when the
+    module type has no count-bounded layout (PC-Link / PC-Logic keep
+    their multi-band plans).
+    """
+    if module_type in ("switch_module", "roller_module"):
+        blocks = -(-(status.record_count_a * 6) // 16) + 1
+        end = min(0x10 + blocks, _SWITCH_LINK_BLOCK_END)
+        return (("00", tuple(range(0x10, end))),)
+    if module_type == "dimmer_module":
+        bank0 = min(max(status.record_count_a, 1), _DIMMER_BANK_RECORDS)
+        passes: list[ScanSection] = [
+            ("00", tuple(range(0x20, 0x20 + bank0))),
+            ("00", tuple(range(0xF8, 0x100))),
+        ]
+        if status.record_count_b:
+            bank1 = min(status.record_count_b, _DIMMER_BANK_RECORDS)
+            passes.append(("01", tuple(range(0x20, 0x20 + bank1))))
+        return tuple(passes)
+    return None
 
 
 def _wire_sub_byte(sub_byte: str) -> str:
@@ -575,8 +620,14 @@ async def _notify_discovery_finished(
 # run, and the 5E55AAAA magic colliding with real record content is
 # vanishingly unlikely.
 
-#: The registry-header end marker preceding the record count.
-_REGISTRY_HEADER_MAGIC = b"\x5e\x55\xaa\xaa"
+#: The registry-header end marker preceding the record count. The first
+#: byte is a header *version* (0x49..0x5E observed range, 0x5E on
+#: current firmware); the fixed signature is the ``55 AA AA`` tail.
+_REGISTRY_HEADER_SIGNATURE = b"\x55\xaa\xaa"
+_REGISTRY_HEADER_VERSION_MIN = 0x49
+_REGISTRY_HEADER_VERSION_MAX = 0x5E
+#: Backwards-compatible alias (the current-firmware form).
+_REGISTRY_HEADER_MAGIC = bytes([_REGISTRY_HEADER_VERSION_MAX]) + _REGISTRY_HEADER_SIGNATURE
 
 #: Sanity ceiling for the header's record count — a "count" beyond this
 #: is treated as a magic-collision false positive, not a real header.
@@ -603,17 +654,27 @@ _REGISTRY_EARLY_STOP_TIMEOUT = 1.5
 def _registry_header_count(data: bytes) -> int | None:
     """Record count from a registry-header frame, or ``None``.
 
-    Looks for the ``5E 55 AA AA`` magic anywhere in the data region with
-    at least four bytes after it (the count, little-endian). Returns the
-    count only when it passes the sanity ceiling.
+    Looks for the ``<ver> 55 AA AA`` marker anywhere in the data region
+    with at least four bytes after it (the count, little-endian), where
+    ``<ver>`` is a header version in the supported 0x49..0x5E range —
+    older PC-Links write a lower version byte than the 0x5E of current
+    firmware. Returns the count only when it passes the sanity ceiling.
     """
-    idx = data.find(_REGISTRY_HEADER_MAGIC)
-    if idx < 0 or idx + 8 > len(data):
-        return None
-    count = int.from_bytes(data[idx + 4 : idx + 8], "little")
-    if 0 < count <= _REGISTRY_MAX_RECORDS:
-        return count
-    return None
+    start = 0
+    while True:
+        idx = data.find(_REGISTRY_HEADER_SIGNATURE, start)
+        if idx < 0 or idx + 7 > len(data):
+            return None
+        if idx == 0:
+            start = 1
+            continue
+        version = data[idx - 1]
+        if _REGISTRY_HEADER_VERSION_MIN <= version <= _REGISTRY_HEADER_VERSION_MAX:
+            count = int.from_bytes(data[idx + 3 : idx + 7], "little")
+            if 0 < count <= _REGISTRY_MAX_RECORDS:
+                return count
+            return None
+        start = idx + 1
 
 
 def _looks_like_echo_ramp(data: bytes) -> bool:
@@ -1047,6 +1108,46 @@ class NikobusDiscovery:
         ):
             self._scan_trailer_seen = True
         self._scan_event.set()
+
+    async def _count_bounded_passes(self, address: str) -> tuple[ScanSection, ...]:
+        """Ask the module for its record counts and derive the scan plan.
+
+        Returns ``()`` when the module doesn't answer function 0x11 (or
+        the command layer can't query), so the caller falls back to the
+        fixed band. An EEPROM-error flag in the reply is logged.
+        """
+        command = self._coordinator.nikobus_command
+        query = getattr(command, "query", None)
+        if query is None:
+            return ()
+        try:
+            payload = await asyncio.wait_for(
+                query(FUNC_MODULE_STATUS, address), timeout=MODULE_STATUS_TIMEOUT
+            )
+            status = parse_module_status(payload, address)
+        except Exception as err:  # noqa: BLE001 - any failure means "use the fixed band"
+            _LOGGER.debug(
+                "Module %s did not report its status (%s) — using the fixed scan band",
+                address,
+                err,
+            )
+            return ()
+        if status.eeprom_error:
+            _LOGGER.warning(
+                "Module %s reports an EEPROM error — its programming may be corrupt",
+                address,
+            )
+        passes = _count_driven_passes(self._module_type, status)
+        if not passes:
+            return ()
+        _LOGGER.info(
+            "Module %s reports %d/%d link record(s) — scanning %d register(s)",
+            address,
+            status.record_count_a,
+            status.record_count_b,
+            sum(len(regs) for _sub, regs in passes),
+        )
+        return passes
 
     async def _scan_module_registers(
         self,
@@ -3030,9 +3131,17 @@ class NikobusDiscovery:
         # extra pass after the vendor primary — safety net for any
         # firmware revision whose link table doesn't sit in the
         # vendor band.
-        scan_passes = _scan_passes_for_module_type(
-            self._module_type, broad_scan=self._broad_scan
-        )
+        # Preferred plan: ask the module how many records it holds
+        # (function 0x11) and read exactly those blocks. The fixed
+        # vendor band is the fallback when the module doesn't answer
+        # (and always under ``broad_scan``).
+        scan_passes: tuple[ScanSection, ...] = ()
+        if not self._broad_scan:
+            scan_passes = await self._count_bounded_passes(normalized_address)
+        if not scan_passes:
+            scan_passes = _scan_passes_for_module_type(
+                self._module_type, broad_scan=self._broad_scan
+            )
         if not scan_passes:
             # Module type not in the per-product plan (audio/interface/other
             # have no link table). Fall through to finalize.
