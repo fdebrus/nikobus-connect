@@ -132,7 +132,7 @@ class NikobusEventListener:
                 for frame in self._extract_frames(raw_text):
                     _LOGGER.debug("Bus frame %s", frame)
                     await self._dispatch_message(frame)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 continue
             except Exception as err:
                 _LOGGER.error("Listener loop failed: %s", err)
@@ -220,6 +220,11 @@ class NikobusEventListener:
         # too, matching FEEDBACK_MODULE_ANSWER / MANUAL_REFRESH_COMMAND.
         if message.startswith(("$18", "$2E", "$1E")):
             if self.validate_crc(message):
+                # A caller waiting on a query (module status, EEPROM
+                # CRC, block read) consumes the frame from the response
+                # queue; discovery keeps receiving it via the callback.
+                if self._awaiting_response:
+                    self._enqueue_response(message)
                 await self._invoke(self._event_callback, message)
             return
 

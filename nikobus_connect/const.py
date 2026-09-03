@@ -38,6 +38,12 @@ MODULE_SCAN_DATA_TIMEOUT: Final[float] = 0.5
 MODULE_SCAN_RETRY_LIMIT: Final[int] = 1
 MODULE_SCAN_TRAILER_PREFIX: Final[str] = "$18"
 
+# Module-status query (function 0x11) issued before a register scan to
+# size the read exactly. The query runs through the command queue with
+# its own ack/answer retries; this is the outer budget before discovery
+# gives up on it and falls back to the fixed scan band.
+MODULE_STATUS_TIMEOUT: Final[float] = 20.0
+
 # Multi-pass scan: if this many registers in a row fail to get any
 # ACK, assume the module doesn't accept this function+sub combination
 # and abort the pass early. Without this, a non-responding module

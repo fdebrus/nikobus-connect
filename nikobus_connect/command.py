@@ -9,16 +9,20 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 from .const import (
-    COMMAND_EXECUTION_DELAY,
     COMMAND_ACK_WAIT_TIMEOUT,
     COMMAND_ANSWER_WAIT_TIMEOUT,
+    COMMAND_EXECUTION_DELAY,
     COMMAND_POST_ACK_ANSWER_TIMEOUT,
     MAX_ATTEMPTS,
 )
 from .exceptions import NikobusError, NikobusSendError, NikobusTimeoutError
-from .protocol import make_pc_link_command, calculate_group_number
+from .protocol import calculate_group_number, make_pc_link_command, reply_payload
 
 _LOGGER = logging.getLogger(__name__)
+
+# Function codes whose answer is returned as the raw reply payload
+# (see ``query``) rather than the 6-byte output-state slice.
+_RAW_REPLY_FUNCS: frozenset[str] = frozenset({"10", "11", "13", "1D", "22"})
 
 
 class NikobusCommandHandler:
@@ -181,7 +185,7 @@ class NikobusCommandHandler:
         try:
             await self.queue_command(command, address, future=future)
             return await asyncio.wait_for(future, timeout=COMMAND_ACK_WAIT_TIMEOUT)
-        except (asyncio.CancelledError, asyncio.TimeoutError):
+        except (TimeoutError, asyncio.CancelledError):
             if not future.done():
                 future.cancel()
             # Clear dedup so the next call for this address can
@@ -362,28 +366,67 @@ class NikobusCommandHandler:
             self._listener.set_pending_query_group(
                 address.upper(), 1 if gid == "12" else 2
             )
-        state = await self._wait_for_ack_and_answer(command, wait_ack, wait_answer)
+        state = await self._wait_for_ack_and_answer(
+            command, wait_ack, wait_answer, raw=gid in _RAW_REPLY_FUNCS
+        )
         if state is None:
             raise NikobusTimeoutError(
                 f"Failed to receive state for command '{command}' after {MAX_ATTEMPTS} attempts."
             )
         return state
 
+    async def query(
+        self, func: int, address: str, args: bytes | None = None
+    ) -> bytes:
+        """Send a PC-Link query and return the reply's data bytes.
+
+        Covers the maintenance functions (module status 0x11, EEPROM
+        CRC 0x13, clock 0x1D/0x1E, block reads 0x10/0x22). The command
+        goes through the normal queue and the ``$05xx`` ack / answer
+        matching; the returned bytes are the reply frame's data with
+        the CRCs stripped (empty for ack-only functions such as 0x1E).
+        """
+        command = make_pc_link_command(func, address, args)
+        loop = asyncio.get_running_loop()
+        future: asyncio.Future[str] = loop.create_future()
+        await self.queue_command(command, address, future=future)
+        reply_hex = await asyncio.wait_for(
+            future, timeout=COMMAND_ACK_WAIT_TIMEOUT * MAX_ATTEMPTS + 5
+        )
+        return bytes.fromhex(reply_hex) if reply_hex else b""
+
     def _prepare_ack_and_answer_signals(
         self, command: str, address: str
     ) -> tuple[str, str]:
-        """Prepare the acknowledgment and answer signals based on the command prefix."""
+        """Prepare the acknowledgment and answer signals for a command.
+
+        The ack is always ``$05`` + function code. The answer frame is
+        keyed on the function code for the maintenance queries (their
+        replies are ``$18``/``$1C``/``$2E``/``$1E`` frames echoing the
+        module address, some behind a leading ``FF``) and on the frame
+        length prefix for the legacy get/set commands.
+        """
         command_prefix = command[:3]
         command_part = command[3:5]
         ack_signal = f"$05{command_part}"
+        addr_le = f"{address[2:]}{address[:2]}"
 
+        func_answer_prefix = {
+            "11": "$18",      # module status: addr echo first
+            "13": "$18FF",    # EEPROM CRC: FF then addr
+            "1D": "$1CFF",    # clock: FF then addr
+            "10": "$2E",      # 16-byte block read: addr echo first
+            "22": "$1E",      # 8-byte block read: addr echo first
+        }
         prefix_mapping = {
             "$1E": "$0EFF",
             "$05": "$1C",
             "$10": "$1C",
         }
-        answer_prefix = prefix_mapping.get(command_prefix, "$1C")
-        answer_signal = f"{answer_prefix}{address[2:]}{address[:2]}"
+        answer_prefix = func_answer_prefix.get(command_part) or prefix_mapping.get(
+            command_prefix, "$1C"
+        )
+        answer_signal = f"{answer_prefix}{addr_le}"
 
         _LOGGER.debug(
             "Prepared signals: ACK=%s, ANSWER=%s, COMMAND=%s, ADDRESS=%s",
@@ -392,9 +435,13 @@ class NikobusCommandHandler:
         return ack_signal, answer_signal
 
     async def _wait_for_ack_and_answer(
-        self, command: str, wait_ack: str, wait_answer: str
+        self, command: str, wait_ack: str, wait_answer: str, raw: bool = False
     ) -> str | None:
-        """Wait for an acknowledgment and answer with retries."""
+        """Wait for an acknowledgment and answer with retries.
+
+        ``raw`` returns the answer frame's full data payload (hex)
+        instead of the 6-byte output-state slice.
+        """
         self._listener._awaiting_response = True
         try:
             for attempt in range(1, MAX_ATTEMPTS + 1):
@@ -410,7 +457,9 @@ class NikobusCommandHandler:
                         "Attempt %d/%d waiting for ACK %s, answer %s",
                         attempt, MAX_ATTEMPTS, wait_ack, wait_answer,
                     )
-                    state = await self._wait_for_ack_and_answer_state(wait_ack, wait_answer)
+                    state = await self._wait_for_ack_and_answer_state(
+                        wait_ack, wait_answer, raw=raw
+                    )
                     if state is not None:
                         _LOGGER.debug("Received valid state from device")
                         return state
@@ -429,7 +478,7 @@ class NikobusCommandHandler:
             self._listener._awaiting_response = False
 
     async def _wait_for_ack_and_answer_state(
-        self, wait_ack: str, wait_answer: str
+        self, wait_ack: str, wait_answer: str, raw: bool = False
     ) -> str | None:
         """Wait for both acknowledgment and answer signals, then extract the state."""
         ack_received = False
@@ -459,6 +508,10 @@ class NikobusCommandHandler:
                         _LOGGER.debug("Answer received (set-command ack)")
                         state = ""
                         answer_received = True
+                    elif raw:
+                        _LOGGER.debug("Answer received (raw query reply)")
+                        state = reply_payload(message).hex().upper()
+                        answer_received = True
                     elif len(message) >= len(wait_answer) + 2 + 12:
                         _LOGGER.debug("Answer received")
                         state = self._parse_state_from_message(message, wait_answer)
@@ -470,7 +523,7 @@ class NikobusCommandHandler:
                         )
                 if ack_received and answer_received:
                     return state
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 _LOGGER.debug("Timeout while waiting for ACK/answer")
                 break
             except Exception as err:

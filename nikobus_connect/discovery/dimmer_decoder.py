@@ -36,11 +36,9 @@ def _timer_value(
     via ``DIMMER_MODE_T1_LOOKUP`` is the authoritative resolution. T2 is
     the ramp/fade time (``DIMMER_T2_RAMP``) used by every dimmer mode.
 
-    ``t2_raw`` is accepted but currently unused — the dimmer chunk's T2
-    nibble extraction is not yet wired in this decoder (the previous
-    implementation set ``t2_raw=None`` unconditionally). Keeping the
-    signature ready for a follow-up that reads the T2 nibble from the
-    16-byte dimmer record.
+    ``t2_raw`` is the low nibble of the record's third byte (the ramp
+    parameter every dimmer mode carries); ``None`` when the caller
+    could not read it.
     """
 
     if mode_raw is None:
@@ -81,6 +79,9 @@ def decode(payload_hex: str, raw_bytes: list[str], context: Any) -> dict[str, An
     channel_raw = _safe_int(raw_bytes[3][1])
     t1_raw = _safe_int(raw_bytes[4][0])
     mode_raw = _safe_int(raw_bytes[4][1])
+    # Ramp/fade time (T2): low nibble of the third byte. Bytes 0-1 are
+    # reserved padding on every dimmer record observed so far.
+    t2_raw = _safe_int(raw_bytes[2][1])
 
     if key_raw is None or channel_raw is None or mode_raw is None:
         _LOGGER.debug(
@@ -120,7 +121,7 @@ def decode(payload_hex: str, raw_bytes: list[str], context: Any) -> dict[str, An
         coord_get_channels,
     )
 
-    t1_val, t2_val = _timer_value(mode_raw, t1_raw)
+    t1_val, t2_val = _timer_value(mode_raw, t1_raw, t2_raw)
 
     decoded = {
         "payload": payload_hex,
@@ -131,7 +132,7 @@ def decode(payload_hex: str, raw_bytes: list[str], context: Any) -> dict[str, An
         "channel": channel_decoded,
         "mode_raw": mode_raw,
         "t1_raw": t1_raw,
-        "t2_raw": None,
+        "t2_raw": t2_raw,
         "K": key_raw,
         "C": _format_channel(channel_decoded),
         "T1": t1_val,
@@ -160,4 +161,4 @@ class DimmerDecoder(BaseChunkingDecoder):
         super().__init__(coordinator, "dimmer_module")
 
 
-__all__ = ["DimmerDecoder", "decode", "EXPECTED_CHUNK_LEN"]
+__all__ = ["EXPECTED_CHUNK_LEN", "DimmerDecoder", "decode"]

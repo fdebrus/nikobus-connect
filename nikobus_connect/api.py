@@ -4,9 +4,25 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
-from typing import Any
+from datetime import datetime
+from typing import Any, Final
 
 from .exceptions import NikobusError
+from .protocol import (
+    FUNC_GET_TIME,
+    FUNC_MODULE_CRC,
+    FUNC_MODULE_STATUS,
+    FUNC_READ_BLOCK8,
+    FUNC_READ_BLOCK16,
+    FUNC_SET_TIME,
+    ModuleStatus,
+    calc_crc1,
+    make_block_index_args,
+    make_set_time_args,
+    parse_module_crc,
+    parse_module_status,
+    parse_pc_link_time,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -15,6 +31,16 @@ STATE_OFF = 0x00
 STATE_ON = 0xFF
 STATE_OPEN = 0x01
 STATE_CLOSE = 0x02
+
+# Programming-image sizes per output-module family (bytes). Switch and
+# roller modules share one layout (256-byte index, 6-byte link records
+# from 0x100, count at 0x6FA); dimmers carry two link banks plus a
+# per-channel configuration block and are read in 8-byte blocks.
+MODULE_IMAGE_SIZES: Final[dict[str, int]] = {
+    "switch_module": 0x700,
+    "roller_module": 0x700,
+    "dimmer_module": 0xFD0,
+}
 
 
 class NikobusAPI:
@@ -174,3 +200,74 @@ class NikobusAPI:
     async def set_output_states_for_module(self, address: str, completion_handler: Callable[..., Any] | None = None) -> None:
         """Batch update all output states for a specific module."""
         await self._command_handler.set_output_states(address, completion_handler=completion_handler)
+
+    # --- MAINTENANCE: module status, EEPROM integrity, PC-Link clock ---
+
+    async def get_module_status(self, address: str) -> ModuleStatus:
+        """Ask a module for its status (EEPROM-error flag, type, record counts)."""
+        payload = await self._command_handler.query(FUNC_MODULE_STATUS, address)
+        return parse_module_status(payload, address)
+
+    async def get_module_crc(self, address: str) -> int:
+        """Return the CRC16 the module computes over its whole memory image."""
+        payload = await self._command_handler.query(FUNC_MODULE_CRC, address, b"\x00")
+        return parse_module_crc(payload)
+
+    async def get_pc_link_time(self, address: str) -> datetime:
+        """Read the PC-Link's clock (naive local time as the controller keeps it)."""
+        payload = await self._command_handler.query(FUNC_GET_TIME, address)
+        return parse_pc_link_time(payload)
+
+    async def set_pc_link_time(self, address: str, moment: datetime) -> None:
+        """Write the PC-Link's clock. ``moment`` is taken as local wall time."""
+        await self._command_handler.query(
+            FUNC_SET_TIME, address, make_set_time_args(moment)
+        )
+
+    async def read_module_memory(
+        self,
+        address: str,
+        module_type: str,
+        progress: Callable[[int, int], Any] | None = None,
+    ) -> bytes:
+        """Read a module's full programming image, block by block.
+
+        Dimmer-class modules answer 8-byte blocks (function 0x22); every
+        other output module answers 16-byte blocks (0x10). ``progress``
+        is called with ``(blocks_done, blocks_total)``.
+        """
+        size = MODULE_IMAGE_SIZES.get(module_type)
+        if size is None:
+            raise NikobusError(f"no memory image layout known for {module_type}")
+        func, block_size = (
+            (FUNC_READ_BLOCK8, 8) if module_type == "dimmer_module" else (FUNC_READ_BLOCK16, 16)
+        )
+        total = size // block_size
+        image = bytearray()
+        for block in range(total):
+            payload = await self._command_handler.query(
+                func, address, make_block_index_args(block)
+            )
+            data = payload[2:]  # 2-byte address echo precedes the block data
+            if len(data) != block_size:
+                raise NikobusError(
+                    f"block {block} of {address}: expected {block_size} bytes, got {len(data)}"
+                )
+            image += data
+            if progress is not None:
+                progress(block + 1, total)
+        return bytes(image)
+
+    async def verify_module_memory(
+        self, address: str, module_type: str, image: bytes | None = None
+    ) -> tuple[bool, int, int]:
+        """Compare the module's own image CRC with a CRC computed locally.
+
+        Returns ``(matches, module_crc, computed_crc)``. ``image`` may be
+        passed when it was just read (backup), otherwise it is read now.
+        """
+        if image is None:
+            image = await self.read_module_memory(address, module_type)
+        computed = calc_crc1(image.hex())
+        reported = await self.get_module_crc(address)
+        return reported == computed, reported, computed
