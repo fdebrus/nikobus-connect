@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.36.3
+
+- **Feedback module read survives the module going quiet.** On a real 05-207 a long read ends with the module ignoring every block, even after retries (seen after 45 s and after 90 s in link mode). Leaving and re-entering link mode brings it back, so the read now does that, up to three times per run, and carries on from the block that failed. The regions are read most-important first (tracked outputs, plate table, LED lists, then LED modes and the input-event records); the last two are optional and a module that stops serving them still yields a complete LED map. Confirmed on hardware: the LED-mode table exists and reads as AUTO for every slot.
+
+
 ## 0.36.2
 
 **Feedback module read validated on hardware; made resilient.**
