@@ -115,6 +115,15 @@ def test_partial_image_is_padded():
     assert decoded.leds and decoded.leds[0].outputs[0].output is None
 
 
+def _no_sleep(monkeypatch):
+    import nikobus_connect.api as api_module
+
+    async def _instant(_seconds):
+        return None
+
+    monkeypatch.setattr(api_module.asyncio, "sleep", _instant)
+
+
 class _FakeHandler:
     """Answers block reads from an in-memory image and records the requests."""
 
@@ -123,6 +132,8 @@ class _FakeHandler:
         self.blocks: list[int] = []
 
     async def query(self, func: int, address: str, args: bytes | None = None) -> bytes:
+        if func in (0x18, 0x19):  # link mode on / off: acknowledged only
+            return b""
         assert func == FUNC_READ_BLOCK16
         assert args is not None
         block = int.from_bytes(args, "little")
@@ -131,7 +142,8 @@ class _FakeHandler:
         return bytes.fromhex("6C96") + self.image[start : start + 16]
 
 
-def test_feedback_image_read_is_bounded():
+def test_feedback_image_read_is_bounded(monkeypatch):
+    _no_sleep(monkeypatch)
     original = bytes(_image())
     handler = _FakeHandler(original)
     api = NikobusAPI(handler, {})
@@ -185,27 +197,65 @@ class _LinkModeHandler(_FakeHandler):
         return await super().query(func, address, args)
 
 
-def test_feedback_read_retries_in_link_mode_and_leaves_it():
+def test_feedback_read_uses_link_mode_and_leaves_it(monkeypatch):
     from nikobus_connect.protocol import FUNC_LINK_MODE_OFF, FUNC_LINK_MODE_ON
 
+    _no_sleep(monkeypatch)
     original = bytes(_image())
     handler = _LinkModeHandler(original)
     api = NikobusAPI(handler, {})
     image = asyncio.run(api.read_module_memory("966C", "feedback_module"))
     assert decode_feedback_image(image).as_dict() == decode_feedback_image(original).as_dict()
-    # one ignored read, link mode on, the reads, link mode off
-    assert handler.funcs[0] == FUNC_READ_BLOCK16
-    assert handler.funcs[1] == FUNC_LINK_MODE_ON
+    # link mode on, the reads, link mode off
+    assert handler.funcs[0] == FUNC_LINK_MODE_ON
+    assert handler.funcs[1] == FUNC_READ_BLOCK16
     assert handler.funcs[-1] == FUNC_LINK_MODE_OFF
     assert handler.link_mode is False
 
 
-def test_feedback_read_leaves_link_mode_on_failure():
+class _FlakyHandler(_LinkModeHandler):
+    """Drops the first attempt of every block and never serves the mode table."""
+
+    def __init__(self, image: bytes) -> None:
+        super().__init__(image)
+        self.seen: dict[int, int] = {}
+
+    async def query(self, func: int, address: str, args: bytes | None = None) -> bytes:
+        from nikobus_connect.exceptions import NikobusTimeoutError
+
+        if func == FUNC_READ_BLOCK16 and args is not None:
+            block = int.from_bytes(args, "little")
+            self.seen[block] = self.seen.get(block, 0) + 1
+            if 0x780 <= block < 0x78C or self.seen[block] == 1:
+                self.funcs.append(func)
+                raise NikobusTimeoutError("no ack")
+        return await super().query(func, address, args)
+
+
+def test_feedback_read_retries_blocks_and_tolerates_missing_modes(monkeypatch):
+    from nikobus_connect.protocol import FUNC_LINK_MODE_OFF
+
+    _no_sleep(monkeypatch)
+    original = bytes(_image())
+    handler = _FlakyHandler(original)
+    api = NikobusAPI(handler, {})
+    image = asyncio.run(api.read_feedback_image("966C"))
+    decoded = decode_feedback_image(image)
+    expected = decode_feedback_image(original)
+    assert [led.slot for led in decoded.leds] == [led.slot for led in expected.leds]
+    assert decoded.leds[0].mode is None  # mode table unreadable -> unknown, not an error
+    assert decoded.outputs[0].module_address == "5B05"
+    assert handler.funcs[-1] == FUNC_LINK_MODE_OFF
+    assert handler.link_mode is False
+
+
+def test_feedback_read_leaves_link_mode_on_failure(monkeypatch):
     import pytest
 
     from nikobus_connect.exceptions import NikobusTimeoutError
     from nikobus_connect.protocol import FUNC_LINK_MODE_OFF
 
+    _no_sleep(monkeypatch)
     handler = _LinkModeHandler(bytes(_image()), fail_in_link_mode=True)
     api = NikobusAPI(handler, {})
     with pytest.raises(NikobusTimeoutError):
@@ -223,4 +273,4 @@ def test_feedback_read_without_link_mode_fallback_raises():
     api = NikobusAPI(handler, {})
     with pytest.raises(NikobusTimeoutError):
         asyncio.run(api.read_feedback_image("966C", link_mode=False))
-    assert handler.funcs == [FUNC_READ_BLOCK16]
+    assert handler.funcs == [FUNC_READ_BLOCK16] * 3  # retries, never link mode
