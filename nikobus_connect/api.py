@@ -7,6 +7,15 @@ from collections.abc import Callable
 from datetime import datetime
 from typing import Any, Final
 
+from .discovery.feedback_decoder import (
+    FEEDBACK_IMAGE_SIZE,
+    LED_MODE_TABLE_LENGTH,
+    LED_MODE_TABLE_OFFSET,
+    REGION_GROUP_ADDRESSES,
+    REGION_INPUT_RECORDS,
+    REGION_LED_LISTS,
+    REGION_OUTPUT_MODULES,
+)
 from .exceptions import NikobusError
 from .protocol import (
     FUNC_GET_TIME,
@@ -40,7 +49,15 @@ MODULE_IMAGE_SIZES: Final[dict[str, int]] = {
     "switch_module": 0x700,
     "roller_module": 0x700,
     "dimmer_module": 0xFD0,
+    "feedback_module": FEEDBACK_IMAGE_SIZE,
 }
+
+# Module types whose reported CRC coverage is not known; their image
+# can be read and backed up but not checked against the module's CRC.
+MODULE_CRC_UNKNOWN: Final[frozenset[str]] = frozenset({"feedback_module"})
+
+_BLOCK16: Final[int] = 16
+_ALL_FF_BLOCK: Final[bytes] = b"\xff" * _BLOCK16
 
 # Byte ranges a module includes in the CRC16 it reports for function
 # 0x13. Switch/roller modules cover their whole image. Dimmers cover
@@ -257,6 +274,8 @@ class NikobusAPI:
         size = MODULE_IMAGE_SIZES.get(module_type)
         if size is None:
             raise NikobusError(f"no memory image layout known for {module_type}")
+        if module_type == "feedback_module":
+            return await self.read_feedback_image(address, progress)
         func, block_size = (
             (FUNC_READ_BLOCK8, 8) if module_type == "dimmer_module" else (FUNC_READ_BLOCK16, 16)
         )
@@ -274,6 +293,83 @@ class NikobusAPI:
             image += data
             if progress is not None:
                 progress(block + 1, total)
+        return bytes(image)
+
+    async def read_memory_range(
+        self,
+        address: str,
+        start: int,
+        length: int,
+        *,
+        stop_on_empty: bool = False,
+        progress: Callable[[int, int], Any] | None = None,
+    ) -> bytes:
+        """Read ``length`` bytes from memory offset ``start`` in 16-byte blocks.
+
+        ``start`` and ``length`` must be multiples of 16. With
+        ``stop_on_empty`` the read ends at the first all-``FF`` block,
+        which is how ``FF``-terminated tables are bounded; the returned
+        bytes are then shorter than ``length``.
+        """
+        if start % _BLOCK16 or length % _BLOCK16:
+            raise ValueError("start and length must be multiples of 16")
+        total = length // _BLOCK16
+        first = start // _BLOCK16
+        image = bytearray()
+        for index in range(total):
+            payload = await self._command_handler.query(
+                FUNC_READ_BLOCK16, address, make_block_index_args(first + index)
+            )
+            data = payload[2:]
+            if len(data) != _BLOCK16:
+                raise NikobusError(
+                    f"block {first + index} of {address}: expected {_BLOCK16} bytes, got {len(data)}"
+                )
+            image += data
+            if progress is not None:
+                progress(index + 1, total)
+            if stop_on_empty and data == _ALL_FF_BLOCK:
+                break
+        return bytes(image)
+
+    async def read_feedback_image(
+        self, address: str, progress: Callable[[int, int], Any] | None = None
+    ) -> bytes:
+        """Read the programmed parts of a feedback module (05-207) image.
+
+        The module's memory is 0x7900 bytes, most of it unused ``FF``
+        space. The two tables that are ``FF``-terminated (input-event
+        records, LED lists) are read until their first empty block, the
+        fixed tables (tracked output modules, group addresses, LED
+        modes) in full. The result is a ``FEEDBACK_IMAGE_SIZE`` image
+        with ``FF`` in the parts that were not read.
+        """
+        image = bytearray(b"\xff" * FEEDBACK_IMAGE_SIZE)
+        fixed = (
+            REGION_OUTPUT_MODULES,
+            REGION_GROUP_ADDRESSES,
+            (LED_MODE_TABLE_OFFSET, LED_MODE_TABLE_LENGTH),
+        )
+        bounded = (REGION_LED_LISTS, REGION_INPUT_RECORDS)
+        # Progress counts the fixed regions exactly and the bounded ones
+        # by what they actually return.
+        done = 0
+        total = sum(length // _BLOCK16 for _, length in fixed)
+
+        def _step(_current: int, _total: int) -> None:
+            nonlocal done
+            done += 1
+            if progress is not None:
+                progress(done, max(total, done))
+
+        for start, length in fixed:
+            data = await self.read_memory_range(address, start, length, progress=_step)
+            image[start : start + len(data)] = data
+        for start, length in bounded:
+            data = await self.read_memory_range(
+                address, start, length, stop_on_empty=True, progress=_step
+            )
+            image[start : start + len(data)] = data
         return bytes(image)
 
     async def verify_module_memory(

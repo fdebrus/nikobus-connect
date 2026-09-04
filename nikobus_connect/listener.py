@@ -52,6 +52,11 @@ class NikobusEventListener:
         self._frame_buffer = ""
         self._last_query_group: dict[str, int] = {}
         self._awaiting_response: bool = False
+        # Answer prefix the command layer is waiting for, while it waits.
+        # A PC-Link clock reply ($1CFF...) has the frame code of an
+        # output-state answer; matching it here keeps it out of the
+        # feedback callback, which would file it as a phantom module.
+        self._awaited_answer: str | None = None
 
     def reset(self) -> None:
         """Clear per-connection state after a transport reconnect.
@@ -193,6 +198,9 @@ class NikobusEventListener:
         # Feedback module answers ($1C)
         if message.startswith(FEEDBACK_MODULE_ANSWER):
             if self.validate_crc(message):
+                if self._is_awaited_query_reply(message):
+                    self._enqueue_response(message)
+                    return
                 if self._has_feedback_module and self._feedback_callback:
                     if len(message) >= 7:
                         addr = (message[5:7] + message[3:5]).upper()
@@ -241,6 +249,16 @@ class NikobusEventListener:
 
         # General event callback for unhandled messages
         await self._invoke(self._event_callback, message)
+
+    def _is_awaited_query_reply(self, message: str) -> bool:
+        """Whether ``message`` is the ``FF``-prefixed reply a query waits for."""
+        awaited = self._awaited_answer
+        return bool(
+            self._awaiting_response
+            and awaited
+            and awaited.startswith("$1CFF")
+            and message.startswith(awaited)
+        )
 
     def validate_crc(self, message: str) -> bool:
         """Validate the Nikobus CRC-8 for PC-Link frames."""

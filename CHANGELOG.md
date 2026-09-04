@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.36.0
+
+**Feedback module (05-207): image read and decode.**
+
+- `MODULE_IMAGE_SIZES` gains `feedback_module` (0x7900 bytes). `NikobusAPI.read_module_memory()` reads it through the new `read_feedback_image()`: the fixed tables (tracked output modules at 0x6000, push-button module addresses at 0x6100, LED modes at 0x7800) in full and the two `FF`-terminated tables (input-event records at 0x0000, LED lists at 0x4000) up to their first empty block, so a backup takes a few dozen block reads instead of nearly two thousand. New generic `read_memory_range()`.
+- New `nikobus_connect.discovery.feedback_decoder`: `decode_feedback_image()` turns the image into the tracked outputs (module, channel), the 24 push-button module groups, every LED slot with its mode, polarity and the outputs it tracks, and the input-event records (which key press changes which output). Address helpers convert between the stored 22-bit module address / 24-bit input address and the 6-hex key addresses discovery uses (bit-reversed: `module_address << 2 | key_index`, key index A=1, B=3, C=0, D=2). The layout was pinned from the module's memory-map plugin and validated against real key addresses.
+- `MODULE_CRC_UNKNOWN` lists module types whose reported CRC coverage is not known (the feedback module); callers skip the CRC comparison for them.
+- **Fix: the PC-Link clock reply no longer reaches the feedback callback.** A clock reply (`$1CFF...`) has the frame code of an output-state answer; while a query waits for it the listener now routes it to the response queue only. Before, installs with a feedback module logged a phantom module (the PC-Link address byte-swapped) carrying the date as its output state.
+
+
 ## 0.35.1
 
 - **Fix: dimmer integrity check reported a false CRC mismatch.** A dimmer module's self-reported CRC16 (function 0x13) covers both link banks but skips the six bytes between them (0x7FA..0x7FF); `verify_module_memory()` computed it over the whole image, so every dimmer failed the check. Validated on a real 05-007: only that coverage reproduces the module's CRC. New `image_crc()` / `MODULE_CRC_RANGES` hold the per-module coverage.

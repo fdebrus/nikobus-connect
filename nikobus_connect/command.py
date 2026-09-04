@@ -443,6 +443,7 @@ class NikobusCommandHandler:
         instead of the 6-byte output-state slice.
         """
         self._listener._awaiting_response = True
+        self._listener._awaited_answer = wait_answer
         try:
             for attempt in range(1, MAX_ATTEMPTS + 1):
                 while not self._listener.response_queue.empty():
@@ -476,6 +477,7 @@ class NikobusCommandHandler:
             )
         finally:
             self._listener._awaiting_response = False
+            self._listener._awaited_answer = None
 
     async def _wait_for_ack_and_answer_state(
         self, wait_ack: str, wait_answer: str, raw: bool = False
