@@ -155,14 +155,13 @@ def test_feedback_image_read_is_bounded(monkeypatch):
 
     assert len(image) == FEEDBACK_IMAGE_SIZE
     assert decode_feedback_image(image).as_dict() == decode_feedback_image(original).as_dict()
-    # Fixed tables in full, FF-terminated ones up to the first empty block.
+    # Fixed tables in full, FF-terminated ones up to the first empty block,
+    # most important regions first.
     assert handler.blocks[:16] == list(range(0x600, 0x610))
     assert handler.blocks[16:32] == list(range(0x610, 0x620))
-    assert handler.blocks[32:44] == list(range(0x780, 0x78C))
-    led_blocks = [b for b in handler.blocks if 0x400 <= b < 0x600]
-    assert led_blocks == [0x400, 0x401, 0x402]  # 23-byte stream, then the first empty block
-    record_blocks = [b for b in handler.blocks if b < 0x400]
-    assert record_blocks == [0, 1]  # one record + terminator, then an empty block
+    assert handler.blocks[32:35] == [0x400, 0x401, 0x402]  # 23-byte stream, then the first empty block
+    assert handler.blocks[35:47] == list(range(0x780, 0x78C))
+    assert handler.blocks[47:] == [0, 1]  # one record + terminator, then an empty block
     assert progress[-1][0] == len(handler.blocks)
 
 
@@ -332,3 +331,68 @@ def test_first_output_index_creates_gaps_and_running_fallback():
     assert [(o.module_address, o.channel) if o else None for o in table] == [
         ("AAAA", 1), ("AAAA", 2), None, None, ("BBBB", 1), ("CCCC", 1)
     ]
+
+
+class _QuietingHandler(_LinkModeHandler):
+    """Goes silent after N answered blocks until link mode is re-entered."""
+
+    def __init__(self, image: bytes, answers_per_session: int) -> None:
+        super().__init__(image)
+        self.answers_per_session = answers_per_session
+        self.answered = 0
+        self.sessions = 0
+
+    async def query(self, func: int, address: str, args: bytes | None = None) -> bytes:
+        from nikobus_connect.exceptions import NikobusTimeoutError
+        from nikobus_connect.protocol import FUNC_LINK_MODE_ON
+
+        if func == FUNC_LINK_MODE_ON:
+            self.sessions += 1
+            self.answered = 0
+        if func == FUNC_READ_BLOCK16:
+            if self.answered >= self.answers_per_session:
+                self.funcs.append(func)
+                raise NikobusTimeoutError("quiet")
+            self.answered += 1
+        return await super().query(func, address, args)
+
+
+def test_feedback_read_reenters_link_mode_when_module_goes_quiet(monkeypatch):
+    from nikobus_connect.protocol import FUNC_LINK_MODE_OFF, FUNC_LINK_MODE_ON
+
+    _no_sleep(monkeypatch)
+    original = bytes(_image())
+    handler = _QuietingHandler(original, answers_per_session=20)
+    api = NikobusAPI(handler, {})
+    image = asyncio.run(api.read_feedback_image("966C"))
+    assert decode_feedback_image(image).as_dict() == decode_feedback_image(original).as_dict()
+    assert handler.sessions >= 2  # at least one refresh happened
+    assert handler.funcs.count(FUNC_LINK_MODE_ON) == handler.funcs.count(FUNC_LINK_MODE_OFF)
+    assert handler.link_mode is False
+
+
+def test_feedback_read_gives_up_optional_regions_after_refreshes(monkeypatch):
+    _no_sleep(monkeypatch)
+    original = bytes(_image())
+    # 35 answers: output table (16) + plate table (16) + LED list (3), then quiet.
+    handler = _QuietingHandler(original, answers_per_session=35)
+    api = NikobusAPI(handler, {})
+
+    # After the refreshes are spent the module keeps quiet: make every
+    # session after the first answer nothing.
+    original_query = handler.query
+
+    async def query(func, address, args=None):
+        if handler.sessions >= 2 and func == FUNC_READ_BLOCK16:
+            from nikobus_connect.exceptions import NikobusTimeoutError
+
+            raise NikobusTimeoutError("quiet")
+        return await original_query(func, address, args)
+
+    handler.query = query  # type: ignore[method-assign]
+    image = asyncio.run(api.read_feedback_image("966C"))
+    decoded = decode_feedback_image(image)
+    assert [led.slot for led in decoded.leds] == [0, 1, 2, 3, 192]  # LED map complete
+    assert decoded.leds[0].mode is None  # modes not read
+    assert decoded.input_records == []  # input records not read
+    assert handler.link_mode is False

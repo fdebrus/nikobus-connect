@@ -68,6 +68,9 @@ _ALL_FF_BLOCK: Final[bytes] = b"\xff" * _BLOCK16
 LINK_MODE_SETTLE_SECONDS: Final[float] = 1.0
 FEEDBACK_BLOCK_RETRIES: Final[int] = 2
 _BLOCK_RETRY_PAUSE_SECONDS: Final[float] = 0.5
+# Over a long read the module eventually stops answering altogether;
+# leaving and re-entering link mode brings it back. Refreshes per read.
+FEEDBACK_LINK_REFRESHES: Final[int] = 3
 
 # Byte ranges a module includes in the CRC16 it reports for function
 # 0x13. Switch/roller modules cover their whole image. Dimmers cover
@@ -391,7 +394,7 @@ class NikobusAPI:
         case. Validated on a real 05-207.
         """
         if not link_mode:
-            return await self._read_feedback_regions(address, progress)
+            return await self._read_feedback_regions(address, progress, refreshes=0)
         await self.set_link_mode(address, True)
         try:
             await asyncio.sleep(LINK_MODE_SETTLE_SECONDS)
@@ -401,50 +404,66 @@ class NikobusAPI:
             await asyncio.sleep(LINK_MODE_SETTLE_SECONDS)
 
     async def _read_feedback_regions(
-        self, address: str, progress: Callable[[int, int], Any] | None
+        self,
+        address: str,
+        progress: Callable[[int, int], Any] | None,
+        refreshes: int = FEEDBACK_LINK_REFRESHES,
     ) -> bytes:
         image = bytearray(b"\xff" * FEEDBACK_IMAGE_SIZE)
-        fixed = (
-            REGION_OUTPUT_MODULES,
-            REGION_GROUP_ADDRESSES,
-            (LED_MODE_TABLE_OFFSET, LED_MODE_TABLE_LENGTH),
+        # (start, length, stop on first empty block, optional)
+        regions = (
+            (REGION_OUTPUT_MODULES[0], REGION_OUTPUT_MODULES[1], False, False),
+            (REGION_GROUP_ADDRESSES[0], REGION_GROUP_ADDRESSES[1], False, False),
+            (REGION_LED_LISTS[0], REGION_LED_LISTS[1], True, False),
+            (LED_MODE_TABLE_OFFSET, LED_MODE_TABLE_LENGTH, False, True),
+            (REGION_INPUT_RECORDS[0], REGION_INPUT_RECORDS[1], True, True),
         )
-        bounded = (REGION_LED_LISTS, REGION_INPUT_RECORDS)
-        # Progress counts the fixed regions exactly and the bounded ones
-        # by what they actually return.
         done = 0
-        total = sum(length // _BLOCK16 for _, length in fixed)
-
-        def _step(_current: int, _total: int) -> None:
-            nonlocal done
-            done += 1
-            if progress is not None:
-                progress(done, max(total, done))
-
-        for start, length in fixed:
-            try:
-                data = await self.read_memory_range(
-                    address, start, length, retries=FEEDBACK_BLOCK_RETRIES, progress=_step
-                )
-            except NikobusTimeoutError:
-                if start != LED_MODE_TABLE_OFFSET:
+        total = sum(length // _BLOCK16 for _, length, stop, _ in regions if not stop)
+        for start, length, stop_on_empty, optional in regions:
+            offset = start
+            end = start + length
+            while offset < end:
+                block = offset // _BLOCK16
+                try:
+                    payload = await self._query_block(block, address, FEEDBACK_BLOCK_RETRIES)
+                except NikobusTimeoutError:
+                    if refreshes > 0:
+                        refreshes -= 1
+                        _LOGGER.info(
+                            "Feedback module %s stopped answering at block %#x; "
+                            "re-entering link mode (%d refresh(es) left)",
+                            address, block, refreshes,
+                        )
+                        await self._refresh_link_mode(address)
+                        continue
+                    if optional:
+                        _LOGGER.warning(
+                            "Feedback module %s: region at %#x not readable past %#x, "
+                            "continuing without it",
+                            address, start, offset,
+                        )
+                        break
                     raise
-                # The LED-mode table is informational; a module that
-                # does not serve it still yields a complete link map.
-                _LOGGER.warning("Feedback module %s: LED mode table not readable", address)
-                continue
-            image[start : start + len(data)] = data
-        for start, length in bounded:
-            data = await self.read_memory_range(
-                address,
-                start,
-                length,
-                stop_on_empty=True,
-                retries=FEEDBACK_BLOCK_RETRIES,
-                progress=_step,
-            )
-            image[start : start + len(data)] = data
+                data = payload[2:]
+                if len(data) != _BLOCK16:
+                    raise NikobusError(
+                        f"block {block} of {address}: expected {_BLOCK16} bytes, got {len(data)}"
+                    )
+                image[offset : offset + _BLOCK16] = data
+                offset += _BLOCK16
+                done += 1
+                if progress is not None:
+                    progress(done, max(total, done))
+                if stop_on_empty and data == _ALL_FF_BLOCK:
+                    break
         return bytes(image)
+
+    async def _refresh_link_mode(self, address: str) -> None:
+        await self.set_link_mode(address, False)
+        await asyncio.sleep(LINK_MODE_SETTLE_SECONDS)
+        await self.set_link_mode(address, True)
+        await asyncio.sleep(LINK_MODE_SETTLE_SECONDS)
 
     async def verify_module_memory(
         self, address: str, module_type: str, image: bytes | None = None
