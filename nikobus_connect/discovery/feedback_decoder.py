@@ -16,7 +16,17 @@ offset  length    content
 
 LED slots are numbered 0..255. Slots ``8k .. 8k+7`` belong to the
 push-button module of group ``k`` (its address sits in the 0x6100
-table); slots 192..255 are the feedback module's own LEDs.
+table, 3 bytes per group); slots 192..255 are the feedback module's
+own LEDs. Within a group the row follows the key order A, B, C, D
+(and 1A..1D, 2A..2D on 8-key plates).
+
+Two builds of the programming software place the group table
+differently: at offset 0 of the 0x6100 region, or at offset 0x60 (seen
+on a live module). ``decode_group_addresses`` detects which.
+
+The 4th byte of a tracked-output record is the index of the module's
+first tracked output in the LED lists (a running count over the
+records before it).
 
 Bus addresses: a push-button key transmits a 24-bit address. Reversing
 its bit order gives ``module_address_22 << 2 | key_index`` where
@@ -41,8 +51,18 @@ LED_MODE_TABLE_OFFSET: Final[int] = REGION_EXTRA[0] + 0x1600
 LED_MODE_TABLE_LENGTH: Final[int] = 192
 
 GROUP_COUNT: Final[int] = 24
+GROUP_ENTRY_SIZE: Final[int] = 3
+GROUP_TABLE_BASES: Final[tuple[int, ...]] = (0x00, 0x60)
 SLOTS_PER_GROUP: Final[int] = 8
 OWN_LED_SLOT_BASE: Final[int] = GROUP_COUNT * SLOTS_PER_GROUP
+
+# Row inside a group -> key label, by number of keys on the plate.
+KEY_LABELS_BY_ROW: Final[dict[int, tuple[str, ...]]] = {
+    1: ("1A",),
+    2: ("1A", "1B"),
+    4: ("1A", "1B", "1C", "1D"),
+    8: ("1A", "1B", "1C", "1D", "2A", "2B", "2C", "2D"),
+}
 
 LED_MODES: Final[dict[int, str]] = {
     0: "auto",
@@ -84,8 +104,9 @@ def key_index_from_input(input_address: int) -> int:
 def plate_addresses_for_group(module_address_22: int) -> tuple[str, ...]:
     """Candidate 24-bit plate addresses for a 0x6100 table entry.
 
-    The table clears bit 0 of the 22-bit address for modules with four
-    LEDs or fewer, so both variants are returned, the stored one first.
+    The table stores the 22-bit address with bit 0 normalised (it is
+    cleared for 8-key plates, whose two rows differ in that bit), so
+    both variants are returned, the stored one first.
     """
     base = (module_address_22 & 0x3FFFFF) << 2
     alt = base ^ 0x4
@@ -174,15 +195,17 @@ class FeedbackImage:
     """Decoded feedback module image."""
 
     modules: list[dict[str, Any]]
-    outputs: list[FeedbackOutput]
+    outputs: list[FeedbackOutput | None]
     group_addresses: list[int | None]
     leds: list[FeedbackLed]
     input_records: list[FeedbackInputRecord]
+    group_table_base: int = 0
 
     def as_dict(self) -> dict[str, Any]:
         return {
             "modules": self.modules,
-            "outputs": [vars(out) for out in self.outputs],
+            "outputs": [None if out is None else vars(out) for out in self.outputs],
+            "group_table_base": self.group_table_base,
             "group_addresses": [
                 None if addr is None else f"{addr:06X}" for addr in self.group_addresses
             ],
@@ -203,6 +226,10 @@ class FeedbackImage:
         }
 
 
+def _output_at(outputs: list[FeedbackOutput | None], index: int) -> FeedbackOutput | None:
+    return outputs[index] if 0 <= index < len(outputs) else None
+
+
 def _be24(data: bytes, offset: int) -> int:
     return (data[offset] << 16) | (data[offset + 1] << 8) | data[offset + 2]
 
@@ -213,7 +240,12 @@ def _region(image: bytes, region: tuple[int, int]) -> bytes:
 
 
 def decode_output_modules(image: bytes) -> list[dict[str, Any]]:
-    """Tracked output modules: ``[type][addr hi][addr lo][group][mask hi][mask lo][FF][FF]``."""
+    """Tracked output modules.
+
+    ``[type][addr hi][addr lo][first output index][mask hi][mask lo][FF][FF]``;
+    the 4th byte is the LED-list index of the module's first tracked
+    output (a running count over the preceding records).
+    """
     data = _region(image, REGION_OUTPUT_MODULES)
     modules: list[dict[str, Any]] = []
     for offset in range(0, len(data) - 7, 8):
@@ -225,41 +257,69 @@ def decode_output_modules(image: bytes) -> list[dict[str, Any]]:
                 "eeprom_type": record[0],
                 "module_type": EEPROM_TYPE_TO_MODULE_TYPE.get(record[0]),
                 "module_address": f"{record[1]:02X}{record[2]:02X}",
-                "group": record[3],
+                "first_output_index": record[3],
                 "channel_mask": (record[4] << 8) | record[5],
             }
         )
     return modules
 
 
-def output_table(modules: list[dict[str, Any]]) -> list[FeedbackOutput]:
-    """Output index -> (module, channel): set mask bits in record order, LSB first.
+def output_table(modules: list[dict[str, Any]]) -> list[FeedbackOutput | None]:
+    """Output index -> (module, channel).
 
-    Channels are 1-based to match the rest of the library.
+    A module's outputs start at its stored first index and follow the
+    set mask bits, LSB first; a module with a stored index of 0 that is
+    not the first record uses the running count instead. Channels are
+    1-based to match the rest of the library. Gaps are ``None``.
     """
-    outputs: list[FeedbackOutput] = []
+    outputs: dict[int, FeedbackOutput] = {}
+    running = 0
     for module in modules:
+        base = module.get("first_output_index", running)
+        if base < running:
+            base = running
+        index = base
         mask = module["channel_mask"]
         for bit in range(16):
             if mask & (1 << bit):
-                outputs.append(
-                    FeedbackOutput(
-                        index=len(outputs),
-                        module_address=module["module_address"],
-                        channel=bit + 1,
-                        eeprom_type=module["eeprom_type"],
-                        module_type=module["module_type"],
-                    )
+                outputs[index] = FeedbackOutput(
+                    index=index,
+                    module_address=module["module_address"],
+                    channel=bit + 1,
+                    eeprom_type=module["eeprom_type"],
+                    module_type=module["module_type"],
                 )
-    return outputs
+                index += 1
+        running = index
+    if not outputs:
+        return []
+    return [outputs.get(i) for i in range(max(outputs) + 1)]
 
 
-def decode_group_addresses(image: bytes) -> list[int | None]:
+def group_table_base(image: bytes) -> int:
+    """Offset of the group table inside the 0x6100 region (0 or 0x60).
+
+    One build of the programming software writes the 24 entries from
+    offset 0, another from 0x60. The first base whose table holds an
+    entry wins; an empty region reads as base 0.
+    """
+    data = _region(image, REGION_GROUP_ADDRESSES)
+    span = GROUP_COUNT * GROUP_ENTRY_SIZE
+    for base in GROUP_TABLE_BASES:
+        if any(b != 0xFF for b in data[base : base + span]):
+            return base
+    return GROUP_TABLE_BASES[0]
+
+
+def decode_group_addresses(image: bytes, base: int | None = None) -> list[int | None]:
     """24 group entries, 3 bytes big-endian each; ``FFFFFF`` = unused."""
     data = _region(image, REGION_GROUP_ADDRESSES)
+    if base is None:
+        base = group_table_base(image)
     groups: list[int | None] = []
     for index in range(GROUP_COUNT):
-        value = _be24(data, 3 * index)
+        offset = base + GROUP_ENTRY_SIZE * index
+        value = _be24(data, offset) if offset + 3 <= len(data) else 0xFFFFFF
         groups.append(None if value == 0xFFFFFF else value)
     return groups
 
@@ -271,7 +331,7 @@ def decode_led_modes(image: bytes) -> dict[int, int]:
 
 
 def decode_led_lists(
-    image: bytes, outputs: list[FeedbackOutput]
+    image: bytes, outputs: list[FeedbackOutput | None]
 ) -> dict[int, tuple[bool, bool, list[FeedbackLedOutput]]]:
     """Per-slot lists from the 0x4000 byte stream.
 
@@ -294,7 +354,7 @@ def decode_led_lists(
             current.append(
                 FeedbackLedOutput(
                     output_index=index,
-                    output=outputs[index] if index < len(outputs) else None,
+                    output=_output_at(outputs, index),
                     inverted=tag == 0x01,
                 )
             )
@@ -304,7 +364,7 @@ def decode_led_lists(
             current.append(
                 FeedbackLedOutput(
                     output_index=index,
-                    output=outputs[index] if index < len(outputs) else None,
+                    output=_output_at(outputs, index),
                     input_address=key_address_from_input(_be24(data, offset + 2)),
                 )
             )
@@ -323,7 +383,7 @@ def decode_led_lists(
 
 
 def decode_input_records(
-    image: bytes, outputs: list[FeedbackOutput]
+    image: bytes, outputs: list[FeedbackOutput | None]
 ) -> list[FeedbackInputRecord]:
     """8-byte input-event records, terminated by eight ``FF`` bytes."""
     data = _region(image, REGION_INPUT_RECORDS)
@@ -344,7 +404,7 @@ def decode_input_records(
                 param3=((record[2] & 0x3) << 2) | (record[4] >> 6),
                 output_eeprom_type=record[4] & 0x0F,
                 output_index=index,
-                output=outputs[index] if index < len(outputs) else None,
+                output=_output_at(outputs, index),
                 dim_level=record[6],
             )
         )
@@ -360,7 +420,8 @@ def decode_feedback_image(image: bytes) -> FeedbackImage:
         image = bytes(image) + b"\xff" * (FEEDBACK_IMAGE_SIZE - len(image))
     modules = decode_output_modules(image)
     outputs = output_table(modules)
-    groups = decode_group_addresses(image)
+    base = group_table_base(image)
+    groups = decode_group_addresses(image, base)
     modes = decode_led_modes(image)
     lists = decode_led_lists(image, outputs)
 
@@ -397,4 +458,5 @@ def decode_feedback_image(image: bytes) -> FeedbackImage:
         group_addresses=groups,
         leds=leds,
         input_records=decode_input_records(image, outputs),
+        group_table_base=base,
     )

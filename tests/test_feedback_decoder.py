@@ -274,3 +274,61 @@ def test_feedback_read_without_link_mode_fallback_raises():
     with pytest.raises(NikobusTimeoutError):
         asyncio.run(api.read_feedback_image("966C", link_mode=False))
     assert handler.funcs == [FUNC_READ_BLOCK16] * 3  # retries, never link mode
+
+
+def test_live_image_layout_from_real_module():
+    """Bytes read from a real 05-207 (966C): group table at region offset
+    0x60, tracked-output records with a running first-output index, one
+    LED (slot 2 = key C) tracking C9A5 channel 9, four input records."""
+    from nikobus_connect.discovery.feedback_decoder import (
+        KEY_LABELS_BY_ROW,
+        group_table_base,
+    )
+
+    img = bytearray(b"\xff" * FEEDBACK_IMAGE_SIZE)
+    img[0:32] = bytes.fromhex(
+        "3085985511000000308E1C5511000000" "4054ACF4010000005F07303511000000"
+    )
+    img[0x4000:0x4004] = bytes.fromhex("00000402")
+    img[0x6000:0x6030] = bytes.fromhex(
+        "030E6C000000FFFF" "029105000000FFFF" "028394000000FFFF"
+        "01C9A5000100FFFF" "095B05010000FFFF" "014707010000FFFF"
+    )
+    img[0x6160:0x6163] = bytes.fromhex("10152B")
+    img[0x6170] = 0x00
+
+    assert group_table_base(bytes(img)) == 0x60
+    decoded = decode_feedback_image(bytes(img))
+    assert decoded.group_table_base == 0x60
+    assert [m["first_output_index"] for m in decoded.modules] == [0, 0, 0, 0, 1, 1]
+    assert len(decoded.outputs) == 1
+    assert (decoded.outputs[0].module_address, decoded.outputs[0].channel) == ("C9A5", 9)
+    assert decoded.group_addresses[0] == 0x10152B
+    assert decoded.group_addresses[1] is None
+
+    (led,) = decoded.leds
+    assert (led.slot, led.group, led.row) == (2, 0, 2)
+    assert led.plate_addresses[0] == "4054AC"
+    assert KEY_LABELS_BY_ROW[4][led.row] == "1C"
+    assert led.outputs[0].output.module_address == "C9A5"
+    assert led.mode is None  # this build writes no mode table
+
+    keys = [rec.key_address for rec in decoded.input_records]
+    assert keys == ["99A10C", "B8710C", "352A02", "8CE0FA"]
+    assert all(rec.output is decoded.outputs[0] for rec in decoded.input_records)
+    # key C of plate 4054AC is index 0: 352A02 bit-reversed = 4054AC | 0
+    assert key_index_from_input(reverse_bits24(0x352A02)) == 0
+
+
+def test_first_output_index_creates_gaps_and_running_fallback():
+    from nikobus_connect.discovery.feedback_decoder import output_table
+
+    modules = [
+        {"eeprom_type": 1, "module_type": "switch_module", "module_address": "AAAA", "first_output_index": 0, "channel_mask": 0b11},
+        {"eeprom_type": 2, "module_type": "roller_module", "module_address": "BBBB", "first_output_index": 4, "channel_mask": 0b1},
+        {"eeprom_type": 3, "module_type": "dimmer_module", "module_address": "CCCC", "first_output_index": 0, "channel_mask": 0b1},
+    ]
+    table = output_table(modules)
+    assert [(o.module_address, o.channel) if o else None for o in table] == [
+        ("AAAA", 1), ("AAAA", 2), None, None, ("BBBB", 1), ("CCCC", 1)
+    ]

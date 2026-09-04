@@ -7,6 +7,7 @@
 - A real 05-207 serves block reads only in link mode, so `read_feedback_image()` now enters link mode first instead of probing without it (15 s saved per run), waits a second after entering and after leaving (the module ignores the next command otherwise), and leaves link mode in every case.
 - The module drops an occasional block while it pushes feedback frames itself; every block of the feedback read is retried twice with a short pause (`read_memory_range(retries=...)`). An unreadable LED-mode table no longer fails the read — modes come back as unknown.
 - Decoded from the live image: the tracked-output table (module type, address, channel mask), the LED list and the input-event records all matched the installation's real modules and keys.
+- **Decoder corrections from the live image and a second pass over the plugin.** The push-button group table sits at offset 0 or 0x60 of its region depending on the programming-software build (`group_table_base()` detects it); the 4th byte of a tracked-output record is the module's first output index, now used to place its outputs (`output_table()` returns gaps as `None`); rows inside a group follow the key order A, B, C, D (`KEY_LABELS_BY_ROW`); the LED-mode table is written only by some builds, so modes may be unknown. Pinned by a test built from the real module's bytes.
 
 
 ## 0.36.1
