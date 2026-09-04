@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Callable
 from datetime import datetime
@@ -60,6 +61,13 @@ MODULE_CRC_UNKNOWN: Final[frozenset[str]] = frozenset({"feedback_module"})
 
 _BLOCK16: Final[int] = 16
 _ALL_FF_BLOCK: Final[bytes] = b"\xff" * _BLOCK16
+
+# A feedback module needs a moment after entering / leaving link mode
+# before it answers the next command, and it drops an occasional block
+# read while it is busy pushing feedback frames itself.
+LINK_MODE_SETTLE_SECONDS: Final[float] = 1.0
+FEEDBACK_BLOCK_RETRIES: Final[int] = 2
+_BLOCK_RETRY_PAUSE_SECONDS: Final[float] = 0.5
 
 # Byte ranges a module includes in the CRC16 it reports for function
 # 0x13. Switch/roller modules cover their whole image. Dimmers cover
@@ -304,6 +312,7 @@ class NikobusAPI:
         length: int,
         *,
         stop_on_empty: bool = False,
+        retries: int = 0,
         progress: Callable[[int, int], Any] | None = None,
     ) -> bytes:
         """Read ``length`` bytes from memory offset ``start`` in 16-byte blocks.
@@ -311,7 +320,8 @@ class NikobusAPI:
         ``start`` and ``length`` must be multiples of 16. With
         ``stop_on_empty`` the read ends at the first all-``FF`` block,
         which is how ``FF``-terminated tables are bounded; the returned
-        bytes are then shorter than ``length``.
+        bytes are then shorter than ``length``. ``retries`` re-issues a
+        block that went unanswered, after a short pause.
         """
         if start % _BLOCK16 or length % _BLOCK16:
             raise ValueError("start and length must be multiples of 16")
@@ -319,9 +329,7 @@ class NikobusAPI:
         first = start // _BLOCK16
         image = bytearray()
         for index in range(total):
-            payload = await self._command_handler.query(
-                FUNC_READ_BLOCK16, address, make_block_index_args(first + index)
-            )
+            payload = await self._query_block(first + index, address, retries)
             data = payload[2:]
             if len(data) != _BLOCK16:
                 raise NikobusError(
@@ -333,6 +341,22 @@ class NikobusAPI:
             if stop_on_empty and data == _ALL_FF_BLOCK:
                 break
         return bytes(image)
+
+    async def _query_block(self, block: int, address: str, retries: int) -> bytes:
+        attempt = 0
+        while True:
+            try:
+                return await self._command_handler.query(
+                    FUNC_READ_BLOCK16, address, make_block_index_args(block)
+                )
+            except NikobusTimeoutError:
+                if attempt >= retries:
+                    raise
+                attempt += 1
+                _LOGGER.debug(
+                    "Block %#x of %s unanswered, retry %d/%d", block, address, attempt, retries
+                )
+                await asyncio.sleep(_BLOCK_RETRY_PAUSE_SECONDS)
 
     async def set_link_mode(self, address: str, enabled: bool) -> None:
         """Put a module in, or take it out of, link (programming) mode.
@@ -361,24 +385,20 @@ class NikobusAPI:
         with ``FF`` in the parts that were not read.
 
         A feedback module answers its status query but ignores block
-        reads in normal operation. With ``link_mode`` the read is
-        retried in link mode when the first block goes unanswered, the
-        way the module is programmed; link mode is left again in every
-        case.
+        reads in normal operation; it serves them in link mode, the way
+        it is programmed. With ``link_mode`` (the default) the module is
+        put in link mode first and taken out of it afterwards, in every
+        case. Validated on a real 05-207.
         """
-        try:
+        if not link_mode:
             return await self._read_feedback_regions(address, progress)
-        except NikobusTimeoutError:
-            if not link_mode:
-                raise
-            _LOGGER.info(
-                "Feedback module %s ignores block reads; retrying in link mode", address
-            )
         await self.set_link_mode(address, True)
         try:
+            await asyncio.sleep(LINK_MODE_SETTLE_SECONDS)
             return await self._read_feedback_regions(address, progress)
         finally:
             await self.set_link_mode(address, False)
+            await asyncio.sleep(LINK_MODE_SETTLE_SECONDS)
 
     async def _read_feedback_regions(
         self, address: str, progress: Callable[[int, int], Any] | None
@@ -402,11 +422,26 @@ class NikobusAPI:
                 progress(done, max(total, done))
 
         for start, length in fixed:
-            data = await self.read_memory_range(address, start, length, progress=_step)
+            try:
+                data = await self.read_memory_range(
+                    address, start, length, retries=FEEDBACK_BLOCK_RETRIES, progress=_step
+                )
+            except NikobusTimeoutError:
+                if start != LED_MODE_TABLE_OFFSET:
+                    raise
+                # The LED-mode table is informational; a module that
+                # does not serve it still yields a complete link map.
+                _LOGGER.warning("Feedback module %s: LED mode table not readable", address)
+                continue
             image[start : start + len(data)] = data
         for start, length in bounded:
             data = await self.read_memory_range(
-                address, start, length, stop_on_empty=True, progress=_step
+                address,
+                start,
+                length,
+                stop_on_empty=True,
+                retries=FEEDBACK_BLOCK_RETRIES,
+                progress=_step,
             )
             image[start : start + len(data)] = data
         return bytes(image)
