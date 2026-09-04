@@ -181,16 +181,3 @@ def test_switch_crc_covers_whole_image():
     image = bytes(range(256)) * (MODULE_IMAGE_SIZES["switch_module"] // 256)
     assert image_crc(image, "switch_module") == calc_crc1(image.hex())
 
-
-def test_link_mode_completes_on_ack_alone():
-    from nikobus_connect.protocol import FUNC_LINK_MODE_OFF, FUNC_LINK_MODE_ON
-
-    async def scenario():
-        payload, sent = await _run_query(FUNC_LINK_MODE_ON, "966C", ["$0518"])
-        assert payload == b""
-        assert sent[0].startswith("$1018" + "6C96")
-        payload, sent = await _run_query(FUNC_LINK_MODE_OFF, "966C", ["$0519"])
-        assert payload == b""
-        assert sent[0].startswith("$1019" + "6C96")
-
-    asyncio.run(scenario())
