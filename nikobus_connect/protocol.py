@@ -146,6 +146,10 @@ FUNC_MODULE_STATUS: Final[int] = 0x11
 """Module status: EEPROM-error flag, type signature and record counts."""
 FUNC_MODULE_CRC: Final[int] = 0x13
 """Fetch the CRC16 a module computes over its whole memory image."""
+FUNC_LINK_MODE_ON: Final[int] = 0x18
+"""Put a module in link (programming) mode; acknowledged only."""
+FUNC_LINK_MODE_OFF: Final[int] = 0x19
+"""Leave link mode; acknowledged only."""
 FUNC_GET_TIME: Final[int] = 0x1D
 """Read the PC-Link's date/time."""
 FUNC_SET_TIME: Final[int] = 0x1E

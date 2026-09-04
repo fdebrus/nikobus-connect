@@ -23,6 +23,9 @@ _LOGGER = logging.getLogger(__name__)
 # Function codes whose answer is returned as the raw reply payload
 # (see ``query``) rather than the 6-byte output-state slice.
 _RAW_REPLY_FUNCS: frozenset[str] = frozenset({"10", "11", "13", "1D", "22"})
+# Maintenance functions the PC-Link only acknowledges (``$05xx``); no
+# answer frame follows, so the wait completes on the ack alone.
+_ACK_ONLY_FUNCS: frozenset[str] = frozenset({"18", "19", "1B", "1C"})
 
 
 class NikobusCommandHandler:
@@ -367,7 +370,11 @@ class NikobusCommandHandler:
                 address.upper(), 1 if gid == "12" else 2
             )
         state = await self._wait_for_ack_and_answer(
-            command, wait_ack, wait_answer, raw=gid in _RAW_REPLY_FUNCS
+            command,
+            wait_ack,
+            wait_answer,
+            raw=gid in _RAW_REPLY_FUNCS,
+            ack_only=gid in _ACK_ONLY_FUNCS,
         )
         if state is None:
             raise NikobusTimeoutError(
@@ -435,12 +442,18 @@ class NikobusCommandHandler:
         return ack_signal, answer_signal
 
     async def _wait_for_ack_and_answer(
-        self, command: str, wait_ack: str, wait_answer: str, raw: bool = False
+        self,
+        command: str,
+        wait_ack: str,
+        wait_answer: str,
+        raw: bool = False,
+        ack_only: bool = False,
     ) -> str | None:
         """Wait for an acknowledgment and answer with retries.
 
         ``raw`` returns the answer frame's full data payload (hex)
-        instead of the 6-byte output-state slice.
+        instead of the 6-byte output-state slice; ``ack_only`` completes
+        on the ``$05xx`` acknowledgment alone.
         """
         self._listener._awaiting_response = True
         self._listener._awaited_answer = wait_answer
@@ -459,7 +472,7 @@ class NikobusCommandHandler:
                         attempt, MAX_ATTEMPTS, wait_ack, wait_answer,
                     )
                     state = await self._wait_for_ack_and_answer_state(
-                        wait_ack, wait_answer, raw=raw
+                        wait_ack, wait_answer, raw=raw, ack_only=ack_only
                     )
                     if state is not None:
                         _LOGGER.debug("Received valid state from device")
@@ -480,7 +493,7 @@ class NikobusCommandHandler:
             self._listener._awaited_answer = None
 
     async def _wait_for_ack_and_answer_state(
-        self, wait_ack: str, wait_answer: str, raw: bool = False
+        self, wait_ack: str, wait_answer: str, raw: bool = False, ack_only: bool = False
     ) -> str | None:
         """Wait for both acknowledgment and answer signals, then extract the state."""
         ack_received = False
@@ -505,6 +518,8 @@ class NikobusCommandHandler:
                 if wait_ack in message:
                     _LOGGER.debug("ACK received")
                     ack_received = True
+                    if ack_only:
+                        return ""
                 if wait_answer in message:
                     if wait_answer.startswith("$0EFF"):
                         _LOGGER.debug("Answer received (set-command ack)")

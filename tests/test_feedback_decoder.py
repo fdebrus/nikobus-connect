@@ -158,3 +158,69 @@ def test_feedback_module_registered_for_backup_but_not_crc():
     assert MODULE_IMAGE_SIZES["feedback_module"] == FEEDBACK_IMAGE_SIZE
     assert "feedback_module" in MODULE_CRC_UNKNOWN
     assert make_block_index_args(0x600) == b"\x00\x06"
+
+
+class _LinkModeHandler(_FakeHandler):
+    """Ignores block reads until link mode is on, like a real 05-207."""
+
+    def __init__(self, image: bytes, *, fail_in_link_mode: bool = False) -> None:
+        super().__init__(image)
+        self.link_mode = False
+        self.fail_in_link_mode = fail_in_link_mode
+        self.funcs: list[int] = []
+
+    async def query(self, func: int, address: str, args: bytes | None = None) -> bytes:
+        from nikobus_connect.exceptions import NikobusTimeoutError
+        from nikobus_connect.protocol import FUNC_LINK_MODE_OFF, FUNC_LINK_MODE_ON
+
+        self.funcs.append(func)
+        if func == FUNC_LINK_MODE_ON:
+            self.link_mode = True
+            return b""
+        if func == FUNC_LINK_MODE_OFF:
+            self.link_mode = False
+            return b""
+        if not self.link_mode or self.fail_in_link_mode:
+            raise NikobusTimeoutError("no ack")
+        return await super().query(func, address, args)
+
+
+def test_feedback_read_retries_in_link_mode_and_leaves_it():
+    from nikobus_connect.protocol import FUNC_LINK_MODE_OFF, FUNC_LINK_MODE_ON
+
+    original = bytes(_image())
+    handler = _LinkModeHandler(original)
+    api = NikobusAPI(handler, {})
+    image = asyncio.run(api.read_module_memory("966C", "feedback_module"))
+    assert decode_feedback_image(image).as_dict() == decode_feedback_image(original).as_dict()
+    # one ignored read, link mode on, the reads, link mode off
+    assert handler.funcs[0] == FUNC_READ_BLOCK16
+    assert handler.funcs[1] == FUNC_LINK_MODE_ON
+    assert handler.funcs[-1] == FUNC_LINK_MODE_OFF
+    assert handler.link_mode is False
+
+
+def test_feedback_read_leaves_link_mode_on_failure():
+    import pytest
+
+    from nikobus_connect.exceptions import NikobusTimeoutError
+    from nikobus_connect.protocol import FUNC_LINK_MODE_OFF
+
+    handler = _LinkModeHandler(bytes(_image()), fail_in_link_mode=True)
+    api = NikobusAPI(handler, {})
+    with pytest.raises(NikobusTimeoutError):
+        asyncio.run(api.read_feedback_image("966C"))
+    assert handler.funcs[-1] == FUNC_LINK_MODE_OFF
+    assert handler.link_mode is False
+
+
+def test_feedback_read_without_link_mode_fallback_raises():
+    import pytest
+
+    from nikobus_connect.exceptions import NikobusTimeoutError
+
+    handler = _LinkModeHandler(bytes(_image()))
+    api = NikobusAPI(handler, {})
+    with pytest.raises(NikobusTimeoutError):
+        asyncio.run(api.read_feedback_image("966C", link_mode=False))
+    assert handler.funcs == [FUNC_READ_BLOCK16]

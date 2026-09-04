@@ -16,9 +16,11 @@ from .discovery.feedback_decoder import (
     REGION_LED_LISTS,
     REGION_OUTPUT_MODULES,
 )
-from .exceptions import NikobusError
+from .exceptions import NikobusError, NikobusTimeoutError
 from .protocol import (
     FUNC_GET_TIME,
+    FUNC_LINK_MODE_OFF,
+    FUNC_LINK_MODE_ON,
     FUNC_MODULE_CRC,
     FUNC_MODULE_STATUS,
     FUNC_READ_BLOCK8,
@@ -332,8 +334,22 @@ class NikobusAPI:
                 break
         return bytes(image)
 
+    async def set_link_mode(self, address: str, enabled: bool) -> None:
+        """Put a module in, or take it out of, link (programming) mode.
+
+        Acknowledged only. Link mode by itself changes no programming:
+        clearing and writing memory are separate functions.
+        """
+        await self._command_handler.query(
+            FUNC_LINK_MODE_ON if enabled else FUNC_LINK_MODE_OFF, address
+        )
+
     async def read_feedback_image(
-        self, address: str, progress: Callable[[int, int], Any] | None = None
+        self,
+        address: str,
+        progress: Callable[[int, int], Any] | None = None,
+        *,
+        link_mode: bool = True,
     ) -> bytes:
         """Read the programmed parts of a feedback module (05-207) image.
 
@@ -343,7 +359,30 @@ class NikobusAPI:
         fixed tables (tracked output modules, group addresses, LED
         modes) in full. The result is a ``FEEDBACK_IMAGE_SIZE`` image
         with ``FF`` in the parts that were not read.
+
+        A feedback module answers its status query but ignores block
+        reads in normal operation. With ``link_mode`` the read is
+        retried in link mode when the first block goes unanswered, the
+        way the module is programmed; link mode is left again in every
+        case.
         """
+        try:
+            return await self._read_feedback_regions(address, progress)
+        except NikobusTimeoutError:
+            if not link_mode:
+                raise
+            _LOGGER.info(
+                "Feedback module %s ignores block reads; retrying in link mode", address
+            )
+        await self.set_link_mode(address, True)
+        try:
+            return await self._read_feedback_regions(address, progress)
+        finally:
+            await self.set_link_mode(address, False)
+
+    async def _read_feedback_regions(
+        self, address: str, progress: Callable[[int, int], Any] | None
+    ) -> bytes:
         image = bytearray(b"\xff" * FEEDBACK_IMAGE_SIZE)
         fixed = (
             REGION_OUTPUT_MODULES,

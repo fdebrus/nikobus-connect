@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.36.1
+
+- **Feedback module reads fall back to link mode.** On a real 05-207 the status query is answered but every block read is ignored (no acknowledgment at block 0 or 0x600). The module is programmed in link mode, so `read_feedback_image()` now retries the read after function 0x18 (link mode on) when the first block goes unanswered, and always sends 0x19 (link mode off) afterwards, on failure too. New `NikobusAPI.set_link_mode()`, `FUNC_LINK_MODE_ON` / `FUNC_LINK_MODE_OFF`.
+- The command layer completes acknowledged-only maintenance functions (0x18, 0x19, 0x1B, 0x1C) on the `$05xx` acknowledgment instead of waiting for an answer frame that never comes.
+
+
 ## 0.36.0
 
 **Feedback module (05-207): image read and decode.**
