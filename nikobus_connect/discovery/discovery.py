@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import inspect
 import json
 import logging
@@ -1187,6 +1188,11 @@ class NikobusDiscovery:
             )
         listener = nikobus_command._listener
         connection = nikobus_command._connection
+        # Command handlers without a bus lock (test fakes) fall back to a
+        # no-op context so the scan still runs.
+        bus_lock: asyncio.Lock | contextlib.AbstractAsyncContextManager[Any] = (
+            getattr(nikobus_command, "bus_lock", None) or contextlib.nullcontext()
+        )
 
         async with self._scan_lock:
             self._scan_active = True
@@ -1255,13 +1261,18 @@ class NikobusDiscovery:
                         break
                     partial_hex = f"{base_command}{reg:02X}{sub_byte}"
                     pc_link_command = make_pc_link_inventory_command(partial_hex)
-                    ack_ok = await self._read_register_once(
-                        pc_link_command,
-                        reg,
-                        normalized_address,
-                        listener,
-                        connection,
-                    )
+                    # Hold the command handler's bus lock for this one
+                    # exchange so a queued command (a coordinator poll,
+                    # a user's switch) is sent between register reads,
+                    # never on top of one.
+                    async with bus_lock:
+                        ack_ok = await self._read_register_once(
+                            pc_link_command,
+                            reg,
+                            normalized_address,
+                            listener,
+                            connection,
+                        )
                     registers_sent += 1
                     self._progress_module_registers_sent += 1
                     await self._emit_progress(

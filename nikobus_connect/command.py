@@ -48,6 +48,17 @@ class NikobusCommandHandler:
         self._running: bool = False
         self._command_task: asyncio.Task[None] | None = None
         self._command_queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=100)
+        # One request/response exchange on the bus at a time. The queue
+        # serialises the commands that go through it, but the discovery
+        # register scan writes on the connection directly; it takes this
+        # lock per register so a queued poll can never go out while a
+        # register read is waiting for its answer (and vice versa). Two
+        # exchanges in flight on the same PC-Link garble each other's
+        # replies: ACKs land in the wrong wait, data frames get merged
+        # into one oversized frame that fails its CRC, and the scan
+        # then sees the module's link table start one block late and
+        # discards it as corrupt.
+        self.bus_lock: asyncio.Lock = asyncio.Lock()
         self._pending_get_futures: dict[str, asyncio.Future[str]] = {}
         self._queued_get_keys: set[str] = set()
 
@@ -116,13 +127,17 @@ class NikobusCommandHandler:
 
                 try:
                     if not address:
-                        await self._send_command(command)
+                        async with self.bus_lock:
+                            await self._send_command(command)
                         if completion_handler and callable(completion_handler):
                             res = completion_handler()
                             if inspect.isawaitable(res):
                                 await res
                     else:
-                        result = await self._send_command_get_answer(command, address)
+                        async with self.bus_lock:
+                            result = await self._send_command_get_answer(
+                                command, address
+                            )
                         if future and not future.done():
                             future.set_result(result)
                         if completion_handler and callable(completion_handler):

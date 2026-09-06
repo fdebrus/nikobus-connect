@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.37.1
+
+- **One bus exchange at a time: the discovery register scan no longer collides with queued commands.** The scan reads a module's link table by writing on the connection directly, outside the command queue, so a coordinator poll (the initial sync after a reload, a cycle already under way, a button-triggered refresh, a user's switch) could be sent while a register read was still waiting for its answer. On the bus the two exchanges garble each other: ACKs land in the wrong wait, both data frames merge into one oversized frame that fails its CRC, and the scan then sees the link table start one block late and discards the whole module as corrupt ("link table looks corrupt", every button on that module left without links — issue fdebrus/Nikobus-HA#502, a switch module with 33 records). `NikobusCommandHandler` now owns a `bus_lock`; the queue holds it for the send and wait of every command, and the register scan takes it per register, so a queued command goes out between two reads, never on top of one.
+
 ## 0.37.0
 
 **Removed: feedback-module programming read.** Reading a feedback module's (05-207) memory required putting it into link mode — the same mode that gates clearing and writing a module — and never became reliable on real hardware (the module falls silent mid-read and needs repeated link-mode re-entries). The risk of leaning on the write-enable mode for a read outweighed the benefit, so it is gone: the `feedback_decoder` module, `read_feedback_image()` / `read_memory_range()` / `set_link_mode()`, the `FUNC_LINK_MODE_ON` / `FUNC_LINK_MODE_OFF` functions, `MODULE_CRC_UNKNOWN`, and the `feedback_module` entry in `MODULE_IMAGE_SIZES`. No module is put into link mode by the library any more; backup and verify cover the switch, roller and dimmer modules as before. The real-time feedback-frame push (a Feedback Module reporting output state) is unaffected.
