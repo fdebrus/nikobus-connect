@@ -822,9 +822,16 @@ DIMMER_T1_3: tuple[str, ...] = (
     "10 s", "1 m", "2 m", "3 m", "4 m", "5 m", "6 m", "7 m",
     "8 m", "9 m", "15 m", "30 m", "45 m", "60 m", "90 m", "120 m",
 )
+# Preset level for M11 / M12. The vendor table (ParamBase KP=11,
+# ``S_DB_DIMMER_AMOUNT``) holds the tokens ``S_D1, S_D15, S_D2, S_D25 …
+# S_D7, S_D8, S_D9, S_D10``: the level on the dim controller's 1–10 V
+# scale (1 V, 1.5 V, … 10 V), 16 steps. Rendered as the percentage of
+# full scale, which is what a light-scene preset means to a user: 7 →
+# 70 %. The previous ``1% … 10%`` reading took the token number as a
+# percentage, which made every preset a near-off level.
 DIMMER_AMOUNT_PERCENT = (
-    "1%", "1.5%", "2%", "2.5%", "3%", "3.5%", "4%", "4.5%",
-    "5%", "5.5%", "6%", "6.5%", "7%", "8%", "9%", "10%",
+    "10%", "15%", "20%", "25%", "30%", "35%", "40%", "45%",
+    "50%", "55%", "60%", "65%", "70%", "80%", "90%", "100%",
 )
 DIMMER_T2_RAMP: tuple[str, ...] = (
     "1 s", "2 s", "4 s", "6 s", "8 s", "10 s", "15 s", "20 s",

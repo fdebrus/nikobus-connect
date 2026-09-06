@@ -3,6 +3,10 @@
 ## 0.37.2
 
 - **Frames corrupted on the bus are dropped: the listener now checks the module's CRC-16 as well as the PC-Link's CRC-8.** The CRC-8 is stamped by the PC-Link over the text it forwards and only proves the serial hop; a byte flipped on the bus between a module and the PC-Link passes it, because the PC-Link stamps the corrupted text with a good CRC-8. The CRC-16 inside the frame is computed by the module itself over the payload, so it is the only check that covers the bus hop. Seen on a real installation: the status answer of module 966C arriving as `$186D96…` (one bit flipped in the address echo), CRC-8 valid, CRC-16 invalid; a `$1C` state frame corrupted that way would have been filed under a phantom module address. `validate_crc()` now verifies the CRC-16 of `$18`, `$1C`, `$2E` and `$1E` frames and drops a mismatch at DEBUG. `$05` acks, `$0EFF` set-command answers and `$1A` frames carry no payload CRC and are unchanged; the all-`FF` `$18` end-of-table trailer is accepted as before.
+- **Dimmer preset level relabelled: `10% … 100%`, not `1% … 10%`.** The vendor table behind M11 / M12 (`S_DB_DIMMER_AMOUNT`) holds the tokens `S_D1, S_D15, S_D2 … S_D10`, the level on the dim controller's 1–10 V scale; the earlier reading took the token number itself as a percentage and made every preset a near-off level. `S_D7` now reads `70%`.
+- **Roller M04 (Stop) no longer carries a T1 label.** The vendor assigns it no parameter; the nibble was being rendered as an operating time.
+- **Decoder tables pinned against the vendor's own.** `tests/fixtures/vendor_param_tables.json` holds the `ParamBase` value lists and the per-mode parameter assignments (`LinkModeBase`) of a PC-software project file; a test checks every switch, roller and dimmer table in `mapping.py` and every mode → parameter dispatch in the decoders against them.
+
 
 ## 0.37.1
 
