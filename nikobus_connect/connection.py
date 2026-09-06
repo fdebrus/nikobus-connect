@@ -22,6 +22,19 @@ from .exceptions import NikobusConnectionError, NikobusSendError, NikobusReadErr
 _LOGGER = logging.getLogger(__name__)
 
 
+def _looks_like_nikobus_frame(text: str) -> bool:
+    """A ``$``-frame with a plausible length byte, or a ``#N`` button press."""
+    if text.startswith("#N") and len(text) >= 8:
+        return True
+    if text.startswith("$") and len(text) >= 5:
+        try:
+            declared = int(text[1:3], 16)
+        except ValueError:
+            return False
+        return declared >= 5 and (len(text) == declared - 1 or len(text) == 5)
+    return False
+
+
 class NikobusConnect:
     """Manages the asynchronous connection (Serial or TCP) to the Nikobus PC-Link."""
 
@@ -32,6 +45,10 @@ class NikobusConnect:
         self._writer: asyncio.StreamWriter | None = None
         self._lock = asyncio.Lock()
         self._is_connected = False
+        # Presence-probe verdict of the last ``connect()``: ``True`` when a
+        # Nikobus device answered, ``False`` when the port opened but
+        # nothing did, ``None`` before the first connect.
+        self.device_answered: bool | None = None
 
     @property
     def is_connected(self) -> bool:
@@ -84,18 +101,25 @@ class NikobusConnect:
             _LOGGER.error("Handshake failed: %s", err)
             raise NikobusConnectionError(f"Handshake failed: {err}") from err
 
-    async def _probe(self) -> None:
-        """Prove a Nikobus device is on the other end, not just an open port.
+    async def _probe(self) -> bool:
+        """Check that a Nikobus device is on the other end, not just an open port.
 
         The handshake writes blindly; a wrong port, an unpowered PC-Link,
         a bridge with nothing behind it or a serial handle left dead by
         another program all "complete" it. The presence probe (a status
         query to the null address) is acknowledged with ``$0511`` by the
-        PC-Link and by a feedback module used as gateway. The interface
-        holds that acknowledgement until the next ``$`` frame it
-        receives, so each attempt sends the probe twice and reads after
-        the second. Raises ``NikobusConnectionError`` when nothing
-        answers within ``PRESENCE_PROBE_ATTEMPTS`` attempts.
+        PC-Link and by a feedback module used as gateway; any other
+        well-formed Nikobus frame seen meanwhile (a button press, a
+        feedback frame, an ack) proves the point just as well, which
+        covers gateways whose null-address behaviour is unknown (a
+        PC-Logic used as gateway). The interface holds an acknowledgement
+        until the next ``$`` frame it receives, so each attempt sends the
+        probe twice and reads after the second.
+
+        Records the verdict in ``device_answered`` and returns it. Silence
+        is logged as a warning, not raised: an installation whose gateway
+        does not answer the probe must still come up. Callers that want a
+        hard failure (a set-up wizard testing a port) check the flag.
         """
         assert self._reader is not None
         loop = asyncio.get_running_loop()
@@ -109,27 +133,32 @@ class NikobusConnect:
                     data = await asyncio.wait_for(self._reader.readuntil(b"\r"), remaining)
                 except (TimeoutError, asyncio.IncompleteReadError, asyncio.LimitOverrunError):
                     break
-                text = data.decode("ascii", errors="ignore")
-                if EXPECTED_HANDSHAKE_RESPONSE in text:
+                text = data.decode("ascii", errors="ignore").strip()
+                if EXPECTED_HANDSHAKE_RESPONSE in text or _looks_like_nikobus_frame(text):
                     _LOGGER.info(
-                        "Nikobus device answered the presence probe on %s (attempt %d)",
+                        "Nikobus device answered on %s (attempt %d): %s",
                         self._connection_string,
                         attempt,
+                        text[:32],
                     )
-                    return
-                _LOGGER.debug("Presence probe: ignoring %r while waiting for %s", text.strip(), EXPECTED_HANDSHAKE_RESPONSE)
-            _LOGGER.warning(
-                "No Nikobus device answered the presence probe on %s (attempt %d/%d)",
+                    self.device_answered = True
+                    return True
+            _LOGGER.debug(
+                "Presence probe on %s: no answer (attempt %d/%d)",
                 self._connection_string,
                 attempt,
                 PRESENCE_PROBE_ATTEMPTS,
             )
-        raise NikobusConnectionError(
-            f"{self._connection_string} opened but no Nikobus device answered the presence "
-            f"probe after {PRESENCE_PROBE_ATTEMPTS} attempts. Check the cable and the PC-Link "
-            "power, make sure the Nikobus PC software is not holding the port, and if the "
-            "PC-Link was used by another program, power-cycle it."
+        _LOGGER.warning(
+            "%s opened but no Nikobus device answered the presence probe after %d attempts. "
+            "Check the cable and the PC-Link power, make sure the Nikobus PC software is not "
+            "holding the port, and if the PC-Link was used by another program, power-cycle it. "
+            "Continuing: commands will time out until a device answers.",
+            self._connection_string,
+            PRESENCE_PROBE_ATTEMPTS,
         )
+        self.device_answered = False
+        return False
 
     async def reconnect_with_backoff(
         self,

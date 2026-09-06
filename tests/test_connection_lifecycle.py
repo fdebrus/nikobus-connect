@@ -201,10 +201,10 @@ async def test_backoff_cancellation_propagates() -> None:
         await task
 
 
-async def test_probe_silence_disconnects_and_raises() -> None:
-    """An open port with nothing answering is not a connection: the probe
-    fails after its attempts, the transport is closed, and the error
-    says what to check."""
+async def test_probe_silence_is_a_warning_not_a_failure(caplog) -> None:
+    """An open port with nothing answering still connects — some gateways
+    (a PC-Logic) have no known answer to the null-address probe — but the
+    verdict is recorded and logged so the integration can surface it."""
     conn = NikobusConnect("/dev/ttyUSB9")
     reader, writer = _stream_pair(probe_reply=None)
     with (
@@ -214,23 +214,35 @@ async def test_probe_silence_disconnects_and_raises() -> None:
         ),
         patch("asyncio.sleep", new=AsyncMock()),
         _fast_probe(),
-        pytest.raises(NikobusConnectionError, match="no Nikobus device answered"),
     ):
         await conn.connect()
-    assert not conn.is_connected
-    writer.close.assert_called_once()
+    assert conn.is_connected
+    assert conn.device_answered is False
+    assert "no Nikobus device answered" in caplog.text
 
 
-async def test_probe_ignores_other_frames_until_the_ack() -> None:
-    """Bus chatter (a button press, a feedback frame) before the ``$0511``
-    is skipped, not mistaken for the acknowledgement."""
+async def test_probe_accepts_any_nikobus_frame_as_presence() -> None:
+    """A gateway that never acks the null address but relays bus traffic
+    (a feedback frame here) still counts as present."""
     conn = NikobusConnect("host:1234")
-    reader, writer = _stream_pair()
-    reader.readuntil = AsyncMock(side_effect=[b"#N004E2C\r", b"$1C6C0E00FF00000000009FE944\r", b"$0511\r"])
+    reader, writer = _stream_pair(probe_reply=b"$1C6C0E00FF00000000009FE944\r")
     with (
         patch("asyncio.open_connection", new=AsyncMock(return_value=(reader, writer))),
         patch("asyncio.sleep", new=AsyncMock()),
     ):
         await conn.connect()
-    assert conn.is_connected
+    assert conn.device_answered is True
+
+
+async def test_probe_ignores_garbage_until_a_real_frame() -> None:
+    """Line noise before the first well-formed frame is skipped."""
+    conn = NikobusConnect("host:1234")
+    reader, writer = _stream_pair()
+    reader.readuntil = AsyncMock(side_effect=[b"\xff\xfe\r", b"$1\r", b"$0511\r"])
+    with (
+        patch("asyncio.open_connection", new=AsyncMock(return_value=(reader, writer))),
+        patch("asyncio.sleep", new=AsyncMock()),
+    ):
+        await conn.connect()
+    assert conn.device_answered is True
     assert reader.readuntil.await_count == 3
