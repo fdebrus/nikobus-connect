@@ -3,10 +3,10 @@
 Niko's product database has FOUR distinct T1 parameter tables for the
 dimmer module, dispatched by mode:
 
-* M01/M02/M03 → DIMMER_T1_1  (3-value on/off step config)
+* M01/M02/M03 → DIMMER_T1_1  (3-value dimming-speed on/off config)
 * M05/M06     → DIMMER_T1_2  (4-value push time)
 * M07         → DIMMER_T1_3  (16-value delayed-off duration)
-* M11/M12     → DIMMER_AMOUNT_PERCENT (16-value preset dim level, 10% to 100%)
+* M11/M12     → DIMMER_PRESET_LEVEL (16-value preset level, 1,0 V to 10,0 V)
 
 The pre-change decoder used a positional ``DIMMER_TIMER_MAPPING``
 that conflated these tables — preset modes returned voltages (the
@@ -20,6 +20,7 @@ from __future__ import annotations
 from nikobus_connect.discovery.dimmer_decoder import _timer_value
 from nikobus_connect.discovery.mapping import (
     DIMMER_AMOUNT_PERCENT,
+    DIMMER_PRESET_LEVEL,
     DIMMER_MODE_T1_LOOKUP,
     DIMMER_T1_1,
     DIMMER_T1_2,
@@ -30,7 +31,11 @@ from nikobus_connect.discovery.mapping import (
 
 def test_dimmer_t1_step_table_matches_niko() -> None:
     """M01/M02/M03 use the 3-value on/off step table."""
-    expected = ("On/off step 0", "On/off step 1", "On/off step 2-F")
+    expected = (
+        "T2=Dimming time on ; Dimming time off=1s",
+        "T2=Dimming time off ; Dimming time on=1s",
+        "T2=Dimming time off=Dimming time on",
+    )
     assert DIMMER_T1_1 == expected
     for mode in (0x00, 0x01, 0x02):
         assert DIMMER_MODE_T1_LOOKUP[mode] is DIMMER_T1_1
@@ -52,23 +57,23 @@ def test_dimmer_t1_delayed_off_table_matches_niko() -> None:
     assert DIMMER_MODE_T1_LOOKUP[0x06] is DIMMER_T1_3
 
 
-def test_dimmer_t1_amount_table_matches_niko_percentages() -> None:
-    """M11/M12 use the 16-value dim-amount table (10% to 100%).
+def test_dimmer_t1_preset_table_matches_niko_display() -> None:
+    """M11/M12 use the 16-value preset table, shown as the PC software shows it.
 
     The vendor table ``S_DB_DIMMER_AMOUNT`` holds the tokens ``S_D1,
-    S_D15, S_D2 … S_D10``: the level on the controller's 1–10 V scale,
-    rendered as the percentage of full scale (``S_D7`` → 70%). An
-    earlier reading took the token number itself as a percentage
-    (``1% … 10%``), which made every preset a near-off level.
+    S_D15, S_D2 … S_D10``; the software's language table renders them
+    as the level on the dim controller's 1–10 V scale: ``1,0 V``,
+    ``1,5 V`` … ``10,0 V``. An earlier reading turned them into
+    percentages, which is not what the vendor displays.
     """
-    assert len(DIMMER_AMOUNT_PERCENT) == 16
-    assert DIMMER_AMOUNT_PERCENT[0] == "10%"
-    assert DIMMER_AMOUNT_PERCENT[1] == "15%"
-    assert DIMMER_AMOUNT_PERCENT[2] == "20%"
-    assert DIMMER_AMOUNT_PERCENT[12] == "70%"
-    assert DIMMER_AMOUNT_PERCENT[15] == "100%"
-    assert DIMMER_MODE_T1_LOOKUP[0x08] is DIMMER_AMOUNT_PERCENT
-    assert DIMMER_MODE_T1_LOOKUP[0x09] is DIMMER_AMOUNT_PERCENT
+    assert len(DIMMER_PRESET_LEVEL) == 16
+    assert DIMMER_PRESET_LEVEL[0] == "1,0 V"
+    assert DIMMER_PRESET_LEVEL[1] == "1,5 V"
+    assert DIMMER_PRESET_LEVEL[12] == "7,0 V"
+    assert DIMMER_PRESET_LEVEL[15] == "10,0 V"
+    assert DIMMER_AMOUNT_PERCENT is DIMMER_PRESET_LEVEL  # legacy alias
+    assert DIMMER_MODE_T1_LOOKUP[0x08] is DIMMER_PRESET_LEVEL
+    assert DIMMER_MODE_T1_LOOKUP[0x09] is DIMMER_PRESET_LEVEL
 
 
 def test_dimmer_t2_ramp_table_matches_niko() -> None:
@@ -83,17 +88,17 @@ def test_dimmer_t2_ramp_table_matches_niko() -> None:
 def test_timer_value_picks_correct_t1_table_per_mode() -> None:
     """``_timer_value`` dispatches to the right T1 table for each mode."""
     # M01 with nibble 0 → step 0
-    assert _timer_value(0x00, 0)[0] == "On/off step 0"
+    assert _timer_value(0x00, 0)[0] == "T2=Dimming time on ; Dimming time off=1s"
     # M01 with nibble 2 → step 2-F
-    assert _timer_value(0x00, 2)[0] == "On/off step 2-F"
+    assert _timer_value(0x00, 2)[0] == "T2=Dimming time off=Dimming time on"
     # M05 with nibble 2 → "2 s" push time (NOT "4 s" ramp from old table)
     assert _timer_value(0x04, 2)[0] == "2 s"
     # M07 with nibble 13 → "60 m" (per S_DB_DIMMER_T1_3)
     assert _timer_value(0x06, 13)[0] == "60 m"
-    # M11 with nibble 0 → "10%" (S_D1, the bottom of the 1–10 V scale)
-    assert _timer_value(0x08, 0)[0] == "10%"
-    # M12 with nibble 15 → "100%" (S_D10)
-    assert _timer_value(0x09, 15)[0] == "100%"
+    # M11 with nibble 0 → "1,0 V" (S_D1, the bottom of the 1–10 V scale)
+    assert _timer_value(0x08, 0)[0] == "1,0 V"
+    # M12 with nibble 15 → "10,0 V" (S_D10)
+    assert _timer_value(0x09, 15)[0] == "10,0 V"
 
 
 def test_timer_value_out_of_range_returns_none() -> None:

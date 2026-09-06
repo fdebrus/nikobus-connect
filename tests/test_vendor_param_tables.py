@@ -24,6 +24,7 @@ FIXTURE = Path(__file__).parent / "fixtures" / "vendor_param_tables.json"
 VENDOR = json.loads(FIXTURE.read_text())
 PARAMS = {int(k): v for k, v in VENDOR["param_base"].items()}
 MODES = VENDOR["link_modes"]
+DISPLAY = VENDOR["display_en"]  # token → English string of the software's language table
 
 # ParamBase keys (KeyParamBase) of the tables the decoders transcribe.
 KP_NONE = 1
@@ -80,20 +81,33 @@ def test_dimmer_tables_are_the_vendor_tables() -> None:
     assert [_norm(v) for v in mapping.DIMMER_T2_RAMP] == [_norm(v) for v in _values(KP_DIMMER_T2)]
     assert [_norm(v) for v in mapping.DIMMER_T1_2] == [_norm(v) for v in _values(KP_DIMMER_T1_2)]
     assert [_norm(v) for v in mapping.DIMMER_T1_3] == [_norm(v) for v in _values(KP_DIMMER_T1_3)]
-    # Tokens S_DB_DIM_ON_OFF_0 / _1 / _2-F → "On/off step 0 / 1 / 2-F".
-    assert [v.rsplit("_", 1)[-1] for v in _values(KP_DIMMER_T1_1)] == [
-        v.rsplit(" ", 1)[-1] for v in mapping.DIMMER_T1_1
-    ]
-    # Tokens S_D1, S_D15, S_D2 … S_D10: the level on the 1–10 V scale,
-    # rendered as the percentage of full scale (S_D15 → 15%, S_D7 → 70%).
-    tokens = _values(KP_DIMMER_AMOUNT)
-    assert len(tokens) == 16
-    expected = []
-    for token in tokens:
-        digits = token[len("S_D") :]
-        level = float(digits) if len(digits) == 1 or digits == "10" else float(digits[0] + "." + digits[1:])
-        expected.append(f"{level * 10:g}%")
-    assert list(mapping.DIMMER_AMOUNT_PERCENT) == expected
+    # Tokens rendered through the software's language table, verbatim.
+    assert [DISPLAY[t] for t in _values(KP_DIMMER_T1_1)] == list(mapping.DIMMER_T1_1)
+    assert [DISPLAY[t] for t in _values(KP_DIMMER_AMOUNT)] == list(mapping.DIMMER_PRESET_LEVEL)
+    assert DISPLAY["S_DB_PUSHTIME_OFF"] == mapping.ROLLER_TIMER_MAPPING[0][0]
+
+
+def test_mode_codes_match_the_vendor_descriptions() -> None:
+    """Every mode label carries the vendor's code, and the vendor has a
+    display string for it (wording of our labels is ours, the code is not)."""
+    for product, table in (
+        ("05-000-02", mapping.SWITCH_MODE_MAPPING),
+        ("05-001-02", mapping.ROLLER_MODE_MAPPING),
+        ("05-007-02", mapping.DIMMER_MODE_MAPPING),
+    ):
+        family = {"05-000-02": "SCHAKEL", "05-001-02": "ROLLUIK", "05-007-02": "DIMMER"}[product]
+        for label in table.values():
+            code = label.split(" ", 1)[0]
+            # The software's language table names every mode we decode …
+            assert f"S_DB_DESC_{family}_M{int(code[1:])}" in DISPLAY, (
+                f"{product} {code}: no display string in the vendor language table"
+            )
+            # … and this project's LinkModeBase carries the ones its
+            # products offer (dimmer M13 / M14 belong to a later dimmer
+            # product and are absent from this project database).
+            row = MODES.get(f"{product}|{code}")
+            if row is not None:
+                assert row["description"].startswith("S_DB_DESC_")
 
 
 # --- mode → parameter dispatch ---------------------------------------------
