@@ -10,7 +10,13 @@ from typing import Any
 
 import serial_asyncio
 
-from .const import COMMANDS_HANDSHAKE
+from .const import (
+    COMMANDS_HANDSHAKE,
+    EXPECTED_HANDSHAKE_RESPONSE,
+    PRESENCE_PROBE_ATTEMPTS,
+    PRESENCE_PROBE_COMMAND,
+    PRESENCE_PROBE_TIMEOUT,
+)
 from .exceptions import NikobusConnectionError, NikobusSendError, NikobusReadError
 
 _LOGGER = logging.getLogger(__name__)
@@ -56,6 +62,7 @@ class NikobusConnect:
             _LOGGER.info("Connected to Nikobus on %s", self._connection_string)
             try:
                 await self._handshake()
+                await self._probe()
             except Exception:
                 await self.disconnect()
                 raise
@@ -76,6 +83,53 @@ class NikobusConnect:
         except Exception as err:
             _LOGGER.error("Handshake failed: %s", err)
             raise NikobusConnectionError(f"Handshake failed: {err}") from err
+
+    async def _probe(self) -> None:
+        """Prove a Nikobus device is on the other end, not just an open port.
+
+        The handshake writes blindly; a wrong port, an unpowered PC-Link,
+        a bridge with nothing behind it or a serial handle left dead by
+        another program all "complete" it. The presence probe (a status
+        query to the null address) is acknowledged with ``$0511`` by the
+        PC-Link and by a feedback module used as gateway. The interface
+        holds that acknowledgement until the next ``$`` frame it
+        receives, so each attempt sends the probe twice and reads after
+        the second. Raises ``NikobusConnectionError`` when nothing
+        answers within ``PRESENCE_PROBE_ATTEMPTS`` attempts.
+        """
+        assert self._reader is not None
+        loop = asyncio.get_running_loop()
+        for attempt in range(1, PRESENCE_PROBE_ATTEMPTS + 1):
+            await self.send(PRESENCE_PROBE_COMMAND)
+            await asyncio.sleep(0.2)
+            await self.send(PRESENCE_PROBE_COMMAND)
+            deadline = loop.time() + PRESENCE_PROBE_TIMEOUT
+            while (remaining := deadline - loop.time()) > 0:
+                try:
+                    data = await asyncio.wait_for(self._reader.readuntil(b"\r"), remaining)
+                except (TimeoutError, asyncio.IncompleteReadError, asyncio.LimitOverrunError):
+                    break
+                text = data.decode("ascii", errors="ignore")
+                if EXPECTED_HANDSHAKE_RESPONSE in text:
+                    _LOGGER.info(
+                        "Nikobus device answered the presence probe on %s (attempt %d)",
+                        self._connection_string,
+                        attempt,
+                    )
+                    return
+                _LOGGER.debug("Presence probe: ignoring %r while waiting for %s", text.strip(), EXPECTED_HANDSHAKE_RESPONSE)
+            _LOGGER.warning(
+                "No Nikobus device answered the presence probe on %s (attempt %d/%d)",
+                self._connection_string,
+                attempt,
+                PRESENCE_PROBE_ATTEMPTS,
+            )
+        raise NikobusConnectionError(
+            f"{self._connection_string} opened but no Nikobus device answered the presence "
+            f"probe after {PRESENCE_PROBE_ATTEMPTS} attempts. Check the cable and the PC-Link "
+            "power, make sure the Nikobus PC software is not holding the port, and if the "
+            "PC-Link was used by another program, power-cycle it."
+        )
 
     async def reconnect_with_backoff(
         self,
