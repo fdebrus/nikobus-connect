@@ -24,12 +24,30 @@ from nikobus_connect.exceptions import (
 )
 
 
-def _stream_pair() -> tuple[MagicMock, MagicMock]:
+def _stream_pair(probe_reply: bytes | None = b"$0511\r") -> tuple[MagicMock, MagicMock]:
+    """Fake reader / writer. The reader answers the presence probe with
+    ``probe_reply`` (``None`` = silence: ``readuntil`` never completes
+    inside the probe's timeout)."""
     reader = MagicMock()
+    if probe_reply is None:
+        async def _silent(_sep: bytes) -> bytes:
+            await asyncio.sleep(3600)
+            return b""
+
+        reader.readuntil = _silent
+    else:
+        reader.readuntil = AsyncMock(return_value=probe_reply)
     writer = MagicMock()
     writer.drain = AsyncMock()
     writer.wait_closed = AsyncMock()
     return reader, writer
+
+
+def _fast_probe():
+    """Shrink the probe timeout so the silent case fails quickly."""
+    return patch.multiple(
+        "nikobus_connect.connection", PRESENCE_PROBE_TIMEOUT=0.05, PRESENCE_PROBE_ATTEMPTS=2
+    )
 
 
 async def test_tcp_connect_runs_handshake() -> None:
@@ -42,8 +60,9 @@ async def test_tcp_connect_runs_handshake() -> None:
         await conn.connect()
     opener.assert_awaited_once_with("192.168.2.50", 9999)
     assert conn.is_connected
-    # One write per handshake command.
-    assert writer.write.call_count == len(COMMANDS_HANDSHAKE)
+    # One write per handshake command, plus the presence probe sent twice.
+    assert writer.write.call_count == len(COMMANDS_HANDSHAKE) + 2
+    assert writer.write.call_args_list[-1].args[0] == b"$10110000B8CF9D\r"
 
 
 async def test_serial_path_uses_serial_asyncio() -> None:
@@ -180,3 +199,50 @@ async def test_backoff_cancellation_propagates() -> None:
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
+
+
+async def test_probe_silence_is_a_warning_not_a_failure(caplog) -> None:
+    """An open port with nothing answering still connects — some gateways
+    (a PC-Logic) have no known answer to the null-address probe — but the
+    verdict is recorded and logged so the integration can surface it."""
+    conn = NikobusConnect("/dev/ttyUSB9")
+    reader, writer = _stream_pair(probe_reply=None)
+    with (
+        patch(
+            "nikobus_connect.connection.serial_asyncio.open_serial_connection",
+            new=AsyncMock(return_value=(reader, writer)),
+        ),
+        patch("asyncio.sleep", new=AsyncMock()),
+        _fast_probe(),
+    ):
+        await conn.connect()
+    assert conn.is_connected
+    assert conn.device_answered is False
+    assert "no Nikobus device answered" in caplog.text
+
+
+async def test_probe_accepts_any_nikobus_frame_as_presence() -> None:
+    """A gateway that never acks the null address but relays bus traffic
+    (a feedback frame here) still counts as present."""
+    conn = NikobusConnect("host:1234")
+    reader, writer = _stream_pair(probe_reply=b"$1C6C0E00FF00000000009FE944\r")
+    with (
+        patch("asyncio.open_connection", new=AsyncMock(return_value=(reader, writer))),
+        patch("asyncio.sleep", new=AsyncMock()),
+    ):
+        await conn.connect()
+    assert conn.device_answered is True
+
+
+async def test_probe_ignores_garbage_until_a_real_frame() -> None:
+    """Line noise before the first well-formed frame is skipped."""
+    conn = NikobusConnect("host:1234")
+    reader, writer = _stream_pair()
+    reader.readuntil = AsyncMock(side_effect=[b"\xff\xfe\r", b"$1\r", b"$0511\r"])
+    with (
+        patch("asyncio.open_connection", new=AsyncMock(return_value=(reader, writer))),
+        patch("asyncio.sleep", new=AsyncMock()),
+    ):
+        await conn.connect()
+    assert conn.device_answered is True
+    assert reader.readuntil.await_count == 3

@@ -816,16 +816,30 @@ DIMMER_TIMER_MAPPING = {
 #   KP=15 S_DB_DIMMER_T1_3    → delayed-off duration (M07)
 # ---------------------------------------------------------------------------
 
-DIMMER_T1_1: tuple[str, ...] = ("On/off step 0", "On/off step 1", "On/off step 2-F")
 DIMMER_T1_2: tuple[str, ...] = ("0 s", "1 s", "2 s", "3 s")
 DIMMER_T1_3: tuple[str, ...] = (
     "10 s", "1 m", "2 m", "3 m", "4 m", "5 m", "6 m", "7 m",
     "8 m", "9 m", "15 m", "30 m", "45 m", "60 m", "90 m", "120 m",
 )
-DIMMER_AMOUNT_PERCENT = (
-    "1%", "1.5%", "2%", "2.5%", "3%", "3.5%", "4%", "4.5%",
-    "5%", "5.5%", "6%", "6.5%", "7%", "8%", "9%", "10%",
+# Dimmer parameter labels, verbatim from the PC software's English
+# language table (``language.txt``) for the tokens ParamBase lists:
+#
+#   KP=13 S_DB_DIMMER_T1_1  "Dimming speed on / off" (M01 / M02 / M03)
+#         S_DB_DIM_ON_OFF_0 / _1 / _2-F
+#   KP=11 S_DB_DIMMER_AMOUNT "Preset" (M11 / M12): S_D1 … S_D10, shown
+#         as the level on the dim controller's 1–10 V scale
+DIMMER_T1_1: tuple[str, ...] = (
+    "T2=Dimming time on ; Dimming time off=1s",
+    "T2=Dimming time off ; Dimming time on=1s",
+    "T2=Dimming time off=Dimming time on",
 )
+DIMMER_PRESET_LEVEL: tuple[str, ...] = (
+    "1,0 V", "1,5 V", "2,0 V", "2,5 V", "3,0 V", "3,5 V", "4,0 V", "4,5 V",
+    "5,0 V", "5,5 V", "6,0 V", "6,5 V", "7,0 V", "8,0 V", "9,0 V", "10,0 V",
+)
+# Former name; the values were once rendered as percentages (``1% … 10%``),
+# which is not what the vendor shows. Kept as an alias for importers.
+DIMMER_AMOUNT_PERCENT = DIMMER_PRESET_LEVEL
 DIMMER_T2_RAMP: tuple[str, ...] = (
     "1 s", "2 s", "4 s", "6 s", "8 s", "10 s", "15 s", "20 s",
     "30 s", "40 s", "50 s", "1 m", "2 m", "3 m", "4 m", "5 m",
@@ -842,6 +856,6 @@ DIMMER_MODE_T1_LOOKUP: dict[int, tuple[str, ...]] = {
     0x04: DIMMER_T1_2,         # M05 - On (if necessary with operating time)
     0x05: DIMMER_T1_2,         # M06 - Off (eventually with operating time)
     0x06: DIMMER_T1_3,         # M07 - Delayed off
-    0x08: DIMMER_AMOUNT_PERCENT,  # M11 - Preset on/off
-    0x09: DIMMER_AMOUNT_PERCENT,  # M12 - Preset on
+    0x08: DIMMER_PRESET_LEVEL,  # M11 - Preset on/off
+    0x09: DIMMER_PRESET_LEVEL,  # M12 - Preset on
 }

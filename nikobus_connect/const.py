@@ -16,6 +16,15 @@ COMMANDS_HANDSHAKE: Final[list[str]] = [
 EXPECTED_HANDSHAKE_RESPONSE: Final[str] = "$0511"
 HANDSHAKE_TIMEOUT: Final[int] = 60
 
+# Presence probe run after the handshake: a status query to the null
+# address, which the PC-Link (or a feedback module used as gateway)
+# acknowledges with ``$0511`` and nothing else. The interface holds that
+# acknowledgement until the next ``$`` frame reaches it, so the probe is
+# sent twice per attempt and the first reply is read after the second.
+PRESENCE_PROBE_COMMAND: Final[str] = "$10110000B8CF9D"
+PRESENCE_PROBE_TIMEOUT: Final[float] = 3.0
+PRESENCE_PROBE_ATTEMPTS: Final[int] = 3
+
 # Command execution timing
 COMMAND_EXECUTION_DELAY: Final[float] = 0.15
 COMMAND_ACK_WAIT_TIMEOUT: Final[int] = 15

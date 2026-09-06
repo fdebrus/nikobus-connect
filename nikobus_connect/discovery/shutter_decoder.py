@@ -32,6 +32,10 @@ def _timer_value(
     """
     if t1_raw is None:
         return None, None
+    if mode_raw == 0x03:
+        # M04 "Stop" takes no parameter (vendor LinkModeBase: KP 1); the
+        # nibble carries nothing meaningful, so don't label it.
+        return None, None
     if mode_raw in (0x05, 0x06):
         return ROLLER_T3_MAPPING.get(t1_raw), None
     timer_entry = ROLLER_TIMER_MAPPING.get(t1_raw)
