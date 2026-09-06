@@ -172,3 +172,42 @@ async def test_awaited_clock_reply_skips_feedback_callback() -> None:
     listener._awaited_answer = None
     await listener._dispatch_message(frame)
     assert len(feedback) == 1
+
+
+async def test_frame_with_bad_payload_crc16_is_dropped() -> None:
+    """A frame whose CRC-8 is fine but whose CRC-16 is not was corrupted
+    between the module and the PC-Link; it must not be dispatched.
+
+    Real frames from module 966C: the status answer once arrived as
+    ``$186D96…`` (one bit flipped in the address echo). The PC-Link
+    stamped the corrupted text with a valid CRC-8, so only the module's
+    CRC-16 catches it. Same for a ``$1C`` state frame, which would
+    otherwise be filed under a phantom module address.
+    """
+    listener, events = _listener()
+    assert listener.validate_crc("$186C9600A0013FFF85E7DE")  # genuine
+    assert not listener.validate_crc("$186D9600A0013FFF85E70F")  # flipped
+    await listener._dispatch_message("$186D9600A0013FFF85E70F")
+    assert events == []
+
+    feedback: list[tuple[int, str]] = []
+    listener_fb, _ = _listener(
+        feedback_callback=lambda group, msg: feedback.append((group, msg)),
+        has_feedback_module=True,
+    )
+    good = "$1C6C0E00FF00000000009FE944"
+    flipped = "$1C6D0E00FF0000000000" + good[-6:-2] + "00"
+    # Re-stamp the flipped frame with a valid CRC-8 so only CRC-16 differs.
+    from nikobus_connect.protocol import calc_crc2, int_to_hex
+
+    flipped = flipped[:-2] + int_to_hex(calc_crc2(flipped[:-2]), 2)
+    await listener_fb._dispatch_message(flipped)
+    assert feedback == []
+    await listener_fb._dispatch_message(good)
+    assert feedback == [(1, good)]
+
+
+def test_all_ff_trailer_still_validates() -> None:
+    """The ``$18`` end-of-table trailer carries no payload CRC-16."""
+    listener, _ = _listener()
+    assert listener.validate_crc("$18FFFFFFFFFFFFFFBF9558")

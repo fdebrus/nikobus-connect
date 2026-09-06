@@ -15,11 +15,17 @@ from .const import (
     FEEDBACK_REFRESH_COMMAND,
     MANUAL_REFRESH_COMMAND,
 )
-from .protocol import calc_crc2, int_to_hex
+from .protocol import calc_crc1, calc_crc2, int_to_hex
 
 _LOGGER = logging.getLogger(__name__)
 
 _FRAME_SPLIT_RE = re.compile(r'(?=[$#])')
+
+# Answer classes whose payload carries the sending module's CRC-16
+# (``$LL <payload> <crc16> <crc8>``): output state, status / CRC / inventory
+# answers, and 16- / 8-byte block reads. ``$05`` acks, ``$0EFF`` set-command
+# answers and ``$1A`` frames do not.
+_CRC16_FRAME_PREFIXES: frozenset[str] = frozenset({"$18", "$1C", "$2E", "$1E"})
 
 
 class NikobusEventListener:
@@ -261,7 +267,19 @@ class NikobusEventListener:
         )
 
     def validate_crc(self, message: str) -> bool:
-        """Validate the Nikobus CRC-8 for PC-Link frames."""
+        """Validate a PC-Link frame: length, CRC-8 and, where the frame
+        carries one, the module's CRC-16 over the payload.
+
+        The CRC-8 is stamped by the PC-Link over the text it forwards, so
+        it only proves the serial hop. A byte flipped on the bus between
+        the module and the PC-Link passes it — the PC-Link stamps the
+        corrupted text with a good CRC-8. The CRC-16 inside the frame is
+        the module's own, computed over the payload before the frame
+        left it, so it is the only check that covers the bus hop. Seen
+        on a real installation: ``$186D96…`` for module 966C (one bit
+        flipped in the address echo), CRC-8 valid, CRC-16 invalid.
+        Accepting such a frame files a state under a phantom address.
+        """
         while message.count("$") > 1:
             message = message[message.find("$", 1):]
 
@@ -283,6 +301,21 @@ class NikobusEventListener:
             expected_crc8 = message[-2:]
             calculated_crc8 = int_to_hex(calc_crc2(payload_with_crc16), 2)
 
-            return calculated_crc8.upper() == expected_crc8.upper()
+            if calculated_crc8.upper() != expected_crc8.upper():
+                return False
+
+            if message[:3] in _CRC16_FRAME_PREFIXES:
+                payload = message[3:-6]
+                # The end-of-table trailer ($18 + all FF) is not a module
+                # answer and carries no payload CRC.
+                if payload and set(payload) != {"F"}:
+                    calculated_crc16 = int_to_hex(calc_crc1(payload), 4)
+                    if calculated_crc16 != message[-6:-2].upper():
+                        _LOGGER.debug(
+                            "CRC-16 mismatch — frame corrupted on the bus, dropped (%s)",
+                            message,
+                        )
+                        return False
+            return True
         except (ValueError, IndexError, AttributeError):
             return False
