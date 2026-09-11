@@ -46,7 +46,10 @@ def _stream_pair(probe_reply: bytes | None = b"$0511\r") -> tuple[MagicMock, Mag
 def _fast_probe():
     """Shrink the probe timeout so the silent case fails quickly."""
     return patch.multiple(
-        "nikobus_connect.connection", PRESENCE_PROBE_TIMEOUT=0.05, PRESENCE_PROBE_ATTEMPTS=2
+        "nikobus_connect.connection",
+        PRESENCE_PROBE_TIMEOUT=0.05,
+        PRESENCE_PROBE_ATTEMPTS=2,
+        PRESENCE_PROBE_SETTLE=0.0,
     )
 
 
@@ -246,3 +249,65 @@ async def test_probe_ignores_garbage_until_a_real_frame() -> None:
         await conn.connect()
     assert conn.device_answered is True
     assert reader.readuntil.await_count == 3
+
+
+async def test_probe_waits_for_the_interface_to_settle() -> None:
+    """The first probe goes out only after the settle pause: a PC-Link
+    just reset by ``ATZ`` on a cold start swallows frames sent at once."""
+    conn = NikobusConnect("host:1234")
+    reader, writer = _stream_pair()
+    sleeps: list[float] = []
+
+    async def record_sleep(delay: float) -> None:
+        sleeps.append(delay)
+
+    with (
+        patch("asyncio.open_connection", new=AsyncMock(return_value=(reader, writer))),
+        patch("asyncio.sleep", new=record_sleep),
+        patch.multiple("nikobus_connect.connection", PRESENCE_PROBE_SETTLE=1.5),
+    ):
+        await conn.connect()
+    # Handshake spacing (0.2 s each), then the settle pause, then the
+    # 0.2 s between the two probe sends.
+    assert sleeps[len(COMMANDS_HANDSHAKE)] == 1.5
+    assert sleeps[-1] == 0.2
+
+
+# --- a silent probe is overturned by the first frame -------------------
+
+
+def test_mark_device_answered_overturns_a_silent_probe() -> None:
+    conn = NikobusConnect("/dev/ttyUSB0")
+    conn.device_answered = False
+    calls: list[int] = []
+    conn.on_device_answered = lambda: calls.append(1)
+    conn.mark_device_answered("$0511")
+    assert conn.device_answered is True
+    assert calls == [1]
+    # Idempotent: a second frame does not call back again.
+    conn.mark_device_answered("#N123456")
+    assert calls == [1]
+
+
+def test_mark_device_answered_is_a_no_op_unless_the_probe_was_silent() -> None:
+    for verdict in (None, True):
+        conn = NikobusConnect("/dev/ttyUSB0")
+        conn.device_answered = verdict
+        conn.on_device_answered = MagicMock()
+        conn.mark_device_answered("$0511")
+        assert conn.device_answered is verdict
+        conn.on_device_answered.assert_not_called()
+
+
+async def test_mark_device_answered_schedules_an_async_callback() -> None:
+    conn = NikobusConnect("/dev/ttyUSB0")
+    conn.device_answered = False
+    done = asyncio.Event()
+
+    async def callback() -> None:
+        done.set()
+
+    conn.on_device_answered = callback
+    conn.mark_device_answered("$0511")
+    await asyncio.wait_for(done.wait(), 1.0)
+    assert conn.device_answered is True

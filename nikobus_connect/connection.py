@@ -15,6 +15,7 @@ from .const import (
     EXPECTED_HANDSHAKE_RESPONSE,
     PRESENCE_PROBE_ATTEMPTS,
     PRESENCE_PROBE_COMMAND,
+    PRESENCE_PROBE_SETTLE,
     PRESENCE_PROBE_TIMEOUT,
 )
 from .exceptions import NikobusConnectionError, NikobusSendError, NikobusReadError
@@ -49,6 +50,9 @@ class NikobusConnect:
         # Nikobus device answered, ``False`` when the port opened but
         # nothing did, ``None`` before the first connect.
         self.device_answered: bool | None = None
+        # Called (sync or async) when a probe that had been silent is
+        # contradicted by a frame received later — see ``mark_device_answered``.
+        self.on_device_answered: Callable[[], Any] | None = None
 
     @property
     def is_connected(self) -> bool:
@@ -123,6 +127,9 @@ class NikobusConnect:
         """
         assert self._reader is not None
         loop = asyncio.get_running_loop()
+        # Let a freshly reset interface settle before the first probe
+        # (a cold start swallows frames sent straight after ``ATZ``).
+        await asyncio.sleep(PRESENCE_PROBE_SETTLE)
         for attempt in range(1, PRESENCE_PROBE_ATTEMPTS + 1):
             await self.send(PRESENCE_PROBE_COMMAND)
             await asyncio.sleep(0.2)
@@ -159,6 +166,34 @@ class NikobusConnect:
         )
         self.device_answered = False
         return False
+
+    def mark_device_answered(self, frame: str) -> None:
+        """Overturn a silent probe: a Nikobus frame arrived after all.
+
+        The listener calls this for the first well-formed frame it sees
+        while ``device_answered`` is ``False`` — a probe missed on a cold
+        start (the interface still resetting) must not leave the verdict
+        wrong for the life of the connection. Flips the flag, logs once
+        and invokes ``on_device_answered`` (sync or async) so the caller
+        can withdraw whatever it surfaced.
+        """
+        if self.device_answered is not False:
+            return
+        self.device_answered = True
+        _LOGGER.info(
+            "Nikobus device answered on %s after the presence probe had been silent: %s",
+            self._connection_string,
+            frame[:32],
+        )
+        callback = self.on_device_answered
+        if callback is None:
+            return
+        try:
+            result = callback()
+            if inspect.isawaitable(result):
+                asyncio.ensure_future(result)
+        except Exception as err:  # pragma: no cover - caller's problem, keep listening
+            _LOGGER.error("on_device_answered callback failed: %s", err)
 
     async def reconnect_with_backoff(
         self,

@@ -73,7 +73,7 @@ asyncio.run(main())
 
 Addresses are the 6-hex-digit module addresses printed on Nikobus modules (e.g. `A1B2C3`). Channels are 1-indexed.
 
-`connect()` runs the PC-Link handshake and then a presence probe: a status query the PC-Link (or a Feedback Module used as gateway) acknowledges, with any Nikobus frame relayed meanwhile counting as proof of life. Silence is not fatal — it is logged, and the verdict is left in `conn.device_answered` (`True` / `False`, `None` before connecting) so a caller can surface it.
+`connect()` runs the PC-Link handshake and then a presence probe: a status query the PC-Link (or a Feedback Module used as gateway) acknowledges, with any Nikobus frame relayed meanwhile counting as proof of life. Silence is not fatal — it is logged, and the verdict is left in `conn.device_answered` (`True` / `False`, `None` before connecting) so a caller can surface it. A silent verdict is not final either: the first well-formed frame the listener receives afterwards flips it to `True` and calls `conn.on_device_answered` (sync or async), so a probe missed while the PC-Link was still resetting on a cold start corrects itself within seconds.
 
 ## Examples
 
