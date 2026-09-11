@@ -175,6 +175,12 @@ class NikobusEventListener:
         if not message:
             return
 
+        # A probe that found the port silent is overturned by the first
+        # well-formed frame — the interface was still resetting when the
+        # probe went out, not absent.
+        if getattr(self._connection, "device_answered", None) is False and self._is_proof_of_life(message):
+            self._connection.mark_device_answered(message)
+
         # Handle button presses — dispatch to event callback and return
         if message.startswith(BUTTON_COMMAND_PREFIX):
             await self._invoke(self._event_callback, message)
@@ -255,6 +261,14 @@ class NikobusEventListener:
 
         # General event callback for unhandled messages
         await self._invoke(self._event_callback, message)
+
+    def _is_proof_of_life(self, message: str) -> bool:
+        """A button press, an interface ack, or any frame whose CRCs check out."""
+        if message.startswith(BUTTON_COMMAND_PREFIX):
+            return len(message) >= 8
+        if message.startswith("$05"):
+            return len(message) >= 5
+        return message.startswith("$") and self.validate_crc(message)
 
     def _is_awaited_query_reply(self, message: str) -> bool:
         """Whether ``message`` is the ``FF``-prefixed reply a query waits for."""

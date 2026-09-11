@@ -24,6 +24,11 @@ HANDSHAKE_TIMEOUT: Final[int] = 60
 PRESENCE_PROBE_COMMAND: Final[str] = "$10110000B8CF9D"
 PRESENCE_PROBE_TIMEOUT: Final[float] = 3.0
 PRESENCE_PROBE_ATTEMPTS: Final[int] = 3
+# Pause between the end of the handshake and the first probe. A PC-Link
+# just reset by ``ATZ`` on a cold start (host reboot, USB re-enumeration)
+# swallows frames sent straight away; the vendor software waits about a
+# second there too.
+PRESENCE_PROBE_SETTLE: Final[float] = 1.0
 
 # Command execution timing
 COMMAND_EXECUTION_DELAY: Final[float] = 0.15

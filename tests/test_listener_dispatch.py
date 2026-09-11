@@ -211,3 +211,42 @@ def test_all_ff_trailer_still_validates() -> None:
     """The ``$18`` end-of-table trailer carries no payload CRC-16."""
     listener, _ = _listener()
     assert listener.validate_crc("$18FFFFFFFFFFFFFFBF9558")
+
+
+# ---------------------------------------------------------------------------
+# A silent probe is overturned by the first well-formed frame
+# ---------------------------------------------------------------------------
+
+
+async def test_first_valid_frame_overturns_a_silent_probe() -> None:
+    listener, _ = _listener()
+    conn = listener._connection
+    conn.device_answered = False
+    await listener._dispatch_message("$1C6C0E00FF00000000009FE944")  # valid CRCs
+    conn.mark_device_answered.assert_called_once_with("$1C6C0E00FF00000000009FE944")
+
+
+async def test_ack_and_button_press_count_as_proof_of_life() -> None:
+    for frame in ("$0511", "#N7A5B3C"):
+        listener, _ = _listener()
+        listener._connection.device_answered = False
+        await listener._dispatch_message(frame)
+        listener._connection.mark_device_answered.assert_called_once_with(frame)
+
+
+async def test_garbage_does_not_overturn_a_silent_probe() -> None:
+    listener, _ = _listener()
+    conn = listener._connection
+    conn.device_answered = False
+    await listener._dispatch_message("$1C6C0E00FF00000000009FE900")  # bad CRC
+    await listener._dispatch_message("$1")
+    await listener._dispatch_message("#N1")
+    conn.mark_device_answered.assert_not_called()
+
+
+async def test_answered_probe_is_left_alone() -> None:
+    for verdict in (None, True):
+        listener, _ = _listener()
+        listener._connection.device_answered = verdict
+        await listener._dispatch_message("$0511")
+        listener._connection.mark_device_answered.assert_not_called()

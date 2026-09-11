@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.37.3
+
+- **A silent presence probe is overturned by the first frame received.** The verdict of `connect()` was final for the life of the connection: a probe missed on a cold start (host reboot, USB re-enumeration — the PC-Link was still resetting after `ATZ` when the probe went out) left `device_answered` at `False` while every command worked, and a caller surfacing the verdict kept saying "nothing answers" for days. The listener now calls the new `NikobusConnect.mark_device_answered(frame)` for the first well-formed frame it sees while the verdict is `False` — a button press, an interface ack, or any frame whose CRCs check out — which flips the flag, logs once at INFO and invokes the new `on_device_answered` callback (sync or async) so the caller can withdraw what it surfaced.
+- **The probe waits a second for the interface to settle.** `PRESENCE_PROBE_SETTLE` (1.0 s) separates the end of the handshake from the first probe; the vendor software pauses about as long after `ATZ`. Three attempts of three seconds as before.
+
 ## 0.37.2
 
 - **Frames corrupted on the bus are dropped: the listener now checks the module's CRC-16 as well as the PC-Link's CRC-8.** The CRC-8 is stamped by the PC-Link over the text it forwards and only proves the serial hop; a byte flipped on the bus between a module and the PC-Link passes it, because the PC-Link stamps the corrupted text with a good CRC-8. The CRC-16 inside the frame is computed by the module itself over the payload, so it is the only check that covers the bus hop. Seen on a real installation: the status answer of module 966C arriving as `$186D96…` (one bit flipped in the address echo), CRC-8 valid, CRC-16 invalid; a `$1C` state frame corrupted that way would have been filed under a phantom module address. `validate_crc()` now verifies the CRC-16 of `$18`, `$1C`, `$2E` and `$1E` frames and drops a mismatch at DEBUG. `$05` acks, `$0EFF` set-command answers and `$1A` frames carry no payload CRC and are unchanged; the all-`FF` `$18` end-of-table trailer is accepted as before.
