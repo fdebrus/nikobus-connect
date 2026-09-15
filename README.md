@@ -111,6 +111,15 @@ await api.stop_cover("C0FFEE", 1, direction="opening")
 await api.close_cover("C0FFEE", 1)
 ```
 
+### Pressing a key from the host
+
+```python
+api.press_repeat = 3          # default; "2 to register, 3 to be sure"
+await api.press_button("295682")
+```
+
+One write: the `#N` telegram repeated as a real key repeats it while held, back to back. Do not queue the repeats yourself — spaced 150 ms apart, an impulse/toggle link can count them as two presses. The interface never relays the host's own press back, so refresh the impacted module afterwards if you need its state.
+
 ### Listening to button presses
 
 Button frames arrive as `#Nxxxxxx` strings. Use `nikobus_button_to_module` to recover the source module and button label (`1A`, `1B`, ... `2D`).
