@@ -21,7 +21,13 @@ HANDSHAKE_TIMEOUT: Final[int] = 60
 # acknowledges with ``$0511`` and nothing else. The interface holds that
 # acknowledgement until the next ``$`` frame reaches it, so the probe is
 # sent twice per attempt and the first reply is read after the second.
-PRESENCE_PROBE_COMMAND: Final[str] = "$10110000B8CF9D"
+# The ``#A`` identity broadcast: the gateway answers it with its own
+# ``$18`` status frame within ~30 ms (PC-Link ``$18 F586 00 50 …``, a
+# PC-Logic likewise). A status query to the null address, the previous
+# probe, only earns an acknowledgement — and the PC-Link holds acks back
+# until it has a reply or a relayed bus frame to send, so on a quiet bus
+# that probe never got an answer.
+PRESENCE_PROBE_COMMAND: Final[str] = "#A"
 PRESENCE_PROBE_TIMEOUT: Final[float] = 3.0
 PRESENCE_PROBE_ATTEMPTS: Final[int] = 3
 # Pause between the end of the handshake and the first probe. A PC-Link
