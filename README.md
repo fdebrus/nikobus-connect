@@ -75,6 +75,8 @@ Addresses are the 6-hex-digit module addresses printed on Nikobus modules (e.g. 
 
 `connect()` runs the PC-Link handshake and then a presence probe: a status query the PC-Link (or a Feedback Module used as gateway) acknowledges, with any Nikobus frame relayed meanwhile counting as proof of life. Silence is not fatal — it is logged, and the verdict is left in `conn.device_answered` (`True` / `False`, `None` before connecting) so a caller can surface it. A silent verdict is not final either: the first well-formed frame the listener receives afterwards flips it to `True` and calls `conn.on_device_answered` (sync or async), so a probe missed while the PC-Link was still resetting on a cold start corrects itself within seconds.
 
+The gateway usually answers the probe with its own status frame as well; when it does, `conn.gateway_address` and `conn.gateway_family` (`pc_link`, `feedback_module` or `pc_logic`) say what is on the other end.
+
 ## Examples
 
 ### Switch on/off
@@ -129,6 +131,8 @@ listener = NikobusEventListener(conn, event_callback=on_bus_event)
 ### Feedback Module pushes
 
 A Feedback Module (05-207) polls the output modules it is configured to track, and the PC-Link relays both its queries and the modules' answers. Pass `has_feedback_module=True` and a `feedback_callback` to receive those answers; the callback gets the output group (1 for channels 1-6, 2 for 7-12) and the raw frame, and nothing has to be sent to obtain them.
+
+The group comes from the query that preceded the answer, so this only works through a PC-Link: the Feedback Module's own serial port relays the answers but never its own queries. `listener.feedback_queries_seen` and `listener.feedback_answers_seen` tell the two apart — answers without queries mean the port is the Feedback Module's, and a caller should poll instead of trusting pushed state.
 
 ```python
 async def on_feedback(group: int, frame: str) -> None:
@@ -188,7 +192,7 @@ await api.set_pc_link_time("86F5", datetime.now())
 
 The `nikobus_connect.discovery` subpackage enumerates the bus, identifies each module's type, and decodes the per-channel link tables into a JSON configuration.
 
-Discovery runs in two stages. The first reads the PC-Link's own registry — the inventory of every module and physical button in the project. The second visits each output module and reads its link table; the module is asked how many records it holds (its status reply), and exactly those blocks are read, rather than sweeping a fixed band. Link records decode to a button address, an output channel, a mode and its timers, using mode and parameter tables checked against the Nikobus software's own.
+Discovery runs in two stages. The first reads the PC-Link's own registry — the inventory of every module and physical button in the project. The second visits each output module and reads its link table; the module is asked how many records it holds (its status reply), and exactly those blocks are read, rather than sweeping a fixed band. Link records decode to a button address, an output channel, a mode and its timers, using mode and parameter tables checked against the Nikobus software's own. A record whose button address is one of the PC-Link's calendar channels (CH001 … CH100, fired by calendar programs and scenes) is filed under a synthesized `PC-Link Calendar Channel` entry rather than dropped.
 
 ```python
 from nikobus_connect.discovery import NikobusDiscovery

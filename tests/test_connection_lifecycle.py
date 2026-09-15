@@ -17,6 +17,7 @@ import pytest
 
 from nikobus_connect.connection import NikobusConnect
 from nikobus_connect.const import COMMANDS_HANDSHAKE
+from nikobus_connect.protocol import append_crc1, append_crc2
 from nikobus_connect.exceptions import (
     NikobusConnectionError,
     NikobusReadError,
@@ -241,14 +242,17 @@ async def test_probe_ignores_garbage_until_a_real_frame() -> None:
     """Line noise before the first well-formed frame is skipped."""
     conn = NikobusConnect("host:1234")
     reader, writer = _stream_pair()
-    reader.readuntil = AsyncMock(side_effect=[b"\xff\xfe\r", b"$1\r", b"$0511\r"])
+    reader.readuntil = AsyncMock(
+        side_effect=[b"\xff\xfe\r", b"$1\r", b"$0511\r", TimeoutError()]
+    )
     with (
         patch("asyncio.open_connection", new=AsyncMock(return_value=(reader, writer))),
         patch("asyncio.sleep", new=AsyncMock()),
     ):
         await conn.connect()
     assert conn.device_answered is True
-    assert reader.readuntil.await_count == 3
+    # Three reads to the ack, one more looking for the identity frame.
+    assert reader.readuntil.await_count == 4
 
 
 async def test_probe_waits_for_the_interface_to_settle() -> None:
@@ -311,3 +315,52 @@ async def test_mark_device_answered_schedules_an_async_callback() -> None:
     conn.mark_device_answered("$0511")
     await asyncio.wait_for(done.wait(), 1.0)
     assert conn.device_answered is True
+
+
+# --- gateway identity ----------------------------------------------------
+
+
+def _status_frame(address_le: str, family: int) -> bytes:
+    """A ``$18`` status frame as the gateway answers the null probe."""
+    data = f"{address_le}00{family:02X}0C3FFF"
+    return (append_crc2(f"$18{append_crc1(data)}") + "\r").encode()
+
+
+async def test_probe_records_the_gateway_identity_after_the_ack() -> None:
+    conn = NikobusConnect("host:1234")
+    reader, writer = _stream_pair()
+    reader.readuntil = AsyncMock(side_effect=[b"$0511\r", _status_frame("F586", 0x50)])
+    with (
+        patch("asyncio.open_connection", new=AsyncMock(return_value=(reader, writer))),
+        patch("asyncio.sleep", new=AsyncMock()),
+    ):
+        await conn.connect()
+    assert conn.device_answered is True
+    assert (conn.gateway_address, conn.gateway_family) == ("86F5", "pc_link")
+
+
+async def test_probe_identity_from_a_status_frame_glued_to_the_ack() -> None:
+    """A feedback module used as gateway, its status right behind the ack."""
+    conn = NikobusConnect("host:1234")
+    reader, writer = _stream_pair()
+    glued = b"$0511" + _status_frame("6C96", 0xA0)
+    reader.readuntil = AsyncMock(side_effect=[glued])
+    with (
+        patch("asyncio.open_connection", new=AsyncMock(return_value=(reader, writer))),
+        patch("asyncio.sleep", new=AsyncMock()),
+    ):
+        await conn.connect()
+    assert (conn.gateway_address, conn.gateway_family) == ("966C", "feedback_module")
+
+
+async def test_probe_without_identity_frame_leaves_gateway_unknown() -> None:
+    conn = NikobusConnect("host:1234")
+    reader, writer = _stream_pair()
+    reader.readuntil = AsyncMock(side_effect=[b"$0511\r", TimeoutError()])
+    with (
+        patch("asyncio.open_connection", new=AsyncMock(return_value=(reader, writer))),
+        patch("asyncio.sleep", new=AsyncMock()),
+    ):
+        await conn.connect()
+    assert conn.device_answered is True
+    assert conn.gateway_address is None and conn.gateway_family is None

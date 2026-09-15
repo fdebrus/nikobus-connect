@@ -29,6 +29,22 @@ PRESENCE_PROBE_ATTEMPTS: Final[int] = 3
 # swallows frames sent straight away; the vendor software waits about a
 # second there too.
 PRESENCE_PROBE_SETTLE: Final[float] = 1.0
+# After the probe is acknowledged, how long to keep reading for the
+# gateway's own ``$18`` status frame (its address and family).
+PRESENCE_PROBE_IDENTITY_WAIT: Final[float] = 0.5
+
+# Family signature (byte 3 of a ``$18`` status reply) per device class.
+# Output modules: switch 0x10 (compact switch unit 0x90), roller 0x20,
+# dimmer 0x30. Gateways / system modules: PC-Link 0x50, PC-Logic 0x40,
+# Feedback Module 0xA0.
+FAMILY_SIGNATURES: Final[dict[str, tuple[int, ...]]] = {
+    "switch_module": (0x10, 0x90),
+    "roller_module": (0x20,),
+    "dimmer_module": (0x30,),
+    "pc_link": (0x50,),
+    "pc_logic": (0x40,),
+    "feedback_module": (0xA0,),
+}
 
 # Command execution timing
 COMMAND_EXECUTION_DELAY: Final[float] = 0.15
