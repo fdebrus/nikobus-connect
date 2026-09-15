@@ -15,10 +15,12 @@ from .const import (
     EXPECTED_HANDSHAKE_RESPONSE,
     PRESENCE_PROBE_ATTEMPTS,
     PRESENCE_PROBE_COMMAND,
+    PRESENCE_PROBE_IDENTITY_WAIT,
     PRESENCE_PROBE_SETTLE,
     PRESENCE_PROBE_TIMEOUT,
 )
 from .exceptions import NikobusConnectionError, NikobusSendError, NikobusReadError
+from .protocol import family_name, parse_module_status, reply_payload
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -53,6 +55,11 @@ class NikobusConnect:
         # Called (sync or async) when a probe that had been silent is
         # contradicted by a frame received later — see ``mark_device_answered``.
         self.on_device_answered: Callable[[], Any] | None = None
+        # Identity of the gateway, when it answered the probe with its
+        # own ``$18`` status frame: address (e.g. ``86F5``) and family
+        # (``pc_link`` / ``feedback_module`` / ``pc_logic``).
+        self.gateway_address: str | None = None
+        self.gateway_family: str | None = None
 
     @property
     def is_connected(self) -> bool:
@@ -149,6 +156,7 @@ class NikobusConnect:
                         text[:32],
                     )
                     self.device_answered = True
+                    await self._read_gateway_identity(text)
                     return True
             _LOGGER.debug(
                 "Presence probe on %s: no answer (attempt %d/%d)",
@@ -166,6 +174,56 @@ class NikobusConnect:
         )
         self.device_answered = False
         return False
+
+    async def _read_gateway_identity(self, first: str) -> None:
+        """Note the gateway's address and family from its ``$18`` status.
+
+        The null-address status query is answered by the gateway with
+        its own status frame (``$18`` + address + status + family …),
+        usually right behind the ``$0511`` ack. ``first`` is the frame
+        that proved presence; if it is not the status itself, read a
+        little longer for it. Silence here is fine: the identity is a
+        bonus, not a requirement.
+        """
+        assert self._reader is not None
+        for frame in first.split("$")[1:]:
+            if self._note_identity("$" + frame):
+                return
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + PRESENCE_PROBE_IDENTITY_WAIT
+        while (remaining := deadline - loop.time()) > 0:
+            try:
+                data = await asyncio.wait_for(self._reader.readuntil(b"\r"), remaining)
+            except Exception:  # noqa: BLE001 - best effort: the identity is a bonus
+                return
+            text = data.decode("ascii", errors="ignore").strip()
+            for frame in text.split("$")[1:]:
+                if self._note_identity("$" + frame):
+                    return
+
+    def _note_identity(self, frame: str) -> bool:
+        """Record ``gateway_address`` / ``gateway_family`` from a ``$18`` frame."""
+        if not frame.startswith("$18") or len(frame) < 23:
+            return False
+        payload = reply_payload(frame)
+        if len(payload) < 7:
+            return False
+        try:
+            status = parse_module_status(payload, payload[1:2].hex() + payload[0:1].hex())
+        except ValueError:
+            return False
+        family = family_name(status.type_code)
+        if family is None:
+            return False
+        self.gateway_address = status.address.upper()
+        self.gateway_family = family
+        _LOGGER.info(
+            "Nikobus gateway on %s is a %s at %s",
+            self._connection_string,
+            family.replace("_", " "),
+            self.gateway_address,
+        )
+        return True
 
     def mark_device_answered(self, frame: str) -> None:
         """Overturn a silent probe: a Nikobus frame arrived after all.

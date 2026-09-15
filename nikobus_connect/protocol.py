@@ -215,6 +215,30 @@ def parse_module_status(payload: bytes, address: str) -> ModuleStatus:
     )
 
 
+def family_name(signature: int) -> str | None:
+    """Device class for a ``$18`` family signature byte, or ``None``."""
+    from .const import FAMILY_SIGNATURES
+
+    for name, codes in FAMILY_SIGNATURES.items():
+        if signature in codes:
+            return name
+    return None
+
+
+def family_matches(module_type: str, signature: int) -> bool | None:
+    """Whether ``signature`` is the family of ``module_type``.
+
+    ``None`` when the module type has no known signature (nothing to
+    compare against), so a caller can tell "unknown" from "mismatch".
+    """
+    from .const import FAMILY_SIGNATURES
+
+    codes = FAMILY_SIGNATURES.get(module_type)
+    if codes is None:
+        return None
+    return signature in codes
+
+
 def parse_module_crc(payload: bytes) -> int:
     """Decode the :data:`FUNC_MODULE_CRC` reply: ``FF lo hi ? ? crc_lo crc_hi``."""
     if len(payload) < 7:

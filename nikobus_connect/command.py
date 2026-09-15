@@ -508,6 +508,17 @@ class NikobusCommandHandler:
         ack_received = False
         answer_received = False
         state: str | None = None
+        # A state answer ($1C) that arrives *before* the interface has
+        # acknowledged our query was not triggered by it: a Feedback
+        # Module polls the same modules on its own and the answer to
+        # its query (possibly for the other output group) would be
+        # filed as ours. Hold such a frame instead of taking it; it is
+        # used only when nothing fresher follows the ack, so a gateway
+        # that orders ack and answer differently still works.
+        held_early_answer: str | None = None
+        answer_is_output_state = (
+            wait_answer.startswith("$1C") and not wait_answer.startswith("$1CFF") and not raw
+        )
         loop = asyncio.get_running_loop()
         end_time = loop.time() + COMMAND_ACK_WAIT_TIMEOUT
 
@@ -528,6 +539,14 @@ class NikobusCommandHandler:
                     _LOGGER.debug("ACK received")
                     ack_received = True
                 if wait_answer in message:
+                    if answer_is_output_state and not ack_received:
+                        _LOGGER.debug(
+                            "State answer before our ack held, not taken (pushed by a "
+                            "feedback module?): %s",
+                            message,
+                        )
+                        held_early_answer = message
+                        continue
                     if wait_answer.startswith("$0EFF"):
                         _LOGGER.debug("Answer received (set-command ack)")
                         state = ""
@@ -548,12 +567,17 @@ class NikobusCommandHandler:
                 if ack_received and answer_received:
                     return state
             except TimeoutError:
+                if ack_received and held_early_answer is not None:
+                    _LOGGER.debug("No answer after the ack — using the held early answer")
+                    return self._parse_state_from_message(held_early_answer, wait_answer)
                 _LOGGER.debug("Timeout while waiting for ACK/answer")
                 break
             except Exception as err:
                 _LOGGER.exception("Failed while waiting for messages")
                 raise NikobusError(f"Error while waiting for messages: {err}") from err
 
+        if ack_received and held_early_answer is not None:
+            return self._parse_state_from_message(held_early_answer, wait_answer)
         return None
 
     def _parse_state_from_message(self, message: str, answer_signal: str) -> str:

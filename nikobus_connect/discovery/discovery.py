@@ -519,6 +519,10 @@ def add_to_command_mapping(
         # See Nikobus-HA #319 for the IKIKN forensic.
         "record_source": decoded_command.get("record_source"),
     }
+    if decoded_command.get("calendar_channel"):
+        # PC-Link calendar channel (CH001A …): the merge files the link
+        # under a synthesized PC-Link entry instead of a wall button.
+        output_definition["calendar_channel"] = decoded_command["calendar_channel"]
 
     dedupe_key = (
         output_definition["module_address"],

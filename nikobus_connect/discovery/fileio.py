@@ -1306,6 +1306,59 @@ def _ensure_ir_op_point(
     return op_point
 
 
+CALENDAR_CHANNEL_TYPE = "PC-Link Calendar Channel"
+CALENDAR_OP_POINT_KEY = "CAL"
+
+
+def _calendar_label(outputs: Any) -> str | None:
+    """The calendar-channel label the decoders attached, if any."""
+    if not isinstance(outputs, list):
+        return None
+    for output in outputs:
+        if isinstance(output, dict) and output.get("calendar_channel"):
+            return str(output["calendar_channel"])
+    return None
+
+
+def _ensure_calendar_op_point(
+    buttons: dict[str, Any], address: str, label: str
+) -> tuple[str, dict[str, Any]]:
+    """The button-store entry for PC-Link calendar channel ``label``.
+
+    One entry per half-channel at its canonical address (``E00320`` for
+    CH001A), a single operation point, typed so the host treats it as
+    an input it cannot press: what the PC-Link puts on the bus when a
+    calendar program fires the channel is not known, so nothing must
+    try to emit it.
+    """
+    physical_addr = _normalize_address(address)
+    entry = buttons.get(physical_addr)
+    if not isinstance(entry, dict):
+        entry = {}
+        buttons[physical_addr] = entry
+    description = f"PC-Link calendar channel {label}"
+    entry.setdefault("description", description)
+    entry.setdefault("discovered_name", description)
+    entry.setdefault("type", CALENDAR_CHANNEL_TYPE)
+    entry.setdefault("model", "05-200")
+    entry.setdefault("address", physical_addr)
+    entry.setdefault("channels", 1)
+    entry.setdefault("channels_count", 1)
+    entry.setdefault("discovered", True)
+    entry["calendar_channel"] = label
+    op_points = entry.get("operation_points")
+    if not isinstance(op_points, dict):
+        op_points = {}
+        entry["operation_points"] = op_points
+    op_point = op_points.get(CALENDAR_OP_POINT_KEY)
+    if not isinstance(op_point, dict):
+        op_point = {}
+        op_points[CALENDAR_OP_POINT_KEY] = op_point
+    op_point["bus_address"] = physical_addr
+    op_point.setdefault("description", f"Calendar channel {label} (PC-Link)")
+    return physical_addr, op_point
+
+
 def merge_linked_modules(
     button_data: dict[str, Any], command_mapping: dict[Any, Any]
 ) -> tuple[int, int, int, set[str]]:
@@ -1376,6 +1429,13 @@ def merge_linked_modules(
                 physical_entry, receiver_addr, ir_code_from_key
             )
             physical_addr = receiver_addr
+            matched_addresses.add(_normalize_address(push_button_address))
+        elif calendar_label := _calendar_label(outputs):
+            # PC-Link calendar channel: no wall button will ever match,
+            # file the link under a synthesized entry for the channel.
+            physical_addr, op_point = _ensure_calendar_op_point(
+                buttons, push_button_address, calendar_label
+            )
             matched_addresses.add(_normalize_address(push_button_address))
         else:
             resolved = _resolve_operation_point(

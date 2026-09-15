@@ -57,6 +57,14 @@ class NikobusEventListener:
         self.on_connection_lost: Callable[[], Any] | None = None
         self._frame_buffer = ""
         self._last_query_group: dict[str, int] = {}
+        # Traffic of a Feedback Module as seen through the gateway: state
+        # queries it sends (``$1012`` / ``$1017`` echoes, relayed by a
+        # PC-Link, never by the Feedback Module's own port) and pushed
+        # state answers (``$1C`` frames nobody here asked for). Answers
+        # without queries mean the gateway is not a PC-Link, and the
+        # answers cannot be attributed to an output group.
+        self.feedback_queries_seen: int = 0
+        self.feedback_answers_seen: int = 0
         self._awaiting_response: bool = False
         # Answer prefix the command layer is waiting for, while it waits.
         # A PC-Link clock reply ($1CFF...) has the frame code of an
@@ -74,6 +82,8 @@ class NikobusEventListener:
         """
         self._frame_buffer = ""
         self._last_query_group.clear()
+        self.feedback_queries_seen = 0
+        self.feedback_answers_seen = 0
         while True:
             try:
                 self.response_queue.get_nowait()
@@ -199,6 +209,7 @@ class NikobusEventListener:
 
         # GET-state command echoes ($1012/$1017) — track group and discard
         if any(message.startswith(r) for r in FEEDBACK_REFRESH_COMMAND):
+            self.feedback_queries_seen += 1
             if self._has_feedback_module:
                 gid = message[3:5]
                 group = {"12": 1, "17": 2}.get(gid, 1)
@@ -213,6 +224,8 @@ class NikobusEventListener:
                 if self._is_awaited_query_reply(message):
                     self._enqueue_response(message)
                     return
+                if not self._awaiting_response:
+                    self.feedback_answers_seen += 1
                 if self._has_feedback_module and self._feedback_callback:
                     if len(message) >= 7:
                         addr = (message[5:7] + message[3:5]).upper()

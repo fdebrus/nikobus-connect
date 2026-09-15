@@ -352,6 +352,48 @@ def is_known_button_canonical(
         return True
 
 
+# PC-Link calendar channels. The Nikobus software gives the PC-Link
+# (05-200, "PC Calendar Module") 100 virtual channels, CH001 … CH100,
+# each with an A and a B half, that calendar programs and scenes fire
+# like buttons. Their bus addresses are E00320 + 4 × (n − 1), the B half
+# at +2, and an output module's link record carries them bit-reversed
+# like any button address. Read from a project file and confirmed on
+# the PC-Link's own channel table (100 entries, three-byte bus form).
+CALENDAR_CHANNEL_BASE = 0xE00320
+CALENDAR_CHANNEL_COUNT = 100
+
+
+def _reverse_24(value: int) -> int:
+    out = 0
+    for _ in range(24):
+        out = (out << 1) | (value & 1)
+        value >>= 1
+    return out
+
+
+def calendar_channel_from_link(raw_hex: str) -> tuple[str, str] | None:
+    """``("CH001A", "E00320")`` when a link record's 3-byte button
+    address is a PC-Link calendar channel, else ``None``.
+
+    ``raw_hex`` is the record's address as stored (the bus form);
+    the canonical address returned is the one the Nikobus software
+    shows, unique per half — unlike ``get_button_address``, whose
+    wall-button transform drops two bits and folds distinct channels
+    together.
+    """
+    try:
+        value = _reverse_24(int(raw_hex, 16) & 0xFFFFFF)
+    except (TypeError, ValueError):
+        return None
+    offset = value - CALENDAR_CHANNEL_BASE
+    if not 0 <= offset < 4 * CALENDAR_CHANNEL_COUNT:
+        return None
+    number, half = divmod(offset, 4)
+    if half not in (0, 2):
+        return None
+    return f"CH{number + 1:03d}{'A' if half == 0 else 'B'}", f"{value:06X}"
+
+
 def get_button_address(payload_hex: str) -> str | None:
     """Convert the 3-byte payload suffix into a button address."""
 

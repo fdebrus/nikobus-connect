@@ -250,3 +250,25 @@ async def test_answered_probe_is_left_alone() -> None:
         listener._connection.device_answered = verdict
         await listener._dispatch_message("$0511")
         listener._connection.mark_device_answered.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Feedback-module traffic counters
+# ---------------------------------------------------------------------------
+
+
+async def test_listener_counts_feedback_queries_and_pushed_answers() -> None:
+    listener, _ = _listener(has_feedback_module=True, feedback_callback=lambda g, m: None)
+    await listener._dispatch_message("$10126C0E4E16A4")           # query echo (PC-Link gateway)
+    await listener._dispatch_message("$1C6C0E00730000FF00008F49C5")  # pushed answer
+    await listener._dispatch_message("$1C6C0E00FF0000FF0000508A88")
+    assert (listener.feedback_queries_seen, listener.feedback_answers_seen) == (1, 2)
+    listener.reset()
+    assert (listener.feedback_queries_seen, listener.feedback_answers_seen) == (0, 0)
+
+
+async def test_awaited_answer_is_not_counted_as_pushed() -> None:
+    listener, _ = _listener(has_feedback_module=True, feedback_callback=lambda g, m: None)
+    listener._awaiting_response = True
+    await listener._dispatch_message("$1C6C0E00730000FF00008F49C5")
+    assert listener.feedback_answers_seen == 0

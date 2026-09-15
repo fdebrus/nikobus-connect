@@ -16,6 +16,7 @@ from .protocol import (
     _format_channel,
     _is_all_ff,
     _safe_int,
+    calendar_channel_from_link,
     get_button_address,
     get_push_button_address,
 )
@@ -110,6 +111,12 @@ def decode(payload_hex: str, raw_bytes: list[str], context: Any) -> dict[str, An
         return None
 
     button_address = get_button_address(payload_hex[-6:])
+    # A PC-Link calendar channel is not a wall button: keep its own
+    # (unique) address and label so the merge files it under the
+    # PC-Link instead of dropping it as an unknown button.
+    calendar = calendar_channel_from_link(payload_hex[-6:])
+    if calendar is not None:
+        button_address = calendar[1]
     coord_get_channels = (
         context.coordinator.get_button_channels
         if context.coordinator is not None
@@ -127,6 +134,7 @@ def decode(payload_hex: str, raw_bytes: list[str], context: Any) -> dict[str, An
         "payload": payload_hex,
         "button_address": normalized_button,
         "push_button_address": push_button_address,
+        "calendar_channel": calendar[0] if calendar is not None else None,
         "key_raw": key_raw,
         "channel_raw": channel_raw,
         "channel": channel_decoded,
