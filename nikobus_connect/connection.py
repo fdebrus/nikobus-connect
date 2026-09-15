@@ -117,15 +117,14 @@ class NikobusConnect:
 
         The handshake writes blindly; a wrong port, an unpowered PC-Link,
         a bridge with nothing behind it or a serial handle left dead by
-        another program all "complete" it. The presence probe (a status
-        query to the null address) is acknowledged with ``$0511`` by the
-        PC-Link and by a feedback module used as gateway; any other
+        another program all "complete" it. The probe is the ``#A``
+        identity broadcast, which the gateway answers with its own
+        ``$18`` status frame (address and family) within tens of
+        milliseconds — a PC-Link and a PC-Logic both do. Any other
         well-formed Nikobus frame seen meanwhile (a button press, a
         feedback frame, an ack) proves the point just as well, which
-        covers gateways whose null-address behaviour is unknown (a
-        PC-Logic used as gateway). The interface holds an acknowledgement
-        until the next ``$`` frame it receives, so each attempt sends the
-        probe twice and reads after the second.
+        covers a gateway whose ``#A`` behaviour is unknown (a feedback
+        module used as gateway) while the bus is alive.
 
         Records the verdict in ``device_answered`` and returns it. Silence
         is logged as a warning, not raised: an installation whose gateway
@@ -138,8 +137,6 @@ class NikobusConnect:
         # (a cold start swallows frames sent straight after ``ATZ``).
         await asyncio.sleep(PRESENCE_PROBE_SETTLE)
         for attempt in range(1, PRESENCE_PROBE_ATTEMPTS + 1):
-            await self.send(PRESENCE_PROBE_COMMAND)
-            await asyncio.sleep(0.2)
             await self.send(PRESENCE_PROBE_COMMAND)
             deadline = loop.time() + PRESENCE_PROBE_TIMEOUT
             while (remaining := deadline - loop.time()) > 0:

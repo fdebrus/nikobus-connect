@@ -21,7 +21,13 @@ HANDSHAKE_TIMEOUT: Final[int] = 60
 # acknowledges with ``$0511`` and nothing else. The interface holds that
 # acknowledgement until the next ``$`` frame reaches it, so the probe is
 # sent twice per attempt and the first reply is read after the second.
-PRESENCE_PROBE_COMMAND: Final[str] = "$10110000B8CF9D"
+# The ``#A`` identity broadcast: the gateway answers it with its own
+# ``$18`` status frame within ~30 ms (PC-Link ``$18 F586 00 50 …``, a
+# PC-Logic likewise). A status query to the null address, the previous
+# probe, only earns an acknowledgement — and the PC-Link holds acks back
+# until it has a reply or a relayed bus frame to send, so on a quiet bus
+# that probe never got an answer.
+PRESENCE_PROBE_COMMAND: Final[str] = "#A"
 PRESENCE_PROBE_TIMEOUT: Final[float] = 3.0
 PRESENCE_PROBE_ATTEMPTS: Final[int] = 3
 # Pause between the end of the handshake and the first probe. A PC-Link
@@ -48,6 +54,12 @@ FAMILY_SIGNATURES: Final[dict[str, tuple[int, ...]]] = {
 
 # Command execution timing
 COMMAND_EXECUTION_DELAY: Final[float] = 0.15
+# How many times a host-injected key press (``#N``) is repeated. A real
+# key repeats its telegram while held and modules act on a telegram seen
+# at least twice: "2 to register, 3 to be sure". The repeats go out in
+# one write, back to back — spaced repeats can be counted as separate
+# presses by an impulse/toggle link.
+DEFAULT_PRESS_REPEAT: Final[int] = 3
 COMMAND_ACK_WAIT_TIMEOUT: Final[int] = 15
 COMMAND_ANSWER_WAIT_TIMEOUT: Final[int] = 5
 COMMAND_POST_ACK_ANSWER_TIMEOUT: Final[float] = 1.5

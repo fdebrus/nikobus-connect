@@ -7,6 +7,7 @@ from collections.abc import Callable
 from datetime import datetime
 from typing import Any, Final
 
+from .const import DEFAULT_PRESS_REPEAT
 from .exceptions import NikobusError
 from .protocol import (
     FUNC_GET_TIME,
@@ -73,6 +74,8 @@ class NikobusAPI:
         """
         self._command_handler = command_handler
         self._module_data = module_data
+        #: Repeats per key press put on the bus by :meth:`press_button`.
+        self.press_repeat: int = DEFAULT_PRESS_REPEAT
 
     def _get_channel_info(self, module_key: str, address: str, channel: int) -> dict[str, Any]:
         """Safely retrieve channel metadata and always return a dict."""
@@ -83,11 +86,33 @@ class NikobusAPI:
         except (IndexError, KeyError, TypeError):
             return {}
 
+    def press_command(self, bus_addr: str) -> str:
+        """The single write that puts one key press on the bus.
+
+        ``#N<addr>\r#E1`` repeated ``press_repeat`` times, joined in one
+        command so the frames leave the interface back to back at line
+        speed. Queued as separate items they would go out 150 ms apart
+        (the queue's pacing), with other commands able to slip in
+        between — which an impulse/toggle link can count as two presses
+        ("on, then immediately off again").
+        """
+        try:
+            repeats = max(1, int(self.press_repeat))
+        except (TypeError, ValueError):
+            repeats = DEFAULT_PRESS_REPEAT
+        return "\r".join([f"#N{bus_addr}\r#E1"] * repeats)
+
+    async def press_button(
+        self, bus_addr: str, completion_handler: Callable[..., Any] | None = None
+    ) -> None:
+        """Put one key press on the bus, as a real key would (see ``press_command``)."""
+        await self._command_handler.queue_command(
+            self.press_command(bus_addr), completion_handler=completion_handler
+        )
+
     async def _send_bus_command(self, bus_addr: str, completion_handler: Callable[..., Any] | None = None) -> None:
         """Helper to send a standard Nikobus bus trigger (#N...#E1)."""
-        await self._command_handler.queue_command(
-            f"#N{bus_addr}\r#E1", completion_handler=completion_handler
-        )
+        await self.press_button(bus_addr, completion_handler=completion_handler)
 
     async def _dispatch_action(
         self,

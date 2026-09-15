@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.38.2
+
+- **A key press is one write.** `NikobusAPI.press_button(bus_address)` puts `#N<addr>\r#E1` on the bus `press_repeat` times (default 3, the "2 to register, 3 to be sure" rule) **joined into a single command**, so the repeats leave the interface back to back at line speed. Queued as separate items — what a caller had to do so far — they went out 150 ms apart, the queue's pacing, with other commands able to slip in between; an impulse/toggle link (switch mode M05) can count such a spread as two presses, which shows as "on, then immediately off again" or as nothing at all. The LED triggers (`led_on` / `led_off`) and scene activations go through the same method, so they now repeat too instead of sending one frame. `press_command()` returns the text for callers that queue themselves.
+
+## 0.38.1
+
+- **The presence probe is now the `#A` identity broadcast.** The previous probe, a status query to the null address, only earned an acknowledgement — and the PC-Link holds acknowledgements back until it has a reply or a relayed bus frame to send, so on a quiet bus (no Feedback Module polling) the probe never got an answer and every start-up logged a false warning, acknowledged a fraction of a second later by the first real command. `#A` is answered by the gateway itself within tens of milliseconds with its own `$18` status frame (captured: `$18F58600500F3FFFAC61FE` for a PC-Link at 86F5; a PC-Logic answers likewise), which is also where `gateway_address` / `gateway_family` now come from. Any other Nikobus frame still counts as presence. One send per attempt, three attempts of three seconds.
+
 ## 0.38.0
 
 - **A state answer that arrives before our own ack is not ours.** A Feedback Module polls the output modules on its own, and the `$1C` answer to one of its queries — possibly for the other output group of the same module — could land while the command handler waited for the answer to *its* query, and be taken as it (the wrong group's six bytes displayed until the next poll). The handler now holds a state answer that precedes the interface's `$05xx` ack and uses it only when nothing fresher follows the ack, so a gateway that orders ack and answer differently keeps working. Clock and raw replies are unaffected.

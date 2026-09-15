@@ -40,12 +40,20 @@ def _make_api(led_on: str | None = "1A2B3C", led_off: str | None = "1A2B3D"):
 
 
 def _led_commands(handler) -> list[str]:
-    """Return the LED-trigger broadcasts queued during the call."""
-    return [
-        call.args[0]
-        for call in handler.queue_command.call_args_list
-        if isinstance(call.args[0], str) and call.args[0].startswith("#N")
-    ]
+    """Return the LED-trigger broadcasts queued during the call.
+
+    Since 0.38.2 a trigger is one queued command carrying the ``#N``
+    frame ``press_repeat`` times (3), joined with CR; collapse it back to
+    the single frame the assertions name, checking the repeat on the way.
+    """
+    out = []
+    for call in handler.queue_command.call_args_list:
+        cmd = call.args[0]
+        if isinstance(cmd, str) and cmd.startswith("#N"):
+            frames = cmd.split("\r#N")
+            assert len(frames) == 3, cmd
+            out.append("#N" + frames[-1] if not frames[0].startswith("#N") else frames[0])
+    return out
 
 
 class TestDimmerLedFeedback(unittest.IsolatedAsyncioTestCase):

@@ -64,9 +64,9 @@ async def test_tcp_connect_runs_handshake() -> None:
         await conn.connect()
     opener.assert_awaited_once_with("192.168.2.50", 9999)
     assert conn.is_connected
-    # One write per handshake command, plus the presence probe sent twice.
-    assert writer.write.call_count == len(COMMANDS_HANDSHAKE) + 2
-    assert writer.write.call_args_list[-1].args[0] == b"$10110000B8CF9D\r"
+    # One write per handshake command, plus the ``#A`` presence probe.
+    assert writer.write.call_count == len(COMMANDS_HANDSHAKE) + 1
+    assert writer.write.call_args_list[-1].args[0] == b"#A\r"
 
 
 async def test_serial_path_uses_serial_asyncio() -> None:
@@ -271,10 +271,10 @@ async def test_probe_waits_for_the_interface_to_settle() -> None:
         patch.multiple("nikobus_connect.connection", PRESENCE_PROBE_SETTLE=1.5),
     ):
         await conn.connect()
-    # Handshake spacing (0.2 s each), then the settle pause, then the
-    # 0.2 s between the two probe sends.
+    # Handshake spacing (0.2 s each), then the settle pause right before
+    # the probe goes out.
     assert sleeps[len(COMMANDS_HANDSHAKE)] == 1.5
-    assert sleeps[-1] == 0.2
+    assert sleeps[-1] == 1.5
 
 
 # --- a silent probe is overturned by the first frame -------------------
@@ -326,10 +326,12 @@ def _status_frame(address_le: str, family: int) -> bytes:
     return (append_crc2(f"$18{append_crc1(data)}") + "\r").encode()
 
 
-async def test_probe_records_the_gateway_identity_after_the_ack() -> None:
+async def test_probe_records_the_gateway_identity_from_the_status_frame() -> None:
+    """``#A`` is answered by the PC-Link's own status frame: presence and
+    identity in one read (captured: ``$18F58600500F3FFFAC61FE``)."""
     conn = NikobusConnect("host:1234")
     reader, writer = _stream_pair()
-    reader.readuntil = AsyncMock(side_effect=[b"$0511\r", _status_frame("F586", 0x50)])
+    reader.readuntil = AsyncMock(side_effect=[_status_frame("F586", 0x50)])
     with (
         patch("asyncio.open_connection", new=AsyncMock(return_value=(reader, writer))),
         patch("asyncio.sleep", new=AsyncMock()),

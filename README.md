@@ -73,7 +73,7 @@ asyncio.run(main())
 
 Addresses are the 6-hex-digit module addresses printed on Nikobus modules (e.g. `A1B2C3`). Channels are 1-indexed.
 
-`connect()` runs the PC-Link handshake and then a presence probe: a status query the PC-Link (or a Feedback Module used as gateway) acknowledges, with any Nikobus frame relayed meanwhile counting as proof of life. Silence is not fatal — it is logged, and the verdict is left in `conn.device_answered` (`True` / `False`, `None` before connecting) so a caller can surface it. A silent verdict is not final either: the first well-formed frame the listener receives afterwards flips it to `True` and calls `conn.on_device_answered` (sync or async), so a probe missed while the PC-Link was still resetting on a cold start corrects itself within seconds.
+`connect()` runs the PC-Link handshake and then a presence probe: the `#A` identity broadcast, which the PC-Link (and a PC-Logic) answers with its own status frame, with any Nikobus frame relayed meanwhile counting as proof of life. Silence is not fatal — it is logged, and the verdict is left in `conn.device_answered` (`True` / `False`, `None` before connecting) so a caller can surface it. A silent verdict is not final either: the first well-formed frame the listener receives afterwards flips it to `True` and calls `conn.on_device_answered` (sync or async), so a probe missed while the PC-Link was still resetting on a cold start corrects itself within seconds.
 
 The gateway usually answers the probe with its own status frame as well; when it does, `conn.gateway_address` and `conn.gateway_family` (`pc_link`, `feedback_module` or `pc_logic`) say what is on the other end.
 
@@ -110,6 +110,15 @@ await api.stop_cover("C0FFEE", 1, direction="opening")
 
 await api.close_cover("C0FFEE", 1)
 ```
+
+### Pressing a key from the host
+
+```python
+api.press_repeat = 3          # default; "2 to register, 3 to be sure"
+await api.press_button("295682")
+```
+
+One write: the `#N` telegram repeated as a real key repeats it while held, back to back. Do not queue the repeats yourself — spaced 150 ms apart, an impulse/toggle link can count them as two presses. The interface never relays the host's own press back, so refresh the impacted module afterwards if you need its state.
 
 ### Listening to button presses
 
