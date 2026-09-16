@@ -86,6 +86,8 @@ await api.turn_on_switch("A1B2C3", 1)
 await api.turn_off_switch("A1B2C3", 1)
 ```
 
+Set-output commands for one module group are merged: several `turn_on` / `turn_off` calls on channels of the same group made within a few tens of milliseconds go out as one frame carrying all six bytes, one acknowledgement, one relay click.
+
 ### Dimmer brightness
 
 Brightness is 0-255. Pass the current brightness so the API can decide whether to send the "turn on" bus trigger.
