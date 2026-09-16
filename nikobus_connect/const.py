@@ -54,6 +54,12 @@ FAMILY_SIGNATURES: Final[dict[str, tuple[int, ...]]] = {
 
 # Command execution timing
 COMMAND_EXECUTION_DELAY: Final[float] = 0.15
+# A set-output request waits this long at the head of the queue before
+# its frame is built from the state buffer, so requests for the same
+# module group that arrive together (six lights of one module switched
+# by one service call, or by consecutive script actions) become one
+# frame instead of one each.
+SET_COALESCE_WINDOW: Final[float] = 0.05
 # How many times a host-injected key press (``#N``) is repeated. A real
 # key repeats its telegram while held and modules act on a telegram seen
 # at least twice: "2 to register, 3 to be sure". The repeats go out in

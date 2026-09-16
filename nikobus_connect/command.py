@@ -12,6 +12,7 @@ from .const import (
     COMMAND_ACK_WAIT_TIMEOUT,
     COMMAND_ANSWER_WAIT_TIMEOUT,
     COMMAND_EXECUTION_DELAY,
+    SET_COALESCE_WINDOW,
     COMMAND_POST_ACK_ANSWER_TIMEOUT,
     MAX_ATTEMPTS,
 )
@@ -61,6 +62,10 @@ class NikobusCommandHandler:
         self.bus_lock: asyncio.Lock = asyncio.Lock()
         self._pending_get_futures: dict[str, asyncio.Future[str]] = {}
         self._queued_get_keys: set[str] = set()
+        # Set-output requests waiting in the queue, by ``ADDR_group``: a
+        # second request for the same group joins the pending item
+        # instead of queueing a frame of its own (see ``set_output_state``).
+        self._pending_set_groups: dict[str, dict[str, Any]] = {}
 
     async def start(self) -> None:
         """Start the command processing loop."""
@@ -117,6 +122,19 @@ class NikobusCommandHandler:
                     self._command_queue.task_done()
                     continue
 
+                set_group = command_item.get("set_group")
+                if set_group is not None:
+                    # Let requests for the same group that are arriving
+                    # right now join this one, then build the frame from
+                    # the buffer and stop accepting joiners: anything
+                    # later is a later change and gets its own frame.
+                    await asyncio.sleep(SET_COALESCE_WINDOW)
+                    set_addr, group = set_group
+                    if self._pending_set_groups.get(f"{set_addr}_{group}") is command_item:
+                        del self._pending_set_groups[f"{set_addr}_{group}"]
+                    command = self._build_set_group_command(set_addr, group)
+                    command_item["command"] = command
+
                 _LOGGER.debug("Processing command %s with address %s", command, address)
 
                 gid = command[3:5] if len(command) >= 5 else ""
@@ -144,6 +162,11 @@ class NikobusCommandHandler:
                             res = completion_handler()
                             if inspect.isawaitable(res):
                                 await res
+                        for handler in command_item.get("completion_handlers") or []:
+                            if callable(handler):
+                                res = handler()
+                                if inspect.isawaitable(res):
+                                    await res
                 except Exception as err:
                     _LOGGER.exception("Failed to process command %s", command)
                     if future and not future.done():
@@ -235,19 +258,42 @@ class NikobusCommandHandler:
             address, channel, value
         )
         group = calculate_group_number(channel)
+        addr = address.upper()
 
-        self.set_bytearray_state(address, channel, value)
+        # The buffer is updated now; the frame is built when the request
+        # reaches the head of the queue, from the buffer as it stands
+        # then. A request for the same group that is still waiting takes
+        # this one aboard: six lights of one module switched together
+        # become one frame, one acknowledgement, one relay click.
+        self.set_bytearray_state(addr, channel, value)
+        key = f"{addr}_{group}"
+        pending = self._pending_set_groups.get(key)
+        if pending is not None:
+            if completion_handler is not None:
+                pending["completion_handlers"].append(completion_handler)
+            _LOGGER.debug(
+                "Set-output for %s channel %d joins the pending group %d write",
+                addr, channel, group,
+            )
+            return
+
+        item: dict[str, Any] = {
+            "command": f"<set {addr} group {group}>",
+            "address": addr,
+            "future": None,
+            "completion_handler": None,
+            "completion_handlers": [completion_handler] if completion_handler else [],
+            "set_group": (addr, group),
+        }
+        self._pending_set_groups[key] = item
+        await self._command_queue.put(item)
+        _LOGGER.debug("Set-output queued for module %s group %d (channel %d)", addr, group, channel)
+
+    def _build_set_group_command(self, address: str, group: int) -> str:
+        """The ``0x15`` / ``0x16`` frame for a module group, from the buffer."""
         current_bytes = self.get_bytearray_group_state(address, group)
-
         cmd_code = 0x15 if group == 1 else 0x16
-        payload = current_bytes[:6] + bytearray([0xFF])
-
-        command = make_pc_link_command(cmd_code, address, payload)
-
-        await self.queue_command(
-            command, address, completion_handler=completion_handler
-        )
-        _LOGGER.debug("Command successfully queued for module %s, channel %d", address, channel)
+        return make_pc_link_command(cmd_code, address, current_bytes[:6] + bytearray([0xFF]))
 
     async def set_output_states(
         self,
@@ -338,6 +384,12 @@ class NikobusCommandHandler:
             future = item.get("future")
             if future is not None and not future.done():
                 future.cancel()
+            if (set_group := item.get("set_group")) is not None:
+                # A later request for this group must queue anew, not
+                # join an item that no longer exists.
+                key = f"{set_group[0]}_{set_group[1]}"
+                if self._pending_set_groups.get(key) is item:
+                    del self._pending_set_groups[key]
             self._command_queue.task_done()
             count += 1
         for item in keep:
@@ -355,6 +407,7 @@ class NikobusCommandHandler:
         """
         discarded = self.drain_queue()
         self._queued_get_keys.clear()
+        self._pending_set_groups.clear()
         if discarded:
             _LOGGER.info(
                 "Command handler reset: %d stale command(s) discarded", discarded

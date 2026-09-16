@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.38.3
+
+- **Set-output requests for one module group become one frame.** Each `set_output_state` call used to build its own group write (`0x15` / `0x16`, the six bytes of the group) the moment it was made: six lights of one module switched together were six frames 150 ms apart, six acknowledgements, six relay clicks, the last five carrying the bytes of the earlier ones anyway. A request now updates the state buffer and waits in the queue without a frame; the frame is built from the buffer when the request reaches the head, after a `SET_COALESCE_WINDOW` (50 ms) in which further requests for the same module group join it instead of queueing — on and off mixed, dimmer levels included. Every caller's completion handler still runs after the acknowledgement. A single request is unchanged apart from the 50 ms, a request for another group or module keeps its own frame, and a request made once the frame is built is a later change and gets its own frame. `set_output_states` (the whole-module write used for scenes) is untouched.
+
 ## 0.38.2
 
 - **A key press is one write.** `NikobusAPI.press_button(bus_address)` puts `#N<addr>\r#E1` on the bus `press_repeat` times (default 3, the "2 to register, 3 to be sure" rule) **joined into a single command**, so the repeats leave the interface back to back at line speed. Queued as separate items — what a caller had to do so far — they went out 150 ms apart, the queue's pacing, with other commands able to slip in between; an impulse/toggle link (switch mode M05) can count such a spread as two presses, which shows as "on, then immediately off again" or as nothing at all. The LED triggers (`led_on` / `led_off`) and scene activations go through the same method, so they now repeat too instead of sending one frame. `press_command()` returns the text for callers that queue themselves.
