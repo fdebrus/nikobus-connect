@@ -240,9 +240,39 @@ class NikobusAPI:
             _LOGGER.error("API cover action failed for %s: %s", address, err)
             raise
 
-    async def set_output_states_for_module(self, address: str, completion_handler: Callable[..., Any] | None = None) -> None:
-        """Batch update all output states for a specific module."""
-        await self._command_handler.set_output_states(address, completion_handler=completion_handler)
+    def module_channel_count(self, address: str) -> int | None:
+        """Channel count of a module from the caller-supplied inventory, or ``None``."""
+        addr = address.upper()
+        for modules in self._module_data.values():
+            if not isinstance(modules, dict):
+                continue
+            entry = modules.get(addr) or modules.get(address)
+            if isinstance(entry, dict):
+                channels = entry.get("channels")
+                if isinstance(channels, list):
+                    return len(channels)
+        return None
+
+    async def set_output_states_for_module(
+        self,
+        address: str,
+        completion_handler: Callable[..., Any] | None = None,
+        *,
+        num_channels: int | None = None,
+    ) -> None:
+        """Write both output groups of a module (the whole-module write).
+
+        The module's channel count decides whether the second group is
+        written; it is taken from the inventory this API was built with
+        unless the caller passes ``num_channels``. See
+        :meth:`NikobusCommandHandler.set_output_states` for why guessing
+        it from the state buffer is not good enough.
+        """
+        if not num_channels:
+            num_channels = self.module_channel_count(address)
+        await self._command_handler.set_output_states(
+            address, completion_handler=completion_handler, num_channels=num_channels
+        )
 
     # --- MAINTENANCE: module status, EEPROM integrity, PC-Link clock ---
 
