@@ -271,11 +271,13 @@ def merge_discovered_modules(
     )
 
     def _default_channel(module_type: str, index: int) -> dict[str, Any]:
+        # A roller channel gets no travel time: until 0.38.5 a flat
+        # ``"operation_time_up": "30"`` was written here, which a host
+        # then could not tell from a travel time the user really chose.
+        # Absent says plainly "nobody set one", so the host can take the
+        # run time the module's own roller links carry.
         label = "input" if module_type in _INPUT_MODULE_TYPES else "output"
-        channel = {"description": f"not_in_use {label}_{index}"}
-        if module_type == "roller_module":
-            channel["operation_time_up"] = "30"
-        return channel
+        return {"description": f"not_in_use {label}_{index}"}
 
     def _pad_channels(
         module_type: str, existing: Any, channels_count: int

@@ -97,7 +97,6 @@ def test_new_module_gets_auto_description_and_default_channels():
     assert len(entry["channels"]) == 12
     # Defaults for an untouched switch_module channel.
     assert entry["channels"][0] == {"description": "not_in_use output_1"}
-    # Roller defaults include operation_time_up.
     assert "operation_time_up" not in entry["channels"][0]
     assert entry["discovered_info"] == {
         "name": "Switching module",
@@ -106,18 +105,24 @@ def test_new_module_gets_auto_description_and_default_channels():
     }
 
 
-def test_roller_module_defaults_include_operation_time_up():
+def test_roller_module_defaults_carry_no_travel_time():
+    """A fresh roller channel says nothing about its travel time.
+
+    Until 0.38.5 a flat ``"30"`` was written into every roller channel,
+    which a host could not tell from a travel time the user had really
+    chosen — so a 21 s or a 120 s shutter looked exactly like an
+    unconfigured one. Absent means "nobody set one", and the host can
+    fall back to the run time programmed into the module's own roller
+    links (fdebrus/Nikobus-HA cover travel times).
+    """
     store: dict = {"nikobus_module": {}}
     discovered = {"9105": _roller_device("9105", 6)}
 
     merge_discovered_modules(store, discovered)
 
     entry = store["nikobus_module"]["9105"]
-    for ch in entry["channels"]:
-        assert ch == {
-            "description": f"not_in_use output_{entry['channels'].index(ch) + 1}",
-            "operation_time_up": "30",
-        }
+    for index, ch in enumerate(entry["channels"], start=1):
+        assert ch == {"description": f"not_in_use output_{index}"}
 
 
 def test_user_fields_preserved_on_rediscovery():
