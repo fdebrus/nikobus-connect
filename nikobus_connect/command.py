@@ -299,8 +299,24 @@ class NikobusCommandHandler:
         self,
         address: str,
         completion_handler: Callable[[], Awaitable[None]] | None = None,
+        *,
+        num_channels: int | None = None,
     ) -> None:
-        """Prepare and queue the output states for a module."""
+        """Write both output groups of a module (the whole-module write).
+
+        ``num_channels`` is the module's real channel count; it decides
+        whether the second group (channels 7-12, function ``0x16``) is
+        written at all. Callers that know it — anyone holding a module
+        inventory — should pass it: without it the only thing left to
+        go on is the state buffer, and "every channel of group 2 is
+        being turned off" then looks exactly like "this module has no
+        group 2", because both are six zero bytes. That guess used to
+        drop the ``0x16`` frame of a 12-channel module being switched
+        fully off: the relays stayed on while the caller's own state
+        said off, until the next poll put the entities back on
+        (issue #148). The guess remains only as a fallback for callers
+        that cannot supply the count.
+        """
         _LOGGER.debug("Preparing to set output states for module %s", address)
         addr = address.upper()
         state = self._module_states.get(addr)
@@ -308,7 +324,17 @@ class NikobusCommandHandler:
             _LOGGER.warning("Cannot set output states — module %s not in state buffer", address)
             return
 
-        has_second_group = len(state) > 6 and any(b != 0 for b in state[6:12])
+        if num_channels:
+            has_second_group = num_channels > 6
+        else:
+            has_second_group = len(state) > 6 and any(b != 0 for b in state[6:12])
+            if not has_second_group and len(state) > 6:
+                _LOGGER.debug(
+                    "Module %s: group 2 not written — channel count unknown and every "
+                    "group-2 byte is zero, so the module is assumed to have six outputs. "
+                    "Pass num_channels if it has twelve.",
+                    addr,
+                )
         channel_states = state[:6] + bytearray([0xFF])
         await self.queue_command(
             make_pc_link_command(0x15, address, channel_states),

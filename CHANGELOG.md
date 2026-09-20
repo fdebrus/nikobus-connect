@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.38.5
+
+- **A freshly discovered roller channel no longer carries a made-up travel time.** Every new roller channel was created with `"operation_time_up": "30"`, a placeholder a host could not tell apart from a travel time the user had really chosen: a 21 s and a 120 s shutter both read as 30 s, and the only way to get the real value into the config was to type it in by hand for every cover. The field is now simply absent, which says "nobody set one" — so a host can fall back to the run time programmed into the module's own roller links, which is what the module actually keeps the relay engaged for. Existing stores are untouched: a channel that already holds `"30"` keeps it, and every user-set value is preserved on re-discovery as before.
+
+## 0.38.4
+
+- **A twelve-channel module switched fully off now receives its second frame.** The whole-module write (`set_output_states`, used for scenes and grouped covers) decided whether to send the group-2 frame (`0x16`, channels 7-12) by looking for a non-zero byte in the state buffer. Six zero bytes mean two different things there — "this module has no second group" and "all six of its channels are being turned off" — so a 12-channel module switched fully off never got the frame: the relays stayed on while the caller's own state said off, and the next poll put the entities back on, looking like lights that turned themselves back on (issue #148, thanks to @roswennen for the diagnosis). `set_output_states` and `NikobusAPI.set_output_states_for_module` now take a keyword-only `num_channels`, and `NikobusAPI` fills it in from the module inventory it was built with, so callers get the fix without changing anything. The old guess remains only for a module the inventory does not know, and says so at DEBUG when it skips the frame.
+- `NikobusAPI.module_channel_count(address)` — the channel count of a module from that inventory, or `None`.
+
 ## 0.38.3
 
 - **Set-output requests for one module group become one frame.** Each `set_output_state` call used to build its own group write (`0x15` / `0x16`, the six bytes of the group) the moment it was made: six lights of one module switched together were six frames 150 ms apart, six acknowledgements, six relay clicks, the last five carrying the bytes of the earlier ones anyway. A request now updates the state buffer and waits in the queue without a frame; the frame is built from the buffer when the request reaches the head, after a `SET_COALESCE_WINDOW` (50 ms) in which further requests for the same module group join it instead of queueing — on and off mixed, dimmer levels included. Every caller's completion handler still runs after the acknowledgement. A single request is unchanged apart from the 50 ms, a request for another group or module keeps its own frame, and a request made once the frame is built is a later change and gets its own frame. `set_output_states` (the whole-module write used for scenes) is untouched.
