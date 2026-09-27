@@ -529,6 +529,14 @@ def add_to_command_mapping(
         # See Nikobus-HA #319 for the IKIKN forensic.
         "record_source": decoded_command.get("record_source"),
     }
+    if decoded_command.get("audio_function"):
+        # Audio Distribution link: the merge files it under a
+        # synthesized entry for the trigger address.
+        output_definition["audio_function"] = decoded_command["audio_function"]
+        output_definition["audio_function_raw"] = decoded_command.get("audio_function_raw")
+        output_definition["audio_zone"] = decoded_command.get("audio_zone")
+        output_definition["audio_zone_raw"] = decoded_command.get("audio_zone_raw")
+        output_definition["description"] = decoded_command.get("description")
     if decoded_command.get("calendar_channel"):
         # PC-Link calendar channel (CH001A …): the merge files the link
         # under a synthesized PC-Link entry instead of a wall button.

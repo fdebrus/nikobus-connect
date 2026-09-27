@@ -176,3 +176,67 @@ def test_a_band_without_a_header_yields_nothing() -> None:
     decoder = AudioDecoder(None)
     analysis = decoder.analyze_frame_payload("", "FF" * 16 + "ABCDEF")
     assert analysis is not None and analysis["chunks"] == []
+
+
+# --- the merge into the button store ------------------------------------
+
+
+def _merged_store() -> dict:
+    from nikobus_connect.discovery.discovery import add_to_command_mapping
+    from nikobus_connect.discovery.fileio import merge_linked_modules
+
+    mapping: dict = {}
+    for decoded in _decode_all():
+        decoded = {**decoded, "key_raw": 0}
+        add_to_command_mapping(mapping, decoded, "8334", None)
+    button_data: dict = {"nikobus_button": {}}
+    merge_linked_modules(button_data, mapping)
+    return button_data["nikobus_button"]
+
+
+def test_every_trigger_becomes_its_own_entry_none_unmatched() -> None:
+    """An audio trigger is a virtual button no plate owns, so the usual
+    resolver would drop all 35 links as unmatched."""
+    from nikobus_connect.discovery.discovery import add_to_command_mapping
+    from nikobus_connect.discovery.fileio import merge_linked_modules
+
+    mapping: dict = {}
+    for decoded in _decode_all():
+        add_to_command_mapping(mapping, {**decoded, "key_raw": 0}, "8334", None)
+    button_data: dict = {"nikobus_button": {}}
+    updated, links, outputs, unmatched = merge_linked_modules(button_data, mapping)
+    assert (updated, links, outputs) == (35, 35, 35)
+    assert unmatched == set()
+    assert len(button_data["nikobus_button"]) == 35
+
+
+def test_the_entry_carries_what_a_host_needs_to_build_a_zone() -> None:
+    entry = _merged_store()["8083CF"]
+    assert entry["type"] == "Audio Trigger"
+    assert entry["description"] == "Zone 1 On"
+    assert (entry["audio_zone"], entry["audio_function"]) == (1, "M16 (On)")
+    op_point = entry["operation_points"]["AUD"]
+    assert op_point["bus_address"] == "8083CF"
+    block = op_point["linked_modules"][0]
+    assert block["module_address"] == "8334"
+    assert block["outputs"][0]["mode"] == "M16 (On)"
+
+
+def test_a_zone_can_be_assembled_from_the_store() -> None:
+    """What the integration does: group the triggers of one module by
+    zone to build its controls."""
+    zone_2 = {
+        entry["audio_function"]: address
+        for address, entry in _merged_store().items()
+        if entry.get("audio_zone") == 2
+    }
+    assert zone_2 == {
+        "M03 (Source 1)": "B083CF",
+        "M04 (Source 2)": "F083CF",
+        "M05 (Source 3)": "3083CF",
+        "M06 (Source 4)": "7083CF",
+        "M13 (Volume up)": "1083CF",
+        "M14 (Volume down)": "5083CF",
+        "M16 (On)": "9083CF",
+        "M17 (Off)": "D083CF",
+    }

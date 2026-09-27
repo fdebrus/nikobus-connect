@@ -1311,6 +1311,9 @@ def _ensure_ir_op_point(
 CALENDAR_CHANNEL_TYPE = "PC-Link Calendar Channel"
 CALENDAR_OP_POINT_KEY = "CAL"
 
+AUDIO_TRIGGER_TYPE = "Audio Trigger"
+AUDIO_OP_POINT_KEY = "AUD"
+
 
 def _calendar_label(outputs: Any) -> str | None:
     """The calendar-channel label the decoders attached, if any."""
@@ -1320,6 +1323,59 @@ def _calendar_label(outputs: Any) -> str | None:
         if isinstance(output, dict) and output.get("calendar_channel"):
             return str(output["calendar_channel"])
     return None
+
+
+def _audio_link(outputs: Any) -> dict[str, Any] | None:
+    """The first audio-module link in ``outputs``, if any."""
+    if not isinstance(outputs, list):
+        return None
+    for output in outputs:
+        if isinstance(output, dict) and output.get("audio_function"):
+            return output
+    return None
+
+
+def _ensure_audio_op_point(
+    buttons: dict[str, Any], address: str, output: dict[str, Any]
+) -> tuple[str, dict[str, Any]]:
+    """The button-store entry for one audio trigger.
+
+    An Audio Distribution module (05-205) is driven by virtual buttons
+    that no wall plate owns, so nothing in the inventory will ever match
+    their addresses. One entry per trigger, keyed on the address the
+    module listens for — which is also the frame a host sends to drive
+    the function, stored verbatim by the decoder.
+    """
+    physical_addr = _normalize_address(address)
+    entry = buttons.get(physical_addr)
+    if not isinstance(entry, dict):
+        entry = {}
+        buttons[physical_addr] = entry
+    description = str(output.get("description") or "Audio trigger")
+    entry.setdefault("description", description)
+    entry.setdefault("discovered_name", description)
+    entry.setdefault("type", AUDIO_TRIGGER_TYPE)
+    entry.setdefault("model", "05-205")
+    entry.setdefault("address", physical_addr)
+    entry.setdefault("channels", 1)
+    entry.setdefault("channels_count", 1)
+    entry.setdefault("discovered", True)
+    # Provenance a host keys off to build per-zone audio entities.
+    entry["audio_function"] = output.get("audio_function")
+    entry["audio_function_raw"] = output.get("audio_function_raw")
+    entry["audio_zone"] = output.get("audio_zone")
+    entry["audio_zone_raw"] = output.get("audio_zone_raw")
+    op_points = entry.get("operation_points")
+    if not isinstance(op_points, dict):
+        op_points = {}
+        entry["operation_points"] = op_points
+    op_point = op_points.get(AUDIO_OP_POINT_KEY)
+    if not isinstance(op_point, dict):
+        op_point = {}
+        op_points[AUDIO_OP_POINT_KEY] = op_point
+    op_point["bus_address"] = physical_addr
+    op_point.setdefault("description", description)
+    return physical_addr, op_point
 
 
 def _ensure_calendar_op_point(
@@ -1432,6 +1488,13 @@ def merge_linked_modules(
             )
             physical_addr = receiver_addr
             matched_addresses.add(_normalize_address(push_button_address))
+        elif (audio_output := _audio_link(outputs)) is not None:
+            # Audio Distribution trigger: a virtual button no plate owns,
+            # filed under its own entry so the link survives the merge.
+            physical_addr, op_point = _ensure_audio_op_point(
+                buttons, push_button_address, audio_output
+            )
+            matched_addresses.add(_normalize_address(push_button_address))
         elif calendar_label := _calendar_label(outputs):
             # PC-Link calendar channel: no wall button will ever match,
             # file the link under a synthesized entry for the channel.
@@ -1523,6 +1586,9 @@ def merge_linked_modules(
             # into a residue bucket. See Nikobus-HA #319.
             if record_source:
                 output_entry["record_source"] = record_source
+            for field in ("audio_function", "audio_zone"):
+                if output.get(field) is not None:
+                    output_entry[field] = output[field]
 
             dedupe_key = (
                 output_entry.get("channel"),
