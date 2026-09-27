@@ -1,0 +1,43 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "nikobus-simulator"
+version = "0.1.0"
+description = "A simulated Nikobus installation: speaks the PC-Link protocol so software can be developed and tested without hardware."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+dependencies = ["nikobus-connect>=0.39.0"]
+
+[project.scripts]
+nikobus-simulator = "nikobus_simulator.server:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/nikobus_simulator"]
+
+[project.optional-dependencies]
+test = ["pytest>=8.0", "pytest-asyncio>=0.21"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+# ``src`` for the simulator, ``..`` for the library it is checked against
+# (a checkout, not the published wheel — the two move together).
+pythonpath = ["src", ".."]
+
+[tool.mypy]
+python_version = "3.11"
+files = ["src/nikobus_simulator"]
+strict = true
+# The checkout's own copy of the library, so the simulator type-checks in
+# place before either package is installed.
+mypy_path = "src:.."
+
+# PyYAML is optional here (JSON declarations need no dependency at all)
+# and ships no type information; pyserial-asyncio, which the library
+# imports, ships none either.
+[[tool.mypy.overrides]]
+module = ["yaml", "serial_asyncio"]
+ignore_missing_imports = true
