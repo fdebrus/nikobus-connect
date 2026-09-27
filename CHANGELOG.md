@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.39.0
+
+- **The Audio Distribution module (05-205) is decoded.** It was a visibility-only bucket whose per-module scan was skipped, because nobody knew where it kept its programming. A real module answered register reads and gave it up: the links live in memory bank `01`, not in the output bank `04` (empty on this module), behind a two-byte header — the record count, then `00` — followed by six-byte records, `<bus address> <function> <zone> 01`. `audio_decoder` reads them, `NikobusDiscovery` scans the band, and the module stops reporting *no decoder available*.
+- **The three address bytes are the `#N` payload, stored verbatim.** They are not passed through the wall-button address transform, which assumes a keypad's layout and returns a different plate and key for these virtual banks. A host can therefore drive an audio function by putting those three bytes on the bus, with nothing to derive.
+- **Functions and zones are named.** The function byte plus three is the vendor's mode number for the audio object types, so `0x00` is M03 (Source 1) and `0x0E` is M17 (Off); `AUDIO_MODE_NAMES` carries M01 to M31 (sources, volume, on/off, tone, balance, presets). The zone byte is the zone, with `0x08` addressing every zone at once.
+- **The links survive the merge.** An audio trigger is a virtual button no wall plate owns, so the ordinary resolver dropped all of them as unmatched. Each one now gets its own button-store entry, keyed on the address the module listens for, carrying its zone and function so a host can group a module's triggers into per-zone controls.
+- Validated end to end against a real 05-205 (module 8334, 2026-09-27): all 35 records parse, four zones by eight functions with no gaps, plus three links from a second virtual bank. Every decoded address matches the virtual buttons its owner had programmed, and the eight functions match the vendor's mode table independently. The capture ships as a test fixture.
+
 ## 0.38.5
 
 - **A freshly discovered roller channel no longer carries a made-up travel time.** Every new roller channel was created with `"operation_time_up": "30"`, a placeholder a host could not tell apart from a travel time the user had really chosen: a 21 s and a 120 s shutter both read as 30 s, and the only way to get the real value into the config was to type it in by hand for every cover. The field is now simply absent, which says "nobody set one" — so a host can fall back to the run time programmed into the module's own roller links, which is what the module actually keeps the relay engaged for. Existing stores are untouched: a channel that already holds `"30"` keeps it, and every user-set value is preserved on re-discovery as before.

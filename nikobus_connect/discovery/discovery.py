@@ -21,6 +21,7 @@ from .base import (
     PHASE_INVENTORY,
     PHASE_REGISTER_SCAN,
 )
+from .audio_decoder import AudioDecoder
 from .dimmer_decoder import DimmerDecoder
 from .pc_link_decoder import PcLinkDecoder
 from .pc_logic_decoder import PcLogicDecoder
@@ -158,6 +159,13 @@ _MODULE_SCAN_PROFILES: dict[str, tuple[ScanSection, ...]] = {
         ("00", tuple(range(0xF8, 0x100))),
         ("01", tuple(range(0x20, 0x30))),
     ),
+    # Audio Distribution (05-205): its links live in bank 01, not in
+    # the output bank 04 (empty on this module). Band validated on a
+    # real 8334 module: the count header sits in 0x38 and 35 records
+    # run to 0x45; the range is widened a little for larger tables.
+    "audio_module": (
+        ("01", tuple(range(0x38, 0x60))),
+    ),
     "pc_logic": (
         ("00", tuple(range(0x06, 0x40))),
         ("02", tuple(range(0xAF, 0xEF))),
@@ -177,6 +185,7 @@ _MODULE_SCAN_PROFILES_BROAD_EXTRA: dict[str, tuple[ScanSection, ...]] = {
     "switch_module": _full_sweep(("00",)),
     "roller_module": _full_sweep(("00",)),
     "dimmer_module": _full_sweep(("00", "01")),
+    "audio_module":  _full_sweep(("00", "01")),
     "pc_logic":      _full_sweep(("00", "02", "03")),
     "pc_link":       _full_sweep(("00", "01", "04")),
 }
@@ -191,6 +200,7 @@ _MODULE_SCAN_PROFILES_BROAD_EXTRA: dict[str, tuple[ScanSection, ...]] = {
 # not "discard"). Matches PC-software behaviour byte-for-byte.
 _FF_TERMINATOR_TAIL_HEX: dict[str, int] = {
     "switch_module": 12,
+    "audio_module":  12,
     "roller_module": 12,
     "pc_link":       12,
     "pc_logic":      12,
@@ -210,14 +220,14 @@ _FF_TERMINATOR_TAIL_HEX: dict[str, int] = {
 # - ``interface_module`` (0x37, 05-206): Modular Interface, 6 inputs.
 #   The inputs feed the PC-Logic for routing — the interface itself
 #   has no BP-cell table to scan.
-# - ``audio_module`` (0x2B, 05-205): Audio Distribution. No button-link
-#   routing surface; visibility-only until a real install validates
-#   the storage format.
+#
+# ``audio_module`` (0x2B, 05-205) used to sit here too. Since 0.39.0 its
+# bank-01 link table is decoded (see ``audio_decoder``), so it is
+# scanned like any other module.
 NON_OUTPUT_MODULE_TYPES: frozenset[str] = frozenset({
     "feedback_module",
     "other_module",
     "interface_module",
-    "audio_module",
 })
 
 
@@ -519,6 +529,14 @@ def add_to_command_mapping(
         # See Nikobus-HA #319 for the IKIKN forensic.
         "record_source": decoded_command.get("record_source"),
     }
+    if decoded_command.get("audio_function"):
+        # Audio Distribution link: the merge files it under a
+        # synthesized entry for the trigger address.
+        output_definition["audio_function"] = decoded_command["audio_function"]
+        output_definition["audio_function_raw"] = decoded_command.get("audio_function_raw")
+        output_definition["audio_zone"] = decoded_command.get("audio_zone")
+        output_definition["audio_zone_raw"] = decoded_command.get("audio_zone_raw")
+        output_definition["description"] = decoded_command.get("description")
     if decoded_command.get("calendar_channel"):
         # PC-Link calendar channel (CH001A …): the merge files the link
         # under a synthesized PC-Link entry instead of a wall button.
@@ -940,6 +958,7 @@ class NikobusDiscovery:
             ShutterDecoder(coordinator),
             PcLogicDecoder(coordinator),
             PcLinkDecoder(coordinator),
+            AudioDecoder(coordinator),
         ]
         self._timeout_task: asyncio.Task[Any] | None = None
         self._inventory_timeout_task: asyncio.Task[Any] | None = None

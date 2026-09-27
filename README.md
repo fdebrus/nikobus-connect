@@ -211,6 +211,14 @@ from nikobus_connect.discovery import NikobusDiscovery
 
 `NikobusDiscovery` is designed to be driven by a coordinator that owns the command handler and a background task scheduler — see the [Home Assistant integration](https://github.com/fdebrus/Nikobus-HA) for a complete reference implementation.
 
+### Audio Distribution module
+
+A 05-205 keeps its links in memory bank `01`: a record count, then one six-byte record per link, `<bus address> <function> <zone> 01`. Discovery decodes them into the function and zone they drive (`M16 (On)`, `Zone 2`, …). The three address bytes are the `#N` payload exactly as it goes on the bus, so a host drives a function by sending them — nothing is derived, and they must not be passed through the wall-button address transform.
+
+```python
+from nikobus_connect.discovery.audio_decoder import split_link_table, decode
+```
+
 ## Reading a `.nkb` project
 
 `nikobus_connect.nkb` parses a Nikobus project export (a ZIP holding an Access database) locally, with a vendored pure-Python reader. It yields the module and button inventory, the friendly names and rooms the bus itself does not carry, and the scene definitions.

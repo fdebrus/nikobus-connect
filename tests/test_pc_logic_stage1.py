@@ -111,13 +111,15 @@ def test_device_type_0x37_is_modular_interface():
     assert get_module_type_from_device_type("37") == "interface_module"
 
 
-def test_audio_and_interface_buckets_are_excluded_from_scan_queue():
-    """0.17.1: ``NON_OUTPUT_MODULE_TYPES`` carries the four buckets we
-    can't scan. ``feedback_module`` was briefly removed in 0.17.0 but
-    real-world testing showed feedback modules don't respond to the
-    DLL-derived scan (~45 min wasted per module on ACK timeouts), so
-    it's restored to this set. Feedback programming lives on source
-    modules' BP cells, not in the feedback module's own memory."""
+def test_unscannable_buckets_are_excluded_from_scan_queue():
+    """``NON_OUTPUT_MODULE_TYPES`` carries the buckets we can't scan.
+    ``feedback_module`` was briefly removed in 0.17.0 but real-world
+    testing showed feedback modules don't respond to the DLL-derived
+    scan (~45 min wasted per module on ACK timeouts), so it's restored
+    to this set. Feedback programming lives on source modules' BP
+    cells, not in the feedback module's own memory. ``audio_module``
+    left the set in 0.39.0: a real 05-205 does answer register reads
+    and keeps its links in bank 01 (see ``audio_decoder``)."""
 
     from nikobus_connect.discovery.discovery import NON_OUTPUT_MODULE_TYPES
 
@@ -125,8 +127,8 @@ def test_audio_and_interface_buckets_are_excluded_from_scan_queue():
         "feedback_module",
         "other_module",
         "interface_module",
-        "audio_module",
     })
+    assert "audio_module" not in NON_OUTPUT_MODULE_TYPES
 
 
 # ---------------------------------------------------------------------------
