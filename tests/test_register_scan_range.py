@@ -243,7 +243,7 @@ async def test_other_modules_still_skipped(tmp_path):
         }
     }
     discovery._is_known_module_address = MagicMock(return_value=True)
-    discovery._resolve_module_type = MagicMock(return_value="audio_module")
+    discovery._resolve_module_type = MagicMock(return_value="other_module")
 
     calls, fake_scan = _capture_scan_calls()
     discovery._scan_module_registers = fake_scan
@@ -252,6 +252,35 @@ async def test_other_modules_still_skipped(tmp_path):
     await discovery.query_module_inventory("ABCD")
 
     assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_audio_module_is_scanned_in_bank_01(tmp_path):
+    """Since 0.39.0 the 05-205 is scanned: its link table lives in bank
+    01, not in the output bank 04 (empty on that module)."""
+
+    coord = _make_coordinator()
+    discovery = NikobusDiscovery(
+        coord,
+        config_dir=str(tmp_path),
+        create_task=_drop_coro,
+        button_data={"nikobus_button": {}},
+        on_button_save=None,
+    )
+    discovery.discovered_devices = {
+        "8334": {"address": "8334", "category": "Module", "model": "05-205", "device_type": "2B"}
+    }
+    discovery._is_known_module_address = MagicMock(return_value=True)
+    discovery._resolve_module_type = MagicMock(return_value="audio_module")
+
+    calls, fake_scan = _capture_scan_calls()
+    discovery._scan_module_registers = fake_scan
+    discovery._finalize_discovery = AsyncMock()
+
+    await discovery.query_module_inventory("8334")
+
+    assert [c["sub_byte"] for c in calls] == ["01"]
+    assert 0x38 in calls[0]["command_range"]
 
 
 @pytest.mark.asyncio

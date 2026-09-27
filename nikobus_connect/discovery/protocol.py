@@ -514,6 +514,9 @@ def decode_command_payload(
     elif module_type == "pc_link":
         from . import pc_link_decoder
         decoder_module = pc_link_decoder
+    elif module_type == "audio_module":
+        from . import audio_decoder
+        decoder_module = audio_decoder
 
     decoder = getattr(decoder_module, "decode", None) if decoder_module else None
     if decoder is None:

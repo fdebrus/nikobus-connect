@@ -33,6 +33,10 @@ _LOGGER = logging.getLogger(__name__)
 _CRC_LEN = 6
 _CHUNK_LENGTHS = {
     "switch_module": 12,
+    # Audio Distribution (05-205): six-byte records in bank 01. The
+    # AudioDecoder does its own chunking (the band carries a count
+    # header first), but the length is declared here for consistency.
+    "audio_module": 12,
     "roller_module": 12,
     "dimmer_module": 16,
     # PC-Link / PC-Logic share a 16-byte (32 hex chars) per-record
