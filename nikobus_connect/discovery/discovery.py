@@ -534,6 +534,9 @@ def add_to_command_mapping(
         # synthesized entry for the trigger address.
         output_definition["audio_function"] = decoded_command["audio_function"]
         output_definition["audio_function_raw"] = decoded_command.get("audio_function_raw")
+        output_definition["audio_object"] = decoded_command.get("audio_object")
+        output_definition["audio_object_raw"] = decoded_command.get("audio_object_raw")
+        output_definition["audio_power"] = decoded_command.get("audio_power")
         output_definition["audio_zone"] = decoded_command.get("audio_zone")
         output_definition["audio_zone_raw"] = decoded_command.get("audio_zone_raw")
         output_definition["description"] = decoded_command.get("description")

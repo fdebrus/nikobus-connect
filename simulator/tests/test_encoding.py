@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import pytest
 from nikobus_simulator.encoding import (
+    encode_audio_trigger,
     encode_button_address,
     encode_module,
     module_status_payload,
@@ -221,17 +222,31 @@ def test_a_generated_audio_table_matches_a_real_module(
     built = encode_module(spec)["01"]
     generated = split_link_table("".join(built[k] for k in sorted(built)))
 
-    on_grid = {t.button for t in spec.triggers}
+    declared = {t.button for t in spec.triggers}
     assert len(captured) == 35
-    assert len(generated) == 32
-    assert [r for r in captured if r[:6] in on_grid] == generated
-    # What is left is programming outside the per-zone grid, in a second
-    # bank — nothing the declaration claims to reproduce.
-    assert [r[:6] for r in captured if r[:6] not in on_grid] == [
+    # The four-zone grid, plus the Power trigger the preset declares.
+    assert len(generated) == 33
+    assert [r for r in captured if r[:6] in declared] == generated
+    # What is left is programming from a second bank — nothing the
+    # declaration claims to reproduce.
+    assert [r[:6] for r in captured if r[:6] not in declared] == [
         "6E03CF",
-        "8483CF",
         "EE03CF",
     ]
+
+
+def test_the_power_object_is_encoded_as_the_module_stores_it(
+    audio_8334_registers: dict[str, str],
+) -> None:
+    """``0x08`` in the object byte is the Power object, not a zone."""
+    spec = preset("audio").modules[0]
+    (power,) = [t for t in spec.triggers if t.is_power]
+    assert power.button == "8483CF"
+    assert encode_audio_trigger(power) == "8483CF080801"
+    captured = split_link_table(
+        "".join(audio_8334_registers[k] for k in sorted(audio_8334_registers))
+    )
+    assert "8483CF080801" in captured
 
 
 def test_the_audio_table_starts_where_the_audio_scan_looks(
@@ -250,7 +265,7 @@ def test_an_audio_module_can_have_fewer_zones() -> None:
     )
     triggers = one_zone.modules[0].triggers
     assert len(triggers) == len(AUDIO_FUNCTION_SLOTS)
-    assert {t.zone for t in triggers} == {0}
+    assert {t.target for t in triggers} == {0}
 
 
 def test_more_zones_than_a_module_has_is_refused() -> None:
