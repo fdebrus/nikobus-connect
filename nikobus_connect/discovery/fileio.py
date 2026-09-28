@@ -1363,8 +1363,16 @@ def _ensure_audio_op_point(
     # Provenance a host keys off to build per-zone audio entities.
     entry["audio_function"] = output.get("audio_function")
     entry["audio_function_raw"] = output.get("audio_function_raw")
+    entry["audio_object"] = output.get("audio_object")
+    entry["audio_object_raw"] = output.get("audio_object_raw")
+    entry["audio_power"] = bool(output.get("audio_power"))
     entry["audio_zone"] = output.get("audio_zone")
     entry["audio_zone_raw"] = output.get("audio_zone_raw")
+    # The module the trigger drives, so a host can group its triggers
+    # under that module's device rather than under a wall plate that
+    # does not exist.
+    if output.get("module_address"):
+        entry["audio_module_address"] = str(output["module_address"]).upper()
     op_points = entry.get("operation_points")
     if not isinstance(op_points, dict):
         op_points = {}
@@ -1586,7 +1594,7 @@ def merge_linked_modules(
             # into a residue bucket. See Nikobus-HA #319.
             if record_source:
                 output_entry["record_source"] = record_source
-            for field in ("audio_function", "audio_zone"):
+            for field in ("audio_function", "audio_object", "audio_zone"):
                 if output.get(field) is not None:
                     output_entry[field] = output[field]
 

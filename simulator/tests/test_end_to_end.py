@@ -201,19 +201,21 @@ class _Coordinator:
         return None
 
 
-async def _scan(bus: Bus, address: str, tmp_path) -> list[dict]:
+async def _scan(bus: Bus, address: str, tmp_path) -> tuple[list[dict], dict]:
     """Run the real register scan against the simulator.
 
-    Returns the metadata of every record discovery decoded, in the order
-    it read them. That is the output of the whole read path — the
-    gateway's register answers, the chunk walk and the family decoder —
-    taken before the host's own button store has any say in it.
+    Returns ``(records, store)``: the metadata of every record discovery
+    decoded, in the order it read them, and the button store the merge
+    left behind. Between the two sits ``add_to_command_mapping``, which
+    is where 0.39.0 silently dropped every audio record — so a test that
+    only looks at the first of them proves less than it appears to.
     """
+    button_data: dict = {"nikobus_button": {}}
     discovery = NikobusDiscovery(
         _Coordinator(bus),
         config_dir=str(tmp_path),
         create_task=lambda coro: asyncio.get_running_loop().create_task(coro),
-        button_data={"nikobus_button": {}},
+        button_data=button_data,
         on_button_save=None,
     )
     spec = bus.installation.module(address)
@@ -233,7 +235,7 @@ async def _scan(bus: Bus, address: str, tmp_path) -> list[dict]:
     discovery._handle_decoded_commands = collect
     bus.listener._event_callback = discovery.parse_module_inventory_response
     await discovery.query_module_inventory(address)
-    return records
+    return records, button_data["nikobus_button"]
 
 
 def _links(records: list[dict], module: str) -> dict:
@@ -254,7 +256,7 @@ async def test_discovery_reads_back_the_links_that_were_declared(tmp_path) -> No
     decoders turn it back into links — with no hardware anywhere.
     """
     async with Bus(preset("house")) as bus:
-        records = await _scan(bus, "4707", tmp_path)
+        records, _store = await _scan(bus, "4707", tmp_path)
 
     assert _links(records, "4707") == {
         "0B1380": [("4707", 1, "M01 (On / off)")],
@@ -269,7 +271,7 @@ async def test_discovery_reads_a_twelve_channel_module_whole(tmp_path) -> None:
     # Issue #148 in the other direction: every channel of both groups is
     # programmed, and the scan must come back with all twelve records.
     async with Bus(preset("twelve")) as bus:
-        records = await _scan(bus, "81F6", tmp_path)
+        records, _store = await _scan(bus, "81F6", tmp_path)
 
     assert sorted(r["channel"] for r in records) == [7, 8, 9, 10, 11, 12]
 
@@ -277,7 +279,7 @@ async def test_discovery_reads_a_twelve_channel_module_whole(tmp_path) -> None:
 async def test_discovery_reads_a_dimmers_eight_byte_records(tmp_path) -> None:
     """A dimmer's table is read eight bytes at a time, with its own function."""
     async with Bus(preset("house")) as bus:
-        records = await _scan(bus, "0E6C", tmp_path)
+        records, _store = await _scan(bus, "0E6C", tmp_path)
 
     assert _links(records, "0E6C") == {
         "0B1380": [("0E6C", 1, "M01 (Dim on/off (2 buttons))")]
@@ -287,10 +289,53 @@ async def test_discovery_reads_a_dimmers_eight_byte_records(tmp_path) -> None:
 async def test_discovery_reads_an_audio_modules_triggers(tmp_path) -> None:
     """The 05-205's bank-01 table, the one the library learned in 0.39.0."""
     async with Bus(preset("audio")) as bus:
-        records = await _scan(bus, "8334", tmp_path)
+        records, _store = await _scan(bus, "8334", tmp_path)
 
     links = _links(records, "8334")
-    assert len(links) == 32
+    assert len(links) == 33
     assert links["8083CF"] == [("8334", 1, "M16 (On)")]
     assert links["C083CF"] == [("8334", 1, "M17 (Off)")]
     assert links["A083CF"] == [("8334", 1, "M03 (Source 1)")]
+    # The Power object is not a zone, so it drives no channel.
+    assert links["8483CF"] == [("8334", None, "M01 (Power)")]
+
+
+async def test_an_audio_trigger_reaches_the_button_store(tmp_path) -> None:
+    """Decoding a record is not the same as keeping it.
+
+    0.39.0 decoded all 35 records of a real module and then dropped
+    every one of them on the way to the store, because
+    ``add_to_command_mapping`` requires a key and an audio record had
+    none — so no audio entity was ever built (Nikobus-HA #310). A test
+    that stops at the decoder cannot see that; this one goes all the way
+    to what the host reads.
+    """
+    async with Bus(preset("audio")) as bus:
+        _records, store = await _scan(bus, "8334", tmp_path)
+
+    assert len(store) == 33
+    entry = store["8083CF"]
+    assert entry["type"] == "Audio Trigger"
+    assert (entry["audio_zone"], entry["audio_function"]) == (1, "M16 (On)")
+    assert entry["audio_module_address"] == "8334"
+    assert entry["operation_points"]["AUD"]["linked_modules"][0][
+        "module_address"
+    ] == "8334"
+    # Four zones, eight functions each, and the module's Power object.
+    zones = {e.get("audio_zone") for e in store.values()}
+    assert zones == {1, 2, 3, 4, None}
+    assert sum(1 for e in store.values() if e.get("audio_power")) == 1
+
+
+async def test_a_wall_buttons_links_still_need_a_known_button(tmp_path) -> None:
+    """The audio path is the exception, not a new general rule.
+
+    A switch module's links are filed against buttons the inventory
+    found; with an empty store there is nothing to file them under, and
+    they stay unmatched rather than inventing a plate.
+    """
+    async with Bus(preset("house")) as bus:
+        records, store = await _scan(bus, "4707", tmp_path)
+
+    assert len(records) == 3
+    assert store == {}

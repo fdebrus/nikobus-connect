@@ -10,7 +10,8 @@ other direction. Each family stores its links differently:
   of bank ``00``, read with function ``0x22`` instead of ``0x10``.
 * **audio** — bank ``01`` from register ``0x38``: filler, then a
   two-byte header (the record count, then ``00``), then six-byte
-  records ``<bus address> <function> <zone> 01``, stored as they read.
+  records ``<bus address> <function> <object> 01``, stored as they
+  read.
 
 A switch / roller / dimmer record does *not* store the address a key
 puts on the wire; it stores a bit-shuffled form of it, which the
@@ -124,8 +125,12 @@ def encode_dimmer_link(link: Link) -> str:
 
 
 def encode_audio_trigger(trigger: AudioTrigger) -> str:
-    """One audio record, stored as it reads."""
-    return f"{trigger.button.upper()}{trigger.function:02X}{trigger.zone:02X}01"
+    """One audio record, stored as it reads.
+
+    ``<bus address> <function> <object> 01`` — the object being a zone
+    or the module's Power object, not a zone count.
+    """
+    return f"{trigger.button.upper()}{trigger.function:02X}{trigger.target:02X}01"
 
 
 def _registers(stream: str, first_register: int, width: int) -> dict[int, str]:

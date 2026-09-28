@@ -5,7 +5,7 @@ output bank ``04``, which is empty on it. The band opens with a two-byte
 header — the record count, then ``00`` — followed by that many six-byte
 records:
 
-``<bus address (3 bytes)> <function> <zone> 01``
+``<bus address (3 bytes)> <function> <object> 01``
 
 The three address bytes are the ``#N`` payload **verbatim**: the frame a
 source puts on the bus to drive that function. They must not be passed
@@ -15,11 +15,20 @@ virtual banks — confirmed on the validating install, where the module's
 own table and the owner's programmed virtual buttons matched byte for
 byte.
 
+The fifth byte names the **object** the function acts on, not a zone:
+``0x00``–``0x03`` are zones 1–4 and ``0x08`` is the module's own Power
+object (the vendor's object type 127, "Audio Power"). The distinction
+matters because the same function byte means different things on the
+two: ``0x08`` is M11 "source toggle" on a zone and M01 "power" on the
+Power object, which is what the validating install's owner had
+programmed as his power key.
+
 Validated against a real 05-205 (2026-09-27, module 8334, 35 records):
 32 links covering four zones by eight functions, plus three more from a
-second virtual bank. The eight functions decoded from the bus match the
-eight the owner had programmed, and independently match the vendor's
-mode table for the audio object types.
+second virtual bank. The functions decoded from the bus match the ones
+the owner had programmed, and the whole table — every function byte
+from ``0x00`` to ``0x1C`` — was confirmed against his project file
+(2026-09-28).
 """
 
 from __future__ import annotations
@@ -35,9 +44,10 @@ _LOGGER = logging.getLogger(__name__)
 
 RECORD_HEX_LEN = 12  # six bytes
 
-# Function byte + 3 = the vendor's mode number for the audio object
-# types, so 0x00 is M03 and 0x0E is M17. Names are the vendor's own
-# (``S_DB_AL_*`` in its mode table).
+# On a **zone** object, function byte + 3 = the vendor's mode number, so
+# 0x00 is M03 and 0x0E is M17. Names are the vendor's own (``S_DB_AL_*``
+# in its mode table). The Power object numbers its one function
+# differently — see ``POWER_MODE``.
 AUDIO_MODE_NAMES: dict[int, str] = {
     1: "Power",
     2: "Input 8",
@@ -72,30 +82,38 @@ AUDIO_MODE_NAMES: dict[int, str] = {
     31: "Preset 8",
 }
 
-# Zone byte. ``0x08`` addresses every zone at once; on the validating
-# install the two records carrying function 0x08 with this zone were the
-# owner's "all off" / "power off" buttons.
-ZONE_ALL = 0x08
+# The object byte. Zones count from zero; ``0x08`` is not a zone at all
+# but the module's own Power object, the vendor's object type 127.
+OBJECT_POWER = 0x08
 _MAX_ZONE = 0x03
+#: The Power object carries one link mode, M01, under function byte 0x08.
+POWER_FUNCTION = 0x08
+POWER_MODE = 1
 
 
-def audio_mode_number(function_raw: int) -> int:
-    """The vendor mode number a function byte stands for."""
+def audio_mode_number(function_raw: int, object_raw: int = 0) -> int:
+    """The vendor mode number a function byte stands for on an object.
+
+    A zone numbers its modes three above the function byte; the Power
+    object's single function (``0x08``) is M01 instead.
+    """
+    if object_raw == OBJECT_POWER:
+        return POWER_MODE if function_raw == POWER_FUNCTION else function_raw + 3
     return function_raw + 3
 
 
-def audio_function_label(function_raw: int) -> str:
-    """``"M13 (Volume up)"`` for a function byte."""
-    mode = audio_mode_number(function_raw)
+def audio_function_label(function_raw: int, object_raw: int = 0) -> str:
+    """``"M13 (Volume up)"`` for a function byte on an object."""
+    mode = audio_mode_number(function_raw, object_raw)
     name = AUDIO_MODE_NAMES.get(mode)
     return f"M{mode:02d} ({name})" if name else f"M{mode:02d}"
 
 
-def audio_zone_label(zone_raw: int) -> str:
-    """``"Zone 2"``, or ``"All zones"`` for the broadcast zone."""
-    if zone_raw == ZONE_ALL:
-        return "All zones"
-    return f"Zone {zone_raw + 1}"
+def audio_object_label(object_raw: int) -> str:
+    """``"Zone 2"``, or ``"Power"`` for the module's own power object."""
+    if object_raw == OBJECT_POWER:
+        return "Power"
+    return f"Zone {object_raw + 1}"
 
 
 def split_link_table(stream_hex: str) -> list[str]:
@@ -138,22 +156,25 @@ def decode(payload_hex: str, raw_bytes: list[str], context: Any) -> dict[str, An
         )
         return None
 
-    zone_raw = _safe_int(raw_bytes[1])
+    object_raw = _safe_int(raw_bytes[1])
     function_raw = _safe_int(raw_bytes[2])
-    if zone_raw is None or function_raw is None:
+    if object_raw is None or function_raw is None:
         return None
-    if zone_raw > _MAX_ZONE and zone_raw != ZONE_ALL:
+    if object_raw > _MAX_ZONE and object_raw != OBJECT_POWER:
         _LOGGER.debug(
-            "Skipped audio module %s — zone byte 0x%02X out of range, payload %s",
+            "Skipped audio module %s — object byte 0x%02X out of range, payload %s",
             context.module_address,
-            zone_raw,
+            object_raw,
             payload_hex,
         )
         return None
 
+    is_power = object_raw == OBJECT_POWER
+    zone = None if is_power else object_raw + 1
     bus_address = reverse_hex(payload_hex[-6:])
-    label = audio_function_label(function_raw)
-    zone_label = audio_zone_label(zone_raw)
+    label = audio_function_label(function_raw, object_raw)
+    object_label = audio_object_label(object_raw)
+    name = AUDIO_MODE_NAMES.get(audio_mode_number(function_raw, object_raw), label)
 
     decoded = {
         "payload": payload_hex,
@@ -161,12 +182,21 @@ def decode(payload_hex: str, raw_bytes: list[str], context: Any) -> dict[str, An
         "bus_address": bus_address,
         "button_address": bus_address,
         "push_button_address": bus_address,
+        # A trigger belongs to no keypad, so it has no key of its own.
+        # The merge still needs one: a record without a key never
+        # reaches the button store (see ``add_to_command_mapping``), and
+        # an audio module's triggers each have their own address, so one
+        # key for all of them collides with nothing.
+        "key_raw": 0,
         "audio_function": label,
         "audio_function_raw": function_raw,
-        "audio_zone": None if zone_raw == ZONE_ALL else zone_raw + 1,
-        "audio_zone_raw": zone_raw,
-        "description": f"{zone_label} {AUDIO_MODE_NAMES.get(audio_mode_number(function_raw), label)}",
-        "channel": None if zone_raw == ZONE_ALL else zone_raw + 1,
+        "audio_object": object_label,
+        "audio_object_raw": object_raw,
+        "audio_power": is_power,
+        "audio_zone": zone,
+        "audio_zone_raw": object_raw,
+        "description": f"{object_label} {name}" if not is_power else f"Audio {name}",
+        "channel": zone,
         "M": label,
         "T1": None,
         "T2": None,
@@ -176,7 +206,7 @@ def decode(payload_hex: str, raw_bytes: list[str], context: Any) -> dict[str, An
     _LOGGER.debug(
         "Decoded audio module %s — %s %s from #N%s",
         context.module_address,
-        zone_label,
+        object_label,
         label,
         bus_address,
     )
@@ -270,10 +300,11 @@ class AudioDecoder(BaseChunkingDecoder):
 
 __all__ = [
     "AUDIO_MODE_NAMES",
+    "OBJECT_POWER",
     "AudioDecoder",
     "audio_function_label",
     "audio_mode_number",
-    "audio_zone_label",
+    "audio_object_label",
     "decode",
     "split_link_table",
 ]

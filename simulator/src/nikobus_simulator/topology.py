@@ -52,13 +52,26 @@ class Link:
         int(self.button, 16)
 
 
+#: The object byte of an audio record that means the module's own Power
+#: object rather than one of its zones.
+AUDIO_POWER_OBJECT = 0x08
+
+
 @dataclass(frozen=True)
 class AudioTrigger:
-    """One audio link: an address drives a function in a zone."""
+    """One audio link: an address drives a function on an object.
+
+    ``target`` is the object byte: ``0``–``3`` for zones 1–4, and
+    ``0x08`` for the module's Power object, which is not a zone.
+    """
 
     button: str
     function: int
-    zone: int
+    target: int
+
+    @property
+    def is_power(self) -> bool:
+        return self.target == AUDIO_POWER_OBJECT
 
 
 @dataclass
@@ -128,23 +141,35 @@ AUDIO_ZONE_OFFSETS = (0x00, 0x10, 0x08, 0x18)
 DEFAULT_AUDIO_BANK = "83CF"
 
 
-def _triggers(raw: Any, zones: int, bank: str = DEFAULT_AUDIO_BANK) -> list[AudioTrigger]:
+def _audio_trigger(item: dict[str, Any]) -> AudioTrigger:
+    """One declared trigger. ``object`` names it; ``zone`` still works."""
+    target = item.get("object")
+    if target is None:
+        target = item.get("zone", 0)
+    return AudioTrigger(
+        button=str(item["button"]).upper(),
+        function=int(item["function"]),
+        target=int(target),
+    )
+
+
+def _triggers(
+    raw: Any,
+    zones: int,
+    bank: str = DEFAULT_AUDIO_BANK,
+    extra: Any = None,
+) -> list[AudioTrigger]:
     """Audio triggers, either listed explicitly or generated per zone.
 
     Generated addresses follow the grid a real module's virtual bank
     holds: the first byte is ``slot << 5 | zone offset`` and the rest is
     the bank, and the records are ordered by address as the module
-    stores them.
+    stores them. ``extra`` appends triggers that sit outside the grid —
+    a Power object's, or a second bank's — which is what a real module's
+    table looks like once someone has programmed one.
     """
     if raw:
-        return [
-            AudioTrigger(
-                button=str(item["button"]).upper(),
-                function=int(item["function"]),
-                zone=int(item["zone"]),
-            )
-            for item in raw
-        ]
+        return [_audio_trigger(item) for item in raw]
     if not 1 <= zones <= len(AUDIO_ZONE_OFFSETS):
         raise ValueError(f"an audio module has 1..{len(AUDIO_ZONE_OFFSETS)} zones, not {zones}")
     out: list[AudioTrigger] = []
@@ -152,8 +177,9 @@ def _triggers(raw: Any, zones: int, bank: str = DEFAULT_AUDIO_BANK) -> list[Audi
         for zone in range(zones):
             first = slot * 0x20 + AUDIO_ZONE_OFFSETS[zone]
             out.append(
-                AudioTrigger(button=f"{first:02X}{bank}", function=function, zone=zone)
+                AudioTrigger(button=f"{first:02X}{bank}", function=function, target=zone)
             )
+    out.extend(_audio_trigger(item) for item in extra or [])
     return sorted(out, key=lambda t: t.button)
 
 
@@ -173,6 +199,7 @@ def load_installation(data: dict[str, Any]) -> Installation:
                 raw.get("triggers"),
                 int(raw.get("zones", 4)),
                 str(raw.get("bank", DEFAULT_AUDIO_BANK)).upper(),
+                raw.get("extra_triggers"),
             )
         modules.append(spec)
     return Installation(
@@ -237,9 +264,21 @@ PRESETS: dict[str, dict[str, Any]] = {
             }
         ]
     },
-    # An Audio Distribution module with four zones.
+    # An Audio Distribution module with four zones, plus the module's
+    # own Power object — which is not a zone, and whose trigger sits
+    # outside the per-zone grid, as it does on the module this layout
+    # was read from.
     "audio": {
-        "modules": [{"address": "8334", "type": "audio_module", "zones": 4}]
+        "modules": [
+            {
+                "address": "8334",
+                "type": "audio_module",
+                "zones": 4,
+                "extra_triggers": [
+                    {"button": "8483CF", "function": 0x08, "object": 0x08}
+                ],
+            }
+        ]
     },
 }
 
