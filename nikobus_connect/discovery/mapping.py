@@ -33,7 +33,6 @@ from __future__ import annotations
 
 from typing import Any
 
-
 # =============================================================================
 # Discovery
 # =============================================================================
@@ -117,6 +116,32 @@ DEVICE_TYPES: dict[str, dict[str, Any]] = {
         "Channels": 6,
         "Name": "Modular interface, 6 inputs",
         "VendorRef": "S_DB_INPUT6",
+    },
+    # 0x46 — identified 2026-09-28 from a Nikobus-HA #519 install. Its
+    # PC-Link registry reports type 0x46 at address 801D, and the same
+    # install's .nkb names the component at physical address 32797
+    # (0x801D) as "RGB Controller (kleur mode)", product 340-00112,
+    # vendor ref ``S_DB_DIM_COLORCTRL``, 16-bit address — the registry
+    # address and the project address are the same number, which is
+    # what makes this a match rather than a guess. Sat as Reserved
+    # until then, so the module was dropped from every inventory.
+    #
+    # No ``Channels``: the Niko software shows one output (O01) in RGB
+    # mode, but nothing is known yet about how that output is read or
+    # driven on the bus, and a channel count here would have the host
+    # build an entity for a load it cannot actually control. The
+    # module's own memory layout is unknown too, so ``rgb_module`` is
+    # not scanned (see ``NON_OUTPUT_MODULE_TYPES``) until a register
+    # dump says where its programming lives.
+    #
+    # The same product family has a mono variant
+    # (``S_DB_DIM_MONOCTRL``) and an RGB plinth dimmer (340-00111);
+    # their device-type bytes have not been observed.
+    "46": {
+        "Category": "Module",
+        "Model": "340-00112",
+        "Name": "RGB controller",
+        "VendorRef": "S_DB_DIM_COLORCTRL",
     },
     "42": {
         "Category": "Module",
@@ -370,7 +395,9 @@ DEVICE_TYPES: dict[str, dict[str, Any]] = {
     # Only ``0x04`` is a real device type (05-342 push button), and
     # only by coincidence. The others were echo-pattern phantoms
     # that we'd kept as Reserved for years to silence the warning.
-    # Now removed. ``0x46`` stays Reserved pending more evidence.
+    # Now removed. ``0x46`` was Reserved here until 2026-09-28, when an
+    # install's .nkb matched it to the 340-00112 RGB controller; it now
+    # sits with the output modules above.
     # ------------------------------------------------------------------
     # 0x05 = 05-061, the classic-series 2-button push button WITH
     # feedback LEDs (the LED sibling of the 0x04 05-060, vendor ref
@@ -388,7 +415,6 @@ DEVICE_TYPES: dict[str, dict[str, Any]] = {
         "Name": "Bus push button, 2 control buttons with feedback LEDs",
         "VendorRef": "S_DB_BUSDRUKKNOP_2_LED",
     },
-    "46": {"Category": "Reserved", "Model": "Unknown", "Name": "Reserved 0x46"},
     # 0x3B records appear at addresses 3CF000, 3CF010, 3CF020, ... on
     # the same install — a 16-byte stride starting at 3CF000 that's
     # consistent with PC-Logic (05-201) BP-cell directory entries. The
@@ -420,6 +446,7 @@ _MODULE_TYPE_BY_DEVICE_TYPE: dict[str, str] = {
     "32": "dimmer_module",
     "37": "interface_module",
     "42": "feedback_module",
+    "46": "rgb_module",
 }
 
 

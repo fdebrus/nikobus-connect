@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.40.0
+
+- **Device type `0x46` is the 340-00112 RGB controller.** It sat in the catalogue as *Reserved 0x46* pending evidence, which meant every install with one silently dropped it from the inventory. The evidence arrived (Nikobus-HA #519): an install's PC-Link registry reports type `0x46` at address `801D`, and the same install's project file names the component at physical address 32797 — the same number — as "RGB Controller (kleur mode)", product 340-00112, vendor ref `S_DB_DIM_COLORCTRL`. Two independent sources agreeing on the address is what makes this a match rather than a guess. The module now reaches the module store, under its own `rgb_module` bucket, and appears with its real name.
+- **Identity only, and deliberately no more.** The entry declares no channel count: the Niko software shows one output in RGB mode, but nothing is known yet about how that output reads back or what drives it, and a channel count here would have a host build an entity for a load it cannot control. `rgb_module` is also not register-scanned — where the module keeps its programming is unknown, and scanning a layout nobody has seen is 40-odd reads of guesswork on somebody's live bus. Both restraints are pinned by tests, so the next person to touch this has to mean it.
+- The same product family has a mono variant (`S_DB_DIM_MONOCTRL`) and a 340-00111 RGB plinth dimmer; their device-type bytes have not been observed, so they stay uncatalogued.
+
 ## 0.39.1
 
 - **Audio triggers reach the button store.** 0.39.0 decoded all 35 records of a real 05-205 correctly and then lost every one of them: `add_to_command_mapping` drops any record that carries no key, and an audio record carried none — a trigger belongs to no keypad, so the decoder had nothing to put there. Nothing downstream ever saw a trigger, so no audio entity could be built from a module whose table had just been read perfectly (Nikobus-HA #310, on the same install that validated the decoder). Audio records now carry key 0, which collides with nothing because each trigger has its own address. The tests that covered this were passing because they filled the key in themselves before calling the merge; they now go through the real path, and the simulator's end-to-end scan checks the store rather than the decoder's output.

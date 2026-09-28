@@ -61,6 +61,8 @@ def test_vendor_refs_match_product_mdb() -> None:
         "S_DB_AUDIO_MODULE",
         "S_DB_INPUT6",
         "S_DB_PC_FEEDBACK_MODULE",
+        # 340-00112 RGB controller, read from an install's .nkb (#519).
+        "S_DB_DIM_COLORCTRL",
         # Buttons / inputs
         "S_DB_BUSDRUKKNOP_2",
         "S_DB_BUSDRUKKNOP_2_LED",

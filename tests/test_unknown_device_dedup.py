@@ -61,7 +61,7 @@ def _make_discovery(tmp_path) -> NikobusDiscovery:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("device_type_hex", ["3B", "46"])
+@pytest.mark.parametrize("device_type_hex", ["3B"])
 def test_reserved_device_types_are_catalogued(device_type_hex):
     """Types observed in the user-attachments log that remain
     unidentified carry Category=Reserved entries so the inventory
@@ -77,7 +77,11 @@ def test_reserved_device_types_are_catalogued(device_type_hex):
     - ``0x05`` was originally on this list; promoted to ``05-061``
       (2-button plate with feedback LEDs) in 0.32.0 after the #478
       registry decode matched three type-05 records to the install's
-      .nkb 05-061 components on both address and BP index. Inventory frames containing them are now treated as
+      .nkb 05-061 components on both address and BP index.
+    - ``0x46`` was originally on this list; promoted to the 340-00112
+      RGB controller in 0.40.0 after an install's .nkb named the
+      component at the very address its PC-Link registry reported the
+      type for (#519). Inventory frames containing them are now treated as
       genuinely uncatalogued (which they are) — the WARNING that
       results is correct, surfacing the malformed frame for
       investigation rather than silently swallowing it as

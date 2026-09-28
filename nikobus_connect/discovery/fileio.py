@@ -29,6 +29,7 @@ DESCRIPTION_PREFIX = {
     "pc_link": "pc_link_",
     "pc_logic": "pc_logic_",
     "feedback_module": "feedback_module_",
+    "rgb_module": "rgb_module_",
     "other_module": "other_module_",
 }
 
