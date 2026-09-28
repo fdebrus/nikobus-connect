@@ -119,7 +119,9 @@ def test_unscannable_buckets_are_excluded_from_scan_queue():
     to this set. Feedback programming lives on source modules' BP
     cells, not in the feedback module's own memory. ``audio_module``
     left the set in 0.39.0: a real 05-205 does answer register reads
-    and keeps its links in bank 01 (see ``audio_decoder``)."""
+    and keeps its links in bank 01 (see ``audio_decoder``).
+    ``rgb_module`` joined it in 0.40.0: the 340-00112 is catalogued but
+    nobody has dumped its registers, so there is nothing to scan for."""
 
     from nikobus_connect.discovery.discovery import NON_OUTPUT_MODULE_TYPES
 
@@ -127,6 +129,7 @@ def test_unscannable_buckets_are_excluded_from_scan_queue():
         "feedback_module",
         "other_module",
         "interface_module",
+        "rgb_module",
     })
     assert "audio_module" not in NON_OUTPUT_MODULE_TYPES
 

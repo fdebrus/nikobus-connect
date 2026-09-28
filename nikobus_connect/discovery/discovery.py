@@ -221,6 +221,11 @@ _FF_TERMINATOR_TAIL_HEX: dict[str, int] = {
 #   The inputs feed the PC-Logic for routing — the interface itself
 #   has no BP-cell table to scan.
 #
+# - ``rgb_module`` (0x46, 340-00112): the RGB controller, catalogued in
+#   0.40.0 from an install's .nkb. Where it keeps its programming is
+#   unknown — no register dump exists yet — so scanning it would be
+#   guesswork on somebody's bus. Recognised and visible; not scanned.
+#
 # ``audio_module`` (0x2B, 05-205) used to sit here too. Since 0.39.0 its
 # bank-01 link table is decoded (see ``audio_decoder``), so it is
 # scanned like any other module.
@@ -228,6 +233,7 @@ NON_OUTPUT_MODULE_TYPES: frozenset[str] = frozenset({
     "feedback_module",
     "other_module",
     "interface_module",
+    "rgb_module",
 })
 
 
