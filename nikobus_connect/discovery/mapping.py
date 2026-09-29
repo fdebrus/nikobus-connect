@@ -886,3 +886,61 @@ DIMMER_MODE_T1_LOOKUP: dict[int, tuple[str, ...]] = {
     0x08: DIMMER_PRESET_LEVEL,  # M11 - Preset on/off
     0x09: DIMMER_PRESET_LEVEL,  # M12 - Preset on
 }
+
+
+# =============================================================================
+# RGB / colour controller (340-00112, device type 0x46)
+#
+# The controller's link modes, from the vendor's own programming leaflet
+# (PM340-00112, "Overview of colour modes" / "Overview of monochrome
+# modes"). Modes 1–15 reuse the dimmer's numbering — same names, same
+# gaps (no M02, M03, M09, M10, M11, M14 on this device) — and 16–21 are
+# colour-only. The vendor software files them under
+# ``S_DB_DESC_DIMMER_COLOR_M<n>`` (seen in a real project file: the one
+# link an install had on its controller was ``..._M19``).
+#
+# Keyed by the vendor's mode NUMBER, not by a link-record byte: the
+# controller answers no register read, so the byte it stores for a mode
+# has never been seen. That is also why it is absent from the PC-Link
+# record parser's per-device-type table — a guess there would label a
+# real record wrong. Add the byte → number step when a capture shows it.
+# =============================================================================
+RGB_MODE_NAMES: dict[int, str] = {
+    1: "Set luminance (2 buttons)",
+    4: "Scene on",
+    5: "On with control time",
+    6: "Off with control time",
+    7: "Delayed off",
+    8: "Flasher",
+    12: "Preset on",
+    13: "Dim on/off (1 button)",
+    15: "Delayed off to last value",
+    16: "Set colour and luminance",
+    17: "Change colour + on/off",
+    18: "Start/stop scenario + change speed",
+    19: "Start/stop scenario",
+    20: "Start scenario",
+    21: "Colour (1 button)",
+}
+
+#: How many keys of a plate a mode takes: 1, 2 (upper / lower) or 4
+#: (upper-left, lower-left, upper-right, lower-right).
+RGB_MODE_KEYS: dict[int, int] = {
+    1: 2, 4: 1, 5: 1, 6: 1, 7: 1, 8: 1, 12: 1, 13: 1, 15: 1,
+    16: 4, 17: 2, 18: 4, 19: 2, 20: 1, 21: 1,
+}
+
+#: The nine modes a monochrome strip (or three of them, one per PWM
+#: output) can use. The other six need a colour path or a scenario.
+RGB_MONO_MODES: frozenset[int] = frozenset({1, 4, 5, 6, 7, 8, 12, 13, 15})
+
+RGB_MODE_VENDOR_REF: dict[int, str] = {
+    number: f"S_DB_DESC_DIMMER_COLOR_M{number}" for number in RGB_MODE_NAMES
+}
+
+
+def rgb_mode_label(mode_number: int) -> str:
+    """``"M19 (Start/stop scenario)"``; a number off the table keeps its
+    ``Mnn`` so the record is still readable."""
+    name = RGB_MODE_NAMES.get(mode_number)
+    return f"M{mode_number:02d} ({name})" if name else f"M{mode_number:02d}"
