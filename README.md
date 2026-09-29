@@ -16,7 +16,7 @@ Asynchronous Python library for communicating with the **Nikobus** home-automati
 - Real-time listener for button presses and Feedback Module pushes
 - High-level API: switches, dimmers, covers (open / close / stop)
 - Discovery: PC-Link inventory, then a per-module register scan bounded by the record count the module itself reports
-- Decoders for switch, roller and dimmer link records, PC-Link and PC-Logic registry records, with mode and timer tables taken from the vendor's own parameter tables
+- Decoders for switch, roller, dimmer and Audio Distribution link records, PC-Link and PC-Logic registry records, with mode and timer tables taken from the vendor's own parameter tables — and the RGB controller's mode table from its programming leaflet
 - Read-only maintenance: module status, the module's memory checksum, full memory images (for backups), and the PC-Link clock
 - `.nkb` project reader: modules, buttons, names, rooms and scenes, parsed locally with a vendored pure-Python Access reader
 
@@ -203,7 +203,7 @@ await api.set_pc_link_time("86F5", datetime.now())
 
 The `nikobus_connect.discovery` subpackage enumerates the bus, identifies each module's type, and decodes the per-channel link tables into a JSON configuration.
 
-Discovery runs in two stages. The first reads the PC-Link's own registry — the inventory of every module and physical button in the project. The second visits each output module and reads its link table; the module is asked how many records it holds (its status reply), and exactly those blocks are read, rather than sweeping a fixed band. Link records decode to a button address, an output channel, a mode and its timers, using mode and parameter tables checked against the Nikobus software's own. A record whose button address is one of the PC-Link's calendar channels (CH001 … CH100, fired by calendar programs and scenes) is filed under a synthesized `PC-Link Calendar Channel` entry rather than dropped.
+Discovery runs in two stages. The first reads the PC-Link's own registry — the inventory of every module and physical button in the project. The second visits each output module and reads its link table; the module is asked how many records it holds (its status reply), and exactly those blocks are read, rather than sweeping a fixed band. Link records decode to a button address, an output channel, a mode and its timers, using mode and parameter tables checked against the Nikobus software's own; a dimmer's per-channel configuration block, which is memory but not links, is left out of the scan so it cannot decode into buttons that do not exist. A record whose button address is one of the PC-Link's calendar channels (CH001 … CH100, fired by calendar programs and scenes) is filed under a synthesized `PC-Link Calendar Channel` entry rather than dropped.
 
 ```python
 from nikobus_connect.discovery import NikobusDiscovery
@@ -213,10 +213,20 @@ from nikobus_connect.discovery import NikobusDiscovery
 
 ### Audio Distribution module
 
-A 05-205 keeps its links in memory bank `01`: a record count, then one six-byte record per link, `<bus address> <function> <zone> 01`. Discovery decodes them into the function and zone they drive (`M16 (On)`, `Zone 2`, …). The three address bytes are the `#N` payload exactly as it goes on the bus, so a host drives a function by sending them — nothing is derived, and they must not be passed through the wall-button address transform.
+A 05-205 keeps its links in memory bank `01`: a record count, then one six-byte record per link, `<bus address> <function> <object> 01`. The object is a zone (`0x00`–`0x03`) or the module's own Power object (`0x08`). Discovery decodes them into the function and object they drive (`M16 (On)` on `Zone 2`, `M01 (Power)` on the Power object, …); every function byte is checked against a real project file. The three address bytes are the `#N` payload exactly as it goes on the bus, so a host drives a function by sending them — nothing is derived, and they must not be passed through the wall-button address transform. Each trigger becomes its own button-store entry, keyed on that address and naming the module it drives.
 
 ```python
 from nikobus_connect.discovery.audio_decoder import split_link_table, decode
+```
+
+### RGB controller
+
+Device type `0x46` is the 340-00112 RGB / LED controller; it reaches the module store under its own `rgb_module` bucket. Identity only, so far: the controller answers no register read, so it is not scanned, and it declares no channel count, because how its output reads back and is driven has not been established. Its fifteen link modes are catalogued from the vendor's programming leaflet — nine shared with the dimmer, six colour-only (colour path, scenarios) — and apply to the 340-00111 / 340-00113 orientation lights of the same family:
+
+```python
+from nikobus_connect.discovery.mapping import RGB_MODE_NAMES, rgb_mode_label
+
+rgb_mode_label(19)   # "M19 (Start/stop scenario)"
 ```
 
 ## Reading a `.nkb` project
