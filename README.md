@@ -18,7 +18,7 @@ Asynchronous Python library for communicating with the **Nikobus** home-automati
 - Discovery: PC-Link inventory, then a per-module register scan bounded by the record count the module itself reports
 - Decoders for switch, roller, dimmer and Audio Distribution link records, PC-Link and PC-Logic registry records, with mode and timer tables taken from the vendor's own parameter tables — and the RGB controller's mode table from its programming leaflet
 - Read-only maintenance: module status, the module's memory checksum, full memory images (for backups), and the PC-Link clock
-- `.nkb` project reader: modules, buttons, names, rooms and scenes, parsed locally with a vendored pure-Python Access reader
+- `.nkb` project reader: modules, buttons, names, rooms, scenes and the keys linked to a colour controller, parsed locally with a vendored pure-Python Access reader
 
 ## Installation
 
@@ -221,13 +221,22 @@ from nikobus_connect.discovery.audio_decoder import split_link_table, decode
 
 ### RGB controller
 
-Device type `0x46` is the 340-00112 RGB / LED controller; it reaches the module store under its own `rgb_module` bucket. Identity only, so far: the controller answers no register read, so it is not scanned, and it declares no channel count, because how its output reads back and is driven has not been established. Its fifteen link modes are catalogued from the vendor's programming leaflet — nine shared with the dimmer, six colour-only (colour path, scenarios) — and apply to the 340-00111 / 340-00113 orientation lights of the same family:
+Device type `0x46` is the 340-00112 RGB / LED controller; it reaches the module store under its own `rgb_module` bucket. The controller answers the ordinary state query and nothing else: no register read, no checksum query, and a set-output write gets no acknowledgement — so it is not scanned, and it is driven only by the keys linked to it. Its fifteen link modes are catalogued from the vendor's programming leaflet — nine shared with the dimmer, six colour-only (colour path, scenarios) — and apply to the 340-00111 / 340-00113 orientation lights of the same family.
+
+The state image is `[on] [R] [G] [B] 00 00`, all four as lit-or-not flags (calibrated on a real controller by freezing its colour loop and reading after each colour); both output groups return the same image. `nikobus_connect.rgb` decodes it and names what each key of each mode does on a short press:
 
 ```python
-from nikobus_connect.discovery.mapping import RGB_MODE_NAMES, rgb_mode_label
+from nikobus_connect.rgb import decode_rgb_state, rgb_key_role, rgb_mode_label
 
-rgb_mode_label(19)   # "M19 (Start/stop scenario)"
+state = decode_rgb_state("FFFF00FF0000")
+state.on, state.colour_name, state.rgb   # True, "magenta", (255, 0, 255)
+
+rgb_mode_label(19)        # "M19 (Start/stop scenario)"
+rgb_key_role(19, "1C")    # "start_stop"
+rgb_key_role(19, "1D")    # "off"
 ```
+
+Which keys are linked to a controller cannot be read from the bus — not by this library, and not by the vendor software, which only status-polls the controller and writes a project file with its settings but no link. The installer's project file is the only record, and `parse_nkb()` returns it as `rgb_links` (controller, plate, key, the bus address the key puts on the wire, mode number). A host presses the key whose role is `on` or `off`.
 
 ## Reading a `.nkb` project
 

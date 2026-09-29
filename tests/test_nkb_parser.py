@@ -246,3 +246,93 @@ def test_parse_nkb_traversal_member_name_stays_in_tmp(tmp_path):
     p = captured["path"]
     assert p.endswith("project.mdb")
     assert "etc/passwd" not in p
+
+
+# --------------------------------------------------------------------------- #
+# rgb_links — keys linked to a colour controller, which no bus read gives
+# --------------------------------------------------------------------------- #
+class _FakeRgbParser(_FakeParser):
+    """The #519 install, reduced: plate ``124A36`` (Traphal onder, four
+    keys) whose key ``C`` drives the 340-00112 at ``801D`` in mode 19,
+    plus the ordinary dimmer link of the base fixture."""
+
+    _TABLES = {
+        **_FakeParser._TABLES,
+        "Component": {
+            "KeyComponent": [1, 2, 3, 4, 5, 6],
+            "KeyLocation": [10, 11, 99, 10, 11, 10],
+            # 0E6C, 1843B4, scene, skip, 124A36 (plate), 801D (controller)
+            "PhysicalAddress": [3692, 1590196, -1, 0, 0x124A36, 0x801D],
+            "StrUserName": ["Dimcontroller", "Entree", "Scene - Test", "", "Traphal onder", "RGB Controller (kleur mode)"],
+            "Number": [1, 7, 1, 1, 9, 1],
+            "KeyProductBase": [50, 51, None, None, 52, 53],
+        },
+        "ProductBase": {
+            "KeyProductBase": [50, 51, 52, 53],
+            "NikoRefNr": ["05-007-02", "05-064", "05-064", "340-00112"],
+        },
+        "Objecten": {
+            "KeyObject": [100, 200, 300, 400, 401, 402, 403, 500],
+            "KeyComponent": [1, 2, 3, 5, 5, 5, 5, 6],
+            "KeyObjectBase": [500, 600, 700, 800, 801, 802, 803, 900],
+            "ObjectAddress": [0] * 8,
+            "PhysicalObjectAddress": [0] * 8,
+            "StrUserName": ["Appliques Salon", "Input", None, None, None, None, None, "O01"],
+        },
+        "ObjectBase": {
+            "KeyObjectBase": [500, 600, 700, 800, 801, 802, 803, 900],
+            "ObjectAddress": [2, 0, 0, 0, 0, 0, 0, 0],
+            "Prefix": ["O02", "1A", "CF", "A", "B", "C", "D", "O01"],
+            "StrDescription": [None] * 8,
+        },
+        "LinkModeBase": {
+            "KeyLinkMode": [10, 13, 19],
+            "StrMode": ["M12", "MCF", "S_DB_DESC_DIMMER_COLOR_M19"],
+        },
+        "Connection": {
+            "KeyConnection": [1, 2, 3, 4],
+            "KeyObjectOut": [300, 100, 500, 500],
+            "KeyObjectIn": [200, 200, 402, 403],
+            "KeyLinkMode": [13, 10, 19, 19],
+            "ParamValue1": [-1, 10, 0, 0],
+        },
+    }
+
+
+def _parse_rgb(tmp_path):
+    nkb = _make_nkb_zip(tmp_path)
+    with patch("nikobus_connect.nkb._access_parser.AccessParser", _FakeRgbParser):
+        return parse_nkb(nkb)
+
+
+def test_rgb_links_are_read_from_the_project(tmp_path):
+    data = _parse_rgb(tmp_path)
+    assert [(l.module_address, l.button_address, l.key, l.bus_address, l.mode) for l in data.rgb_links] == [
+        ("801D", "124A36", "1C", "1B1492", 19),
+        ("801D", "124A36", "1D", "5B1492", 19),
+    ]
+    # The bus addresses are the ones seen on the wire for this plate
+    # (#N1B1492 / #N5B1492 in the owner's logs).
+    assert data.rgb_links[0].mode_text == "S_DB_DESC_DIMMER_COLOR_M19"
+
+
+def test_the_ordinary_links_are_untouched_by_the_rgb_pass(tmp_path):
+    data = _parse_rgb(tmp_path)
+    assert data.addresses["801D"] == ("RGB Controller (kleur mode)", "Centrale")
+    assert [s.name for s in data.scenes] == ["Scene - Test"]
+
+
+def test_a_project_without_a_product_table_has_no_rgb_links(tmp_path):
+    data = _parse(tmp_path)  # the base fixture has no ProductBase
+    assert data.rgb_links == ()
+
+
+def test_mode_number_reads_every_spelling():
+    from nikobus_connect.nkb import mode_number
+
+    assert mode_number("M19") == 19
+    assert mode_number("M19 (Start/stop scenario)") == 19
+    assert mode_number("S_DB_DESC_DIMMER_COLOR_M19") == 19
+    assert mode_number("S_DB_DESC_DIMMER_M5") == 5
+    assert mode_number("MCF") is None
+    assert mode_number(None) is None

@@ -31,6 +31,9 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, NamedTuple
 
+from ..discovery.mapping import KEY_MAPPING
+from ..discovery.protocol import convert_nikobus_address
+
 _LOGGER = logging.getLogger(__name__)
 
 #: One parsed ``.mdb`` row: column name → value.
@@ -79,6 +82,109 @@ def mode_code(mode: object) -> str | None:
     return m.group(0).upper() if m else None
 
 
+_MODE_NUMBER_RE = re.compile(r"(?:^|[^A-Z0-9])M(\d{1,2})(?![0-9])", re.IGNORECASE)
+
+#: ``ProductBase.NikoRefNr`` of the colour-controller family: the
+#: 340-00112 LED / RGB controller and the 340-00111 / 340-00113
+#: orientation lights, which share its modes and its silence on the bus.
+RGB_PRODUCT_REFS: frozenset[str] = frozenset({"340-00112", "340-00111", "340-00113"})
+
+# A single button key face in the ``.nkb`` (``A``..``D`` for 2/4-button
+# plates, ``1A``..``2D`` for 8-button plates). Combos (``AB``, ``ABCD`` …)
+# and output prefixes (``O01``) are excluded.
+_SINGLE_KEY_RE = re.compile(r"^([12]?)([A-D])$")
+
+
+def mode_number(mode: object) -> int | None:
+    """The mode number of a mode string, however the software spells it:
+    ``"M19"``, ``"M19 (Start/stop scenario)"`` and the localisation key
+    ``"S_DB_DESC_DIMMER_COLOR_M19"`` all give ``19``. ``None`` when there
+    is no ``M<n>`` in it (``"MCF"``)."""
+    if not isinstance(mode, str):
+        return None
+    code = mode_code(mode)
+    if code is not None:
+        return int(code[1:])
+    m = _MODE_NUMBER_RE.search(mode)
+    return int(m.group(1)) if m else None
+
+
+def key_labels(prefixes: set[str]) -> list[str]:
+    """Key labels (``1A``..``2D``) for a button's single-key op-points.
+
+    ``.nkb`` prefixes are ``A``..``D`` on 2/4-button plates (mapped to
+    ``1A``..``1D``) and ``1A``..``2D`` on 8-button plates (used as-is).
+    """
+    labels: set[str] = set()
+    for pfx in prefixes:
+        m = _SINGLE_KEY_RE.match(pfx)
+        if m:
+            labels.add(f"{m.group(1) or '1'}{m.group(2)}")
+    return sorted(labels)
+
+
+def channels_for(labels: list[str]) -> int:
+    """Key count (1/2/4/8) whose ``KEY_MAPPING`` contains every label.
+
+    Picked by the label *pattern*, not the raw count: a device exposing a
+    ``2X`` face is 8-key even if only some faces are wired; ``1C``/``1D``
+    implies 4-key; ``1B`` implies 2-key. This keeps every label inside
+    ``KEY_MAPPING[channels]`` so no two faces collapse to the same address.
+    """
+    if any(lbl[0] == "2" for lbl in labels):
+        return 8
+    if "1C" in labels or "1D" in labels:
+        return 4
+    if "1B" in labels:
+        return 2
+    return 1
+
+
+def per_key_bus_address(physical_hex: str, channels: int, label: str) -> str:
+    """Bus address the plate emits when key ``label`` is pressed.
+
+    Reproduces the library's own inventory derivation
+    (:func:`merge_discovered_buttons`): bit-reverse the physical address
+    with :func:`convert_nikobus_address`, then **add** the key face's
+    first-nibble offset (``KEY_MAPPING[channels][label]``) to the first
+    nibble (wrapping mod 16). This is what a PC-Link inventory would store,
+    so the router matches real presses on it. Falls back to the converted /
+    physical address when the channel/label pair isn't known.
+    """
+    converted = convert_nikobus_address(physical_hex)
+    if converted.startswith("["):  # convert_nikobus_address failure marker
+        return physical_hex
+    hexchar = KEY_MAPPING.get(channels, {}).get(label)
+    if hexchar is None:
+        return converted
+    new_nibble = (int(converted[0], 16) + int(hexchar, 16)) & 0xF
+    return f"{new_nibble:X}{converted[1:]}"
+
+
+class RgbLink(NamedTuple):
+    """One plate key linked to a colour controller, from the project file.
+
+    The controller's link table cannot be read from the bus — not by the
+    integration, not by the vendor software, which only status-polls it
+    during an installation read — so the project file is the only record
+    of which keys drive it, and this is what a host presses to control
+    it.
+    """
+
+    #: The controller, 4-hex (``801D``).
+    module_address: str
+    #: The plate, 6-hex physical address (``124A36``).
+    button_address: str
+    #: The key face on the plate (``1C``).
+    key: str
+    #: What the plate puts on the bus for that key (``1B1492``).
+    bus_address: str
+    #: The link's mode number (``19``), or ``None`` if unreadable.
+    mode: int | None
+    #: The mode as the software spells it (``"S_DB_DESC_DIMMER_COLOR_M19"``).
+    mode_text: str
+
+
 class SceneDef(NamedTuple):
     """A named Central Function group and the outputs it drives."""
 
@@ -107,6 +213,9 @@ class NkbData(NamedTuple):
     #: stable data). Lets a consumer render the same index the user sees
     #: in the Nikobus application. Read-only default, safe to share.
     numbers: dict[str, int] = {}
+    #: Keys linked to colour controllers (340-00112 and family), which
+    #: no bus read can recover. Read-only default, safe to share.
+    rgb_links: tuple[RgbLink, ...] = ()
 
 
 # Generic per-output placeholders in the .nkb that aren't real names.
@@ -195,6 +304,7 @@ def parse_nkb(nkb_path: str | Path) -> NkbData:
             r["KeyLinkMode"]: r.get("StrMode") for r in _rows(db, "LinkModeBase")
         }
         objectbase = {r["KeyObjectBase"]: r for r in _rows(db, "ObjectBase")}
+        productbase = _rows_or_empty(db, "ProductBase")
 
     comp_by_key = {c["KeyComponent"]: c for c in components}
 
@@ -203,9 +313,96 @@ def parse_nkb(nkb_path: str | Path) -> NkbData:
         components, comp_by_key, objecten, connections, linkmodes, objectbase
     )
     outputs = _extract_outputs(comp_by_key, objecten, objectbase)
-    return NkbData(
-        addresses=addresses, scenes=scenes, outputs=outputs, numbers=numbers
+    rgb_links = _extract_rgb_links(
+        components, comp_by_key, objecten, connections, linkmodes, objectbase,
+        productbase,
     )
+    return NkbData(
+        addresses=addresses,
+        scenes=scenes,
+        outputs=outputs,
+        numbers=numbers,
+        rgb_links=rgb_links,
+    )
+
+
+def _extract_rgb_links(
+    components: list[_Row],
+    comp_by_key: dict[Any, _Row],
+    objecten: list[_Row],
+    connections: list[_Row],
+    linkmodes: dict[Any, Any],
+    objectbase: dict[Any, _Row],
+    productbase: list[_Row],
+) -> tuple[RgbLink, ...]:
+    """Every ``(plate key) -> (colour controller)`` link in the project.
+
+    A link row's OUT side is an output object of a component whose
+    product is in :data:`RGB_PRODUCT_REFS`; its IN side is a single key
+    face (``C``, ``1C``) of a plate. The key's bus address is derived the
+    way the inventory derives it, from the plate's address and its key
+    count — the same address the plate puts on the bus, which is what a
+    host has to send to drive the controller.
+    """
+    ref_by_kpb = {r.get("KeyProductBase"): str(r.get("NikoRefNr") or "") for r in productbase}
+    rgb_components = {
+        c["KeyComponent"]
+        for c in components
+        if ref_by_kpb.get(c.get("KeyProductBase")) in RGB_PRODUCT_REFS
+        and isinstance(c.get("PhysicalAddress"), int)
+        and 0 < c["PhysicalAddress"] < 0x10000
+    }
+    if not rgb_components:
+        return ()
+
+    obj_by_key = {o["KeyObject"]: o for o in objecten}
+    # Every single-key face each plate has, to size the plate.
+    faces_by_component: dict[Any, set[str]] = {}
+    for o in objecten:
+        pfx = str(objectbase.get(o.get("KeyObjectBase"), {}).get("Prefix") or "")
+        if _SINGLE_KEY_RE.match(pfx):
+            faces_by_component.setdefault(o.get("KeyComponent"), set()).add(pfx)
+
+    links: list[RgbLink] = []
+    seen: set[tuple[str, str]] = set()
+    for cn in connections:
+        out_obj = obj_by_key.get(cn.get("KeyObjectOut"))
+        if out_obj is None or out_obj.get("KeyComponent") not in rgb_components:
+            continue
+        in_obj = obj_by_key.get(cn.get("KeyObjectIn"))
+        if in_obj is None:
+            continue
+        plate = comp_by_key.get(in_obj.get("KeyComponent"))
+        if plate is None:
+            continue
+        pa = plate.get("PhysicalAddress")
+        if not (isinstance(pa, int) and pa >= 0x10000):
+            continue
+        pfx = str(objectbase.get(in_obj.get("KeyObjectBase"), {}).get("Prefix") or "")
+        labels = key_labels({pfx})
+        if not labels:
+            continue
+        key = labels[0]
+        plate_addr = _fmt_addr(pa)
+        module = comp_by_key[out_obj["KeyComponent"]]
+        module_addr = _fmt_addr(int(module["PhysicalAddress"]))
+        if (module_addr, f"{plate_addr}:{key}") in seen:
+            continue
+        seen.add((module_addr, f"{plate_addr}:{key}"))
+        channels = channels_for(key_labels(faces_by_component.get(plate["KeyComponent"], set())))
+        mode_text = linkmodes.get(cn.get("KeyLinkMode"))
+        links.append(
+            RgbLink(
+                module_address=module_addr,
+                button_address=plate_addr,
+                key=key,
+                bus_address=per_key_bus_address(plate_addr, channels, key),
+                mode=mode_number(mode_text),
+                mode_text=str(mode_text or ""),
+            )
+        )
+    links.sort(key=lambda link: (link.module_address, link.button_address, link.key))
+    return tuple(links)
 
 
 def _extract_outputs(
@@ -344,3 +541,12 @@ def _rows(db: Any, table: str) -> list[_Row]:
     cols = list(parsed.keys())
     n = len(next(iter(parsed.values()))) if cols else 0
     return [{c: parsed[c][i] for c in cols} for i in range(n)]
+
+
+def _rows_or_empty(db: Any, table: str) -> list[_Row]:
+    """:func:`_rows`, or ``[]`` for a table the file does not have."""
+    try:
+        return _rows(db, table)
+    except Exception:  # noqa: BLE001 - a missing table is not an unreadable file
+        _LOGGER.debug("Table %s not readable in this .nkb — treated as empty", table)
+        return []

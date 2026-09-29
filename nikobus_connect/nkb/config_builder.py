@@ -17,23 +17,20 @@ What is / isn't derivable from the ``.nkb``:
 
 from __future__ import annotations
 
-import re
 from pathlib import Path
 from typing import Any, NamedTuple
 
 from ..discovery.mapping import KEY_MAPPING
-from ..discovery.protocol import convert_nikobus_address
 from .parser import (
     _OUTPUT_PLACEHOLDERS,
     _OUTPUT_PREFIX_RE,
+    _SINGLE_KEY_RE,
     _rows,
     open_nkb_db,
 )
-
-# A single button key face in the ``.nkb`` (``A``..``D`` for 2/4-button
-# plates, ``1A``..``2D`` for 8-button plates). Combos (``AB``, ``ABCD`` …)
-# and output prefixes (``O01``) are excluded.
-_SINGLE_KEY_RE = re.compile(r"^([12]?)([A-D])$")
+from .parser import channels_for as _channels_for
+from .parser import key_labels as _key_labels
+from .parser import per_key_bus_address as _per_key_bus_address
 
 # Niko reference number (``ProductBase.NikoRefNr``) → (HA category, channels)
 # for the output modules the integration supports.
@@ -66,58 +63,6 @@ class NkbConfig(NamedTuple):
 def _is_placeholder_name(name: str) -> bool:
     low = name.strip().lower()
     return not low or low in _OUTPUT_PLACEHOLDERS or low in _EXTRA_OUTPUT_PLACEHOLDERS
-
-
-def _key_labels(prefixes: set[str]) -> list[str]:
-    """Key labels (``1A``..``2D``) for a button's single-key op-points.
-
-    ``.nkb`` prefixes are ``A``..``D`` on 2/4-button plates (mapped to
-    ``1A``..``1D``) and ``1A``..``2D`` on 8-button plates (used as-is).
-    """
-    labels: set[str] = set()
-    for pfx in prefixes:
-        m = _SINGLE_KEY_RE.match(pfx)
-        if m:
-            labels.add(f"{m.group(1) or '1'}{m.group(2)}")
-    return sorted(labels)
-
-
-def _channels_for(labels: list[str]) -> int:
-    """Key count (1/2/4/8) whose ``KEY_MAPPING`` contains every label.
-
-    Picked by the label *pattern*, not the raw count: a device exposing a
-    ``2X`` face is 8-key even if only some faces are wired; ``1C``/``1D``
-    implies 4-key; ``1B`` implies 2-key. This keeps every label inside
-    ``KEY_MAPPING[channels]`` so no two faces collapse to the same address.
-    """
-    if any(lbl[0] == "2" for lbl in labels):
-        return 8
-    if "1C" in labels or "1D" in labels:
-        return 4
-    if "1B" in labels:
-        return 2
-    return 1
-
-
-def _per_key_bus_address(physical_hex: str, channels: int, label: str) -> str:
-    """Bus address the plate emits when key ``label`` is pressed.
-
-    Reproduces the library's own inventory derivation
-    (:func:`merge_discovered_buttons`): bit-reverse the physical address
-    with :func:`convert_nikobus_address`, then **add** the key face's
-    first-nibble offset (``KEY_MAPPING[channels][label]``) to the first
-    nibble (wrapping mod 16). This is what a PC-Link inventory would store,
-    so the router matches real presses on it. Falls back to the converted /
-    physical address when the channel/label pair isn't known.
-    """
-    converted = convert_nikobus_address(physical_hex)
-    if converted.startswith("["):  # convert_nikobus_address failure marker
-        return physical_hex
-    hexchar = KEY_MAPPING.get(channels, {}).get(label)
-    if hexchar is None:
-        return converted
-    new_nibble = (int(converted[0], 16) + int(hexchar, 16)) & 0xF
-    return f"{new_nibble:X}{converted[1:]}"
 
 
 def build_config(

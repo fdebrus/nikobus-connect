@@ -17,21 +17,27 @@ from __future__ import annotations
 from .config_builder import NkbConfig, build_config, build_config_from_nkb
 from .parser import (
     CANONICAL_NKB_FILENAME,
+    RGB_PRODUCT_REFS,
     NkbData,
+    RgbLink,
     SceneDef,
     find_nkb_file,
     mode_code,
+    mode_number,
     parse_nkb,
 )
 
 __all__ = [
     "CANONICAL_NKB_FILENAME",
+    "RGB_PRODUCT_REFS",
     "NkbConfig",
     "NkbData",
+    "RgbLink",
     "SceneDef",
     "build_config",
     "build_config_from_nkb",
     "find_nkb_file",
     "mode_code",
+    "mode_number",
     "parse_nkb",
 ]
