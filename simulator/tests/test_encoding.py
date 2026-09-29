@@ -36,12 +36,19 @@ CHUNK_HEX = {"switch_module": 12, "roller_module": 12, "dimmer_module": 16}
 
 
 def _links_back(spec: ModuleSpec) -> list[dict]:
-    """Decode a module's memory the way the discovery scan does."""
+    """Decode a module's link tables the way the discovery scan does.
+
+    The dimmer's configuration block (``0xF8..0xFF``) is memory but not
+    a link table, and the scan does not read it since 0.40.1 — because
+    fed to the link decoder it produces phantom buttons. Walk it here
+    and those phantoms would show up as "links".
+    """
     memory = encode_module(spec)
     stream = "".join(
         registers[key]
         for registers in memory.values()
         for key in sorted(registers)
+        if not (spec.type == "dimmer_module" and key >= 0xF8)
     )
     chunk = CHUNK_HEX[spec.type]
     out = []
@@ -148,8 +155,23 @@ def test_the_dimmer_keeps_one_record_per_eight_byte_register() -> None:
     )
     registers = encode_module(spec)["00"]
     assert register_width("dimmer_module") == 16
-    assert sorted(registers) == [0x20, 0x21, 0x22, 0x23]
+    link_table = [r for r in registers if r < 0xF8]
+    assert link_table == [0x20, 0x21, 0x22, 0x23]
     assert all(len(v) == 16 for v in registers.values())
+
+
+def test_a_dimmer_carries_its_configuration_block() -> None:
+    """Registers 0xF8..0xFF hold settings, not links.
+
+    They are there so that a library which reads them and link-decodes
+    them — as 0.39.0 and 0.40.0 did — is caught by the end-to-end scan:
+    the real 116D bytes decode into four phantom buttons.
+    """
+    spec = {m.type: m for m in preset("house").modules}["dimmer_module"]
+    registers = encode_module(spec)["00"]
+    assert {r for r in registers if r >= 0xF8} == set(range(0xF8, 0x100))
+    assert registers[0xFA] == "282828282828F8F8"
+    assert registers[0xFB] == "F8F8F8F0F8F8F8F8"
 
 
 def test_each_family_starts_its_table_where_the_scan_looks() -> None:

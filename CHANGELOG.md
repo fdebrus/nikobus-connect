@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.40.1
+
+- **The dimmer scan no longer reads the per-channel configuration block, and no longer invents buttons from it.** The dimmer plan had three passes: the bank-0 link table, the bank-1 link table, and registers `0xF8`–`0xFF` of bank 0 — the module's per-channel configuration at byte address `0x7C0`, which the vendor software reads too. Nothing in discovery used that block (the backup path reads the whole image on its own), but every register read goes through the link decoder, and configuration bytes decode into "links": on a real install (two 05-007 modules, 2026-09-29) the chunks `282828282828F8F8`, `F8F8F8F0F8F8F8F8`, `25252525252585F3` and `0000000000000000` came out as buttons `0A0A0A`, `3E3E3E`, `094949` and `000000` — eight phantoms per scan, one of them at "key 15", which no plate has. They were dropped at the merge as unmatched, so no entity ever came of them; they did inflate the remote-transmitter accumulator, and any future rule that keeps unmatched module-table records (virtual buttons) would have kept them. The pass is gone from both the vendor profile and the count-driven plan: a dimmer scan is now bank 0 and bank 1, about ten seconds shorter, and clean. A broad scan still sweeps the block, as it sweeps everything.
+- The simulator's dimmer now carries that configuration block, byte for byte from the real module, so the end-to-end scan test fails on a library that reads it again.
+
 ## 0.40.0
 
 - **Device type `0x46` is the 340-00112 RGB controller.** It sat in the catalogue as *Reserved 0x46* pending evidence, which meant every install with one silently dropped it from the inventory. The evidence arrived (Nikobus-HA #519): an install's PC-Link registry reports type `0x46` at address `801D`, and the same install's project file names the component at physical address 32797 — the same number — as "RGB Controller (kleur mode)", product 340-00112, vendor ref `S_DB_DIM_COLORCTRL`. Two independent sources agreeing on the address is what makes this a match rather than a guess. The module now reaches the module store, under its own `rgb_module` bucket, and appears with its real name.

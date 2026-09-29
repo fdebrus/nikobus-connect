@@ -140,7 +140,9 @@ def _full_sweep(sub_bytes: tuple[str, ...]) -> tuple[ScanSection, ...]:
 #   roller_module  (Niko 05-001-02): sub=00 0x10..; PC stopped at 0x16
 #                  (8394) and 0x1C (9105)
 #   dimmer_module  (Niko 05-007-02, function=0x22): sub=00 0x20..0x3F main
-#                  + sub=00 0xF8..0xFF timer + sub=01 0x20..0x2F secondary
+#                  + sub=01 0x20..0x2F secondary. The vendor also reads
+#                  sub=00 0xF8..0xFF, the per-channel configuration block
+#                  at 0x7C0; discovery does not (see below).
 #   pc_logic       (Niko 05-201): sub=00 0x06..0x3F + 0x3E + sub=02
 #                  0xAF..0xEE + sub=03 0xE8..0xF4. NOT sub=04 (the 0.17.0
 #                  DLL plan scanned the wrong sub-byte and returned 0 records).
@@ -154,9 +156,19 @@ _MODULE_SCAN_PROFILES: dict[str, tuple[ScanSection, ...]] = {
     "roller_module": (
         ("00", tuple(range(0x10, 0x40))),
     ),
+    # No 0xF8..0xFF pass on the dimmer. Those eight registers are the
+    # per-channel configuration block at 0x7C0 — settings, not links —
+    # and nothing in discovery reads them; the backup path reads the
+    # whole image on its own. Run through the link decoder they yield
+    # phantom buttons: on a real 05-007 (0.40.0, two modules) the chunks
+    # ``282828282828F8F8``, ``F8F8F8F0F8F8F8F8``, ``25252525252585F3``
+    # and ``0000000000000000`` decoded as buttons 0A0A0A, 3E3E3E, 094949
+    # and 000000, "key 15" among them. Dropped at the merge as unmatched,
+    # so no harm done yet — but any rule that keeps unmatched records
+    # (virtual buttons) would have kept those. A broad scan still sweeps
+    # the block, as it sweeps everything; that is what broad means.
     "dimmer_module": (
         ("00", tuple(range(0x20, 0x40))),
-        ("00", tuple(range(0xF8, 0x100))),
         ("01", tuple(range(0x20, 0x30))),
     ),
     # Audio Distribution (05-205): its links live in bank 01, not in
@@ -277,8 +289,9 @@ def _count_driven_passes(
     Replaces the fixed vendor band with exactly the blocks that hold
     programmed records: switch/roller link records are 6 bytes from
     0x100 in 16-byte blocks; dimmer records are 8 bytes in 8-byte
-    blocks from 0x100 (bank 0) and 0x900 (bank 1), plus the per-channel
-    configuration block at 0x7C0. One extra block is read so a record
+    blocks from 0x100 (bank 0) and 0x900 (bank 1). The per-channel
+    configuration block at 0x7C0 holds no links and is not read (see
+    ``_MODULE_SCAN_PROFILES``). One extra block is read so a record
     straddling the last block boundary is never cut. ``None`` when the
     module type has no count-bounded layout (PC-Link / PC-Logic keep
     their multi-band plans).
@@ -291,7 +304,6 @@ def _count_driven_passes(
         bank0 = min(max(status.record_count_a, 1), _DIMMER_BANK_RECORDS)
         passes: list[ScanSection] = [
             ("00", tuple(range(0x20, 0x20 + bank0))),
-            ("00", tuple(range(0xF8, 0x100))),
         ]
         if status.record_count_b:
             bank1 = min(status.record_count_b, _DIMMER_BANK_RECORDS)

@@ -134,8 +134,9 @@ async def test_dimmer_dispatches_per_product_profile(tmp_path):
 
     # Dimmer-specific function code "22" on the wire.
     assert all(c["base_cmd"].startswith("22") for c in calls)
-    # 0.19.0 COM-aligned profile: sub=00 0x20..0x3F + sub=00 0xF8..0xFF
-    # + sub=01 0x20..0x2F = ~56 reads, with parser-driven early-stop.
+    # 0.19.0 COM-aligned profile: sub=00 0x20..0x3F + sub=01 0x20..0x2F
+    # = ~48 reads, with parser-driven early-stop. (The 0xF8..0xFF
+    # configuration block left the plan in 0.40.1.)
     subs = {c["sub_byte"] for c in calls}
     assert subs == {"00", "01"}, subs
     total_regs = sum(len(c["command_range"]) for c in calls)
