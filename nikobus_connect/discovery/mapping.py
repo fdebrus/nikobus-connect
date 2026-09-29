@@ -899,6 +899,15 @@ DIMMER_MODE_T1_LOOKUP: dict[int, tuple[str, ...]] = {
 # ``S_DB_DESC_DIMMER_COLOR_M<n>`` (seen in a real project file: the one
 # link an install had on its controller was ``..._M19``).
 #
+# The table is the family's, not this product's. The 340-00111 and
+# 340-00113 (orientation lighting with four RGB LEDs, leaflet
+# PM340-00111, same revision) print the identical mode tables, the
+# same mode-16 default, the same programming button and the same
+# limits (32 units, 4 masters × 8 slaves, one side of a PC-Logic);
+# the mono variant (``S_DB_DIM_MONOCTRL``) uses the monochrome half.
+# When one of those turns up with a device-type byte, catalogue the
+# byte and reuse these tables — do not write a second copy.
+#
 # Keyed by the vendor's mode NUMBER, not by a link-record byte: the
 # controller answers no register read, so the byte it stores for a mode
 # has never been seen. That is also why it is absent from the PC-Link
