@@ -34,6 +34,24 @@ REGISTER_HEX = 32  # sixteen bytes per register
 DIMMER_REGISTER_HEX = 16
 FILLER = "F" * REGISTER_HEX
 
+#: The dimmer's per-channel configuration block, registers ``0xF8``
+#: to ``0xFF`` of bank ``00`` (byte address ``0x7C0``): settings, not
+#: links. These are the eight registers of a real 05-007 (module 116D,
+#: 2026-09-29), kept verbatim because the library once ran them through
+#: the link decoder and got four phantom buttons out of them — 067FCA,
+#: 0A0A0A, 3E3E3E and 000000, "key 15" among them. A simulated dimmer
+#: carries the block so a scan that reads it again is caught.
+DIMMER_CONFIG_BLOCK: dict[int, str] = {
+    0xF8: "FFFFFFFFFFFFFFFF",
+    0xF9: "19FF282828282814",
+    0xFA: "282828282828F8F8",
+    0xFB: "F8F8F8F0F8F8F8F8",
+    0xFC: "F8F8FFF3FFFFFFFF",
+    0xFD: "91BF7F93FFFF0000",
+    0xFE: "0000000000000000",
+    0xFF: "00005203FFFFFFFF",
+}
+
 #: Where each family's table starts, as (sub byte, first register).
 TABLE_START = {
     "switch_module": ("00", 0x10),
@@ -168,7 +186,11 @@ def encode_module(spec: ModuleSpec) -> dict[str, dict[int, str]]:
         return {}
     # A table ends where the filler starts: the scan stops on a register
     # whose tail is all FF, so close with one.
-    return {sub: _registers(stream + "F" * width, first, width)}
+    memory = {sub: _registers(stream + "F" * width, first, width)}
+    if spec.type == "dimmer_module":
+        # Present on every real dimmer, links or not.
+        memory["00"].update(DIMMER_CONFIG_BLOCK)
+    return memory
 
 
 def module_status_payload(spec: ModuleSpec, family_byte: int) -> str:

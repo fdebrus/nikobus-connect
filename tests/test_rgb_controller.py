@@ -83,3 +83,60 @@ def test_it_reaches_the_module_store_instead_of_being_dropped() -> None:
     assert entry["description"] == "rgb_module_1"
     # No channels array: there is nothing to build entities from yet.
     assert "channels" not in entry
+
+
+# --- the link modes, from the vendor's programming leaflet ----------------
+
+
+def test_the_mode_table_is_the_leaflets_fifteen_modes() -> None:
+    """PM340-00112 lists 15 modes: nine shared with the dimmer, six
+    colour-only. The dimmer's M02/M03/M09/M10/M11/M14 do not exist here."""
+    from nikobus_connect.discovery.mapping import RGB_MODE_NAMES, RGB_MONO_MODES
+
+    assert set(RGB_MODE_NAMES) == {1, 4, 5, 6, 7, 8, 12, 13, 15, 16, 17, 18, 19, 20, 21}
+    assert RGB_MONO_MODES == {1, 4, 5, 6, 7, 8, 12, 13, 15}
+    assert RGB_MONO_MODES < set(RGB_MODE_NAMES)
+
+
+def test_the_validating_installs_link_is_start_stop_scenario() -> None:
+    """The one link the #519 install has on its controller is M19: the
+    upper key starts/stops the scenario, the lower one dims off."""
+    from nikobus_connect.discovery.mapping import RGB_MODE_KEYS, rgb_mode_label
+
+    assert rgb_mode_label(19) == "M19 (Start/stop scenario)"
+    assert RGB_MODE_KEYS[19] == 2
+
+
+def test_the_factory_default_is_the_four_key_colour_mode() -> None:
+    from nikobus_connect.discovery.mapping import RGB_MODE_KEYS, rgb_mode_label
+
+    assert rgb_mode_label(16) == "M16 (Set colour and luminance)"
+    assert RGB_MODE_KEYS[16] == 4
+
+
+def test_a_mode_off_the_table_keeps_its_number() -> None:
+    from nikobus_connect.discovery.mapping import rgb_mode_label
+
+    assert rgb_mode_label(2) == "M02"
+
+
+def test_every_mode_has_a_key_count_and_a_vendor_ref() -> None:
+    from nikobus_connect.discovery.mapping import (
+        RGB_MODE_KEYS,
+        RGB_MODE_NAMES,
+        RGB_MODE_VENDOR_REF,
+    )
+
+    assert set(RGB_MODE_KEYS) == set(RGB_MODE_NAMES) == set(RGB_MODE_VENDOR_REF)
+    assert set(RGB_MODE_KEYS.values()) == {1, 2, 4}
+    for number, ref in RGB_MODE_VENDOR_REF.items():
+        assert ref == f"S_DB_DESC_DIMMER_COLOR_M{number}"
+
+
+def test_the_link_record_byte_is_still_unknown() -> None:
+    """The table is keyed by mode number. No link record of this module
+    has been read, so the byte it stores is unobserved and the PC-Link
+    record parser must not pretend otherwise."""
+    from nikobus_connect.discovery.pc_record_parser import _MODE_TABLE_BY_DEVICE_TYPE
+
+    assert 0x46 not in _MODE_TABLE_BY_DEVICE_TYPE

@@ -76,15 +76,18 @@ def _total_reads(module_type: str, *, broad_scan: bool = False) -> int:
 
 def test_dimmer_default_uses_com_aligned_band() -> None:
     """0.19.0: dimmer default scans the PC-software COM-trace bands —
-    sub=00 0x20..0x3F (main link table), sub=00 0xF8..0xFF (timer
-    config), sub=01 0x20..0x2F (secondary). ~56 reads vs the old
-    245-read DLL plan, with parser-driven early-stop trimming further.
-    Validated against module 0E6C in the 24/05/2026 capture."""
+    sub=00 0x20..0x3F (main link table), sub=01 0x20..0x2F (secondary).
+    ~48 reads vs the old 245-read DLL plan, with parser-driven
+    early-stop trimming further. Validated against module 0E6C in the
+    24/05/2026 capture. The vendor's third band, sub=00 0xF8..0xFF, is
+    the per-channel configuration block; 0.40.1 stopped reading it —
+    it holds no links and decoded into phantom buttons."""
     total = _total_reads("dimmer_module")
     assert 40 <= total <= 80, total
     plan = _scan_passes_for_module_type("dimmer_module")
     subs_used = {sub for sub, _regs in plan}
     assert subs_used == {"00", "01"}, subs_used
+    assert not any(0xF8 in regs for _sub, regs in plan)
 
 
 def test_roller_default_uses_com_aligned_band() -> None:

@@ -9,7 +9,7 @@ description = "A simulated Nikobus installation: speaks the PC-Link protocol so 
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
-dependencies = ["nikobus-connect>=0.40.0"]
+dependencies = ["nikobus-connect>=0.40.1"]
 
 [project.scripts]
 nikobus-simulator = "nikobus_simulator.server:main"

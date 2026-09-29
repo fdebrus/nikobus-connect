@@ -30,16 +30,21 @@ def test_switch_plan_is_capped_at_table_end():
     assert regs[-1] == 0x6F
 
 
-def test_dimmer_plan_two_banks_and_config_block():
+def test_dimmer_plan_two_banks_and_no_config_block():
+    """Bank 0, bank 1, and nothing else. 0.40.1 dropped the 0xF8..0xFF
+    pass: that block is per-channel configuration, and link-decoding it
+    produced phantom buttons on every real dimmer scanned."""
     passes = _count_driven_passes("dimmer_module", _status(5, 3))
-    assert passes[0] == ("00", tuple(range(0x20, 0x25)))
-    assert passes[1] == ("00", tuple(range(0xF8, 0x100)))
-    assert passes[2] == ("01", tuple(range(0x20, 0x23)))
+    assert passes == (
+        ("00", tuple(range(0x20, 0x25))),
+        ("01", tuple(range(0x20, 0x23))),
+    )
+    assert not any(0xF8 in regs for _sub, regs in passes)
 
 
 def test_dimmer_plan_without_second_bank():
     passes = _count_driven_passes("dimmer_module", _status(1, 0))
-    assert len(passes) == 2
+    assert len(passes) == 1
 
 
 def test_controllers_keep_their_fixed_plan():
