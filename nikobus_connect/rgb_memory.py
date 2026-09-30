@@ -41,14 +41,22 @@ applies the plugin's transformations to project values the way it does;
 has managed on the bus yet, so it is there for the day a capture or a
 read makes it possible, and to check a captured write against.
 
-The address bytes are the least certain part. The plugin stores the
-24-bit number it computes from the project database's address fields
-(the plate's physical address, plus four times the key object's address
-on the plate); for the validating install's only link, wall plate
-``124A36`` key 1C at key index 0, that is ``12 4A 36`` — the plate's
-physical address, not the ``1B1492`` the key puts on the wire. Whether
-the module bit-reverses it itself, as the switch and dimmer modules
-store addresses already reversed, has not been observed.
+The address bytes hold the button address in the form the software
+keeps it, not the form the wire carries: the plate's project address
+shifted left by two with the key's 3-bit code in the low bits, which is
+the bit-reversal of the ``#N`` address the key puts on the bus. The
+software's own virtual key press is built the same way — it bit-reverses
+``address << 2 | key`` into the ``#N`` frame — and the validating
+install confirms it: plate ``124A36`` key 1C (code 0) presses
+``#N1B1492`` and key 1D (code 2) ``#N5B1492``; the record for the 1C
+link therefore starts ``49 28 D8``. :attr:`RgbLinkRecord.wire_address`
+gives the bus form, :func:`address_from_wire` the inverse.
+
+One more thing the executable shows: the software has no direct colour
+command either. Its simulation mode drives switch and roller outputs
+with the set-output functions (0x15 / 0x16), but a dimmer or colour
+output is simulated by pressing the linked key on the bus, held by a
+timer — which is what a host does too.
 """
 
 from __future__ import annotations
@@ -150,6 +158,31 @@ RGB_DEFAULT_LEVEL = 0xFFFE
 RGB_ABSENT = 0xFFFF
 
 
+def reverse_24(value: int) -> int:
+    """Bit-reverse a 24-bit value: the record form of a button address to
+    its wire form and back."""
+    out = 0
+    value &= 0xFFFFFF
+    for _ in range(24):
+        out = (out << 1) | (value & 1)
+        value >>= 1
+    return out
+
+
+def address_from_wire(wire_hex: str) -> int:
+    """The record form of a key's ``#N`` bus address (``"1B1492"``)."""
+    return reverse_24(int(wire_hex.replace("#N", ""), 16))
+
+
+def record_address(plate_address: int, key_code: int) -> int:
+    """The record form of a plate key: the plate's project address shifted
+    left by two with the key's 3-bit code in the low bits, as the vendor
+    software computes it. Key codes on a four-key plate: 1C 0, 1A 1, 1D
+    2, 1B 3; on an eight-key plate 2C 0, 2A 1, 2D 2, 2B 3, 1C 4, 1A 5,
+    1D 6, 1B 7."""
+    return ((plate_address << 2) | (key_code & 0x07)) & 0xFFFFFF
+
+
 def param1_is_forced(mode: int) -> bool:
     """Whether the plugin writes 15 as parameter 1 for ``mode``."""
     return mode in _PARAM1_FORCED_LOW or mode >= 14
@@ -184,6 +217,11 @@ class RgbLinkRecord:
     @property
     def address_hex(self) -> str:
         return f"{self.address & 0xFFFFFF:06X}"
+
+    @property
+    def wire_address(self) -> str:
+        """The key's bus address as a ``#N`` frame carries it (``"1B1492"``)."""
+        return f"{reverse_24(self.address):06X}"
 
     @property
     def mode_label(self) -> str:
@@ -476,6 +514,7 @@ __all__ = [
     "RgbConfigRecord",
     "RgbImageBlock",
     "RgbLinkRecord",
+    "address_from_wire",
     "build_rgb_link_record",
     "decode_rgb_colour_paths",
     "decode_rgb_config",
@@ -483,4 +522,6 @@ __all__ = [
     "encode_rgb_link_table",
     "is_empty_rgb_link_record",
     "param1_is_forced",
+    "record_address",
+    "reverse_24",
 ]

@@ -20,6 +20,7 @@ from nikobus_connect.rgb_memory import (
     RGB_T1_SECONDS,
     RGB_T2_SECONDS,
     RgbLinkRecord,
+    address_from_wire,
     build_rgb_link_record,
     decode_rgb_colour_paths,
     decode_rgb_config,
@@ -27,6 +28,8 @@ from nikobus_connect.rgb_memory import (
     encode_rgb_link_table,
     is_empty_rgb_link_record,
     param1_is_forced,
+    record_address,
+    reverse_24,
 )
 
 
@@ -73,12 +76,17 @@ def test_parameter_1_is_forced_to_15_for_the_plugin_s_modes() -> None:
 
 
 def test_the_validating_install_s_m19_link() -> None:
-    """Nikobus-HA #519: plate 124A36, key 1C at key index 0, mode M19
-    on output 1. The plugin stores the plate's physical address, forces
-    parameter 1 to 15, and the default parameter 2 (15) becomes 300 s."""
-    record = build_rgb_link_record(address=0x124A36, mode=19, channel=0)
-    assert record.to_bytes().hex().upper() == "124A369800" "0F012C" + "FF" * 10
-    assert record.address_hex == "124A36"
+    """Nikobus-HA #519: plate 124A36, key 1C (code 0), mode M19 on
+    output 1, pressing #N1B1492 on the bus. The record holds the address
+    in the software's form, plate << 2 | key, which bit-reverses to the
+    wire form; parameter 1 is forced to 15 and the default parameter 2
+    (15) becomes 300 s."""
+    address = record_address(0x124A36, 0)
+    assert address == 0x4928D8
+    record = build_rgb_link_record(address=address, mode=19, channel=0)
+    assert record.to_bytes().hex().upper() == "4928D89800" "0F012C" + "FF" * 10
+    assert record.address_hex == "4928D8"
+    assert record.wire_address == "1B1492"
     assert record.mode_label == "M19 (Start/stop scenario)"
     assert record.param1_seconds is None  # 15 is not a timer in mode 19
     assert record.param2_seconds == 300
@@ -86,8 +94,16 @@ def test_the_validating_install_s_m19_link() -> None:
     assert not record.has_colour_path
 
 
+def test_the_address_form_matches_both_observed_keys() -> None:
+    """The same plate's key 1D (code 2) was seen as #N5B1492."""
+    assert f"{reverse_24(record_address(0x124A36, 2)):06X}" == "5B1492"
+    assert address_from_wire("#N1B1492") == 0x4928D8
+    assert address_from_wire("5B1492") == 0x4928DA
+    assert reverse_24(reverse_24(0x123456)) == 0x123456
+
+
 def test_mode_6_parameter_1_goes_through_t1() -> None:
-    record = build_rgb_link_record(address=0x124A36, mode=6, channel=2, param1=3, param2=0)
+    record = build_rgb_link_record(address=0x4928D8, mode=6, channel=2, param1=3, param2=0)
     assert record.to_bytes()[3] == (6 << 3) | 2
     assert record.param1_seconds == 180
     assert record.param2_seconds == 1
@@ -139,8 +155,8 @@ def test_an_empty_slot_is_all_ff() -> None:
 
 
 def test_table_round_trips_and_skips_empty_slots() -> None:
-    first = build_rgb_link_record(address=0x124A36, mode=19, channel=0)
-    second = build_rgb_link_record(address=0x124A36, mode=13, channel=0)
+    first = build_rgb_link_record(address=0x4928D8, mode=19, channel=0)
+    second = build_rgb_link_record(address=0x4928DA, mode=13, channel=0)
     table = encode_rgb_link_table([first, second])
     assert len(table) == RGB_LINK_TABLE_BLOCK.length
     assert table[36:] == b"\xff" * (RGB_LINK_TABLE_BLOCK.length - 36)

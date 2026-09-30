@@ -18,7 +18,7 @@ from nikobus_connect.protocol import (
     make_block_index_args,
     make_pc_link_command,
 )
-from nikobus_connect.rgb_memory import RGB_LINK_TABLE_BLOCK, build_rgb_link_record
+from nikobus_connect.rgb_memory import RGB_LINK_TABLE_BLOCK, build_rgb_link_record  # noqa: E501
 
 
 def test_function_codes() -> None:
@@ -33,7 +33,7 @@ def test_function_codes() -> None:
 def test_the_write_frame_the_vendor_would_send_for_the_first_link_block() -> None:
     """Block 0x19 of a 340-00112 at 801D holding the validating install's
     M19 link: function 0x14, address, block index, sixteen data bytes."""
-    record = build_rgb_link_record(address=0x124A36, mode=19, channel=0).to_bytes()
+    record = build_rgb_link_record(address=0x4928D8, mode=19, channel=0).to_bytes()
     block = (record + b"\xff" * 16)[:16]
     first_block = RGB_LINK_TABLE_BLOCK.start // 16
     assert first_block == 0x19
