@@ -625,10 +625,15 @@ KEY_MAPPING_MODULE: dict[int, dict[int, str]] = {
 #
 # Mode descriptions mirror Niko's PC-software UI (English localization
 # of the ``S_DB_DESC_SCHAKEL_M*`` keys in product.mdb LinkModeBase).
-# Slot 0xA actually carries M14 / 0xB carries M15 — the gap from M08
-# to M11 (0x07 → 0x08) is intentional: Niko numbered modes
-# M01..M08, M11..M15 to leave room for future M09/M10 (which never
-# shipped for switch modules; the audio module took those codes).
+# The byte is the software's ``LinkIDNumber`` (product.mdb
+# LinkModeBase), which the vendor plugin Niko_05_000_01.dll writes
+# into the record's mode nibble: M01..M08 are 0..7, then M11 8, M12 9,
+# M13 10 (the sequencer; the plugin's own upload decoder flags byte 10
+# as such), M14 11, M15 12. The gap from M08 to M11 is Niko's: M09 and
+# M10 never shipped for switch modules. Until 2026-09 this table had
+# 10 = M14 and 11 = M15, one short: a "light scene on" link read as
+# "light scene on / off", and a real M15 link was dropped as an
+# unknown mode. Awaiting confirmation on a real install with a scene.
 # =============================================================================
 SWITCH_MODE_MAPPING: dict[int, str] = {
     0: "M01 (On / off)",
@@ -641,8 +646,9 @@ SWITCH_MODE_MAPPING: dict[int, str] = {
     7: "M08 (Flashing)",
     8: "M11 (Delayed off (up to 50s))",
     9: "M12 (Delayed on (up to 50s))",
-    10: "M14 (Light scene on)",
-    11: "M15 (Light scene on / off)",
+    10: "M13 (Sequencer on / off)",
+    11: "M14 (Light scene on)",
+    12: "M15 (Light scene on / off)",
 }
 
 # Vendor-ref keys for switch modes. Maps LinkID → Niko ``S_DB_DESC_*``
@@ -660,8 +666,9 @@ SWITCH_MODE_VENDOR_REF = {
     7: "S_DB_DESC_SCHAKEL_M8",
     8: "S_DB_DESC_SCHAKEL_M11",
     9: "S_DB_DESC_SCHAKEL_M12",
-    10: "S_DB_DESC_SCHAKEL_M14",
-    11: "S_DB_DESC_SCHAKEL_M15",
+    10: "S_DB_DESC_SCHAKEL_M13",
+    11: "S_DB_DESC_SCHAKEL_M14",
+    12: "S_DB_DESC_SCHAKEL_M15",
 }
 
 SWITCH_TIMER_MAPPING: dict[int, list[str | None]] = {
