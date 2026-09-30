@@ -248,7 +248,7 @@ build_rgb_link_record(address=0x124A36, mode=19, channel=0).to_bytes().hex()
 # "124a3698000f012cffffffffffffffffffff" — the validating install's M19 link, as the plugin writes it
 ```
 
-The DLL holds no bus code: the function code the software writes with, and whether a programming session precedes it, are the main executable's and still unknown.
+The main executable (`nikobus.exe` 4.3.1) was decompiled too, and it settles the bus side. The software **writes** this family with the 16-byte block function `0x14` after putting the module in link mode (`0x18`) and clearing it (`0x23`), keeps it in link mode for the whole write (other families are taken out and back in between blocks), then reads the module's CRC (`0x13`) inside that same session and drops link mode (`0x19`). It **never reads** this family back: the upload routine skips EEPROM types 10, 11 and 12 — wall buttons, the 340-00111 and the 340-00112 — before asking the module anything, which is exactly what the captured installation read showed. The function codes are in `nikobus_connect.protocol` (`FUNC_LINK_MODE_ON`, `FUNC_WRITE_BLOCK16`, `FUNC_CLEAR_EEPROM`, …); the library sends none of them. The one open question left is whether the controller answers a block read inside link mode, as it does not outside — the only read the vendor ever makes of it, the CRC, is made inside one.
 
 ## Reading a `.nkb` project
 

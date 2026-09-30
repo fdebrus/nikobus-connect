@@ -7,13 +7,31 @@ software's own plugin for this family, ``Niko_05_010.dll`` (version
 21.0.0.2, 2007), decompiled in September 2026: the plugin builds the
 image the software writes into a 340-00112 / 340-00111 / 340-00113 from
 the project database, and this module is that layout, byte for byte.
-What the plugin does *not* contain is any bus traffic — the function
-code the software writes with, and whether a matching read exists, live
-in the main executable and are still unknown. The plugin does tell the
-software how much of each block to read back, and for the link table
-that length is zero (:data:`RGB_READBACK_LENGTHS`), which agrees with
-the installation read captured on a real install (Nikobus-HA #519):
-the software only status-polls the controller.
+The plugin contains no bus traffic; that is the main executable's,
+and ``nikobus.exe`` 4.3.1 was decompiled next. What it does with this
+family (EEPROM types 11, the plinth light, and 12, the controller; 10 is
+the wall buttons):
+
+* **Writing.** Link mode on (function 0x18), clear (0x23), then every
+  16-byte block of the image that is not all ``0xFF`` with function
+  0x14 — block index = byte address / 16, so the link table is blocks
+  0x19–0xA8 — while the module stays in link mode for the whole write
+  (other families are taken out of and back into link mode between
+  blocks); then the CRC16 of the whole image is compared with what
+  function 0x13 answers, still in link mode, and link mode goes off
+  (0x19). The function codes are in :mod:`nikobus_connect.protocol`.
+* **Reading.** Never. The upload routine skips EEPROM types 10, 11 and
+  12 outright, before asking the module anything, and the plugin's own
+  read-back lengths (:data:`RGB_READBACK_LENGTHS`) would end the loop at
+  the first block anyway. That is the installation read captured on a
+  real install (Nikobus-HA #519): every other module memory-read, the
+  controller only status-polled.
+
+So the one read the software ever makes of this family is the CRC, and
+it makes it inside link mode. Whether the controller answers block reads
+(0x10) inside link mode, as it does not outside, is the open question a
+bus experiment can settle — and the reason the vendor never reads it
+back may simply be that the software was never written to.
 
 The image is 7968 bytes in four blocks (:data:`RGB_IMAGE_BLOCKS`). The
 link table is block 1: 128 slots of 18 bytes, an empty slot all
@@ -87,9 +105,11 @@ RGB_IMAGE_BLOCKS: tuple[RgbImageBlock, ...] = (
 RGB_IMAGE_SIZE = 0x1F20
 
 #: How many bytes of each block the plugin tells the software to read
-#: back (``GetDLLReadInfo``): none of the LED profile, none of the link
-#: table, all of the colour paths and the settings. The link table is
-#: write-only as far as the vendor software is concerned.
+#: back (``GetDLLReadInfo``, fixed-length field): none of the LED
+#: profile, none of the link table, all of the colour paths and the
+#: settings. The software's upload loop stops at the first block whose
+#: lengths are both zero, so with block 0 at zero nothing is read — and
+#: the upload routine skips this family before that anyway.
 RGB_READBACK_LENGTHS: dict[str, int] = {
     RGB_LED_PROFILE_BLOCK.name: 0,
     RGB_LINK_TABLE_BLOCK.name: 0,
