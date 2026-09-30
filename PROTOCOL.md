@@ -253,7 +253,7 @@ the vendor writes it.
 | Byte address | Length | Content | Library plan |
 |---|---|---|---|
 | 99 | 385 | Logic programme | sub `00` `0x06`–`0x3F` |
-| 998 | 2 + count × 6 | Links whose output is the PC-Logic, one 24-bit button address each ‡ | sub `00` `0x3E` (first block only) |
+| 998 | 2 + count × 6 | **Input table**: the links whose output is the PC-Logic, `[addr 3] [input] [slot] [mode]` each, the address in the record form of §5 (‡: bytes 3–5 read from the plugin's composer, no capture yet) | sub `00` `0x3E`, then to the last record (`PcLogicDecoder.extension_passes`); decoded and reported, not merged |
 | 11000 | 640 | Link records, 6-byte entries | sub `02` `0xAF`–`0xEE` |
 | 12000 | 2 + count × 5 | Up to 64 physical output addresses ‡ | sub `02` `0xEE` (first block only) |
 | 16000 | 192 | Compressed input groups, 3-byte entries | sub `03` `0xE8`–`0xF4` |
@@ -368,9 +368,10 @@ buttons (0.40.1).
 
 Record: `[addr 23:16] [addr 15:8] [addr 7:0] [function] [object & 0xF]
 [01]`; the plugin's upload decoder takes a record only when its sixth
-byte is 1. This library reads a fixed band (sub `01` `0x38`–`0x5F`,
-about 105 records); the count at the head of the band is what would
-size a longer read.
+byte is 1. This library reads the fixed band first (sub `01`
+`0x38`–`0x5F`, about 105 records), takes the count from its head and
+reads on to the last record (`AudioDecoder.extension_passes`), across
+sub-bytes `01` to `03` as the table requires.
 
 ### Feedback module (05-207) ‡
 

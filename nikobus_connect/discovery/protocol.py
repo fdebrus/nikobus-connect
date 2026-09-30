@@ -371,6 +371,27 @@ def _reverse_24(value: int) -> int:
     return out
 
 
+def blocks_to_sections(
+    first_block: int, last_block: int
+) -> tuple[tuple[str, tuple[int, ...]], ...]:
+    """Scan sections covering the 16-byte blocks ``first_block``..``last_block``.
+
+    A block index is ``sub_byte << 8 | register`` (byte address ÷ 16),
+    so a run of blocks that crosses a sub-byte boundary becomes one
+    section per sub-byte: blocks ``0x1F0..0x205`` are ``("01",
+    0xF0..0xFF)`` then ``("02", 0x00..0x05)``. Empty when the range is
+    empty.
+    """
+    sections: list[tuple[str, tuple[int, ...]]] = []
+    block = max(first_block, 0)
+    while block <= last_block:
+        sub = block >> 8
+        end = min(last_block, (sub << 8) | 0xFF)
+        sections.append((f"{sub:02X}", tuple(range(block & 0xFF, (end & 0xFF) + 1))))
+        block = end + 1
+    return tuple(sections)
+
+
 def calendar_channel_from_link(raw_hex: str) -> tuple[str, str] | None:
     """``("CH001A", "E00320")`` when a link record's 3-byte button
     address is a PC-Link calendar channel, else ``None``.
@@ -538,6 +559,7 @@ def decode_command_payload(
 
 __all__ = [
     "DecoderContext",
+    "blocks_to_sections",
     "decode_command_payload",
     "normalize_payload",
     "reverse_hex",
