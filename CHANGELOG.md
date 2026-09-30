@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **Switch-module modes M13, M14 and M15 read from the right bytes.** The vendor's product database numbers the switch modes M11 = 8, M12 = 9, M13 = 10, M14 = 11, M15 = 12, and the vendor plugin for the switch and roller modules (`Niko_05_000_01.dll`, decompiled) writes that number into the record's mode nibble; its own upload decoder flags byte 10 as the sequencer. The table had 10 = M14 and 11 = M15 and no 12, one short: a "light scene on" link was labelled "light scene on / off", and a real M15 link was dropped as an unknown mode. Byte 10 is now M13 (Sequencer on / off), 11 M14, 12 M15, for the compact switch as well. Pending confirmation on a real install with a scene link before release.
+
 ## 0.42.1
 
 - **`nikobus_connect.rgb_memory` is removed.** 0.42.0 shipped a decoder for the 340-00112 memory image taken from the vendor's plugin. Nothing in a host uses it: the controller's memory cannot be read outside link mode, entering link mode is a programming command, and this library sends no programming function — so the decoder could only ever have been fed by a serial capture of the vendor software, which is a bench tool's job, not a shipped package's. The findings stay where they are useful, in the Nikobus-HA repository's `documentation/rgb-controller-memory-map.md`: the image layout, the 18-byte record and its field meanings, the record address form (plate address shifted left by two with the key code, the bit-reversal of the `#N` wire address), and the write protocol, for anyone reading a capture by hand. The library's rule stands: it reads state and presses keys.
