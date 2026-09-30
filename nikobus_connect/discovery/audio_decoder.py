@@ -2,8 +2,11 @@
 
 The audio module keeps its links in memory bank ``01`` instead of the
 output bank ``04``, which is empty on it. The band opens with a two-byte
-header — the record count, then ``00`` — followed by that many six-byte
-records:
+header — the record count, little-endian — followed by that many
+six-byte records (the vendor plugin writes the count at byte 4998 and
+the records from byte 5000, room for 1864 of them; the scan reads the
+fixed band first and extends it from the count, see
+``AudioDecoder.extension_passes``):
 
 ``<bus address (3 bytes)> <function> <object> 01``
 
@@ -38,7 +41,7 @@ from typing import Any
 
 from ..coordinator_protocol import CoordinatorProtocol
 from .chunk_decoder import BaseChunkingDecoder
-from .protocol import _is_all_ff, _safe_int, reverse_hex
+from .protocol import _is_all_ff, _safe_int, blocks_to_sections, reverse_hex
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -116,12 +119,42 @@ def audio_object_label(object_raw: int) -> str:
     return f"Zone {object_raw + 1}"
 
 
+#: Where the vendor plugin (``Niko_05_202``) puts the table: a
+#: two-byte little-endian record count at byte 4998, the records from
+#: byte 5000, room for 1864 of them. Byte 4998 is sub-byte ``01``
+#: register ``0x38``, offset 6 — the head of the band the scan plan
+#: reads first.
+AUDIO_COUNT_ADDRESS = 4998
+AUDIO_TABLE_ADDRESS = 5000
+AUDIO_MAX_RECORDS = 1864
+#: The last 16-byte block a full table can reach (block ``0x3F3``).
+AUDIO_TABLE_LAST_BLOCK = (AUDIO_TABLE_ADDRESS + AUDIO_MAX_RECORDS * 6 - 1) // 16
+
+
+def _count_header(stream: str, index: int) -> int | None:
+    """The record count at ``stream[index:]``, or ``None`` if no header is there.
+
+    The count is two bytes little-endian (the vendor writes it that
+    way; the validating module's ``23 00`` is 35). Zero, an erased
+    ``FFFF`` and anything past the table's capacity are not a header.
+    """
+    low = _safe_int(stream[index : index + 2])
+    high = _safe_int(stream[index + 2 : index + 4])
+    if low is None or high is None:
+        return None
+    count = low | high << 8
+    if not 0 < count <= AUDIO_MAX_RECORDS:
+        return None
+    return count
+
+
 def split_link_table(stream_hex: str) -> list[str]:
     """Split a bank-01 byte stream into its six-byte records.
 
-    The band starts with filler ``FF`` bytes, then ``<count> 00``, then
-    ``count`` records. Returns the records as hex strings; an empty list
-    when no header is present (an empty or unreadable band).
+    The band starts with filler ``FF`` bytes, then the two-byte record
+    count, then ``count`` records. Returns the records as hex strings;
+    an empty list when no header is present (an empty or unreadable
+    band).
     """
     stream = (stream_hex or "").upper()
     index = 0
@@ -129,8 +162,8 @@ def split_link_table(stream_hex: str) -> list[str]:
         index += 2
     if index + 4 > len(stream):
         return []
-    count = _safe_int(stream[index : index + 2])
-    if not count or stream[index + 2 : index + 4] != "00":
+    count = _count_header(stream, index)
+    if count is None:
         return []
     body = stream[index + 4 :]
     records = [
@@ -225,11 +258,59 @@ class AudioDecoder(BaseChunkingDecoder):
         super().__init__(coordinator, "audio_module")
         self._header_seen = False
         self._records_left: int | None = None
+        # Block bookkeeping for the count-driven extension: the block
+        # the scan is reading now, the last one that answered, how many
+        # bytes of a record straddle the frame boundary, and where the
+        # previous extension started (so a module that stops answering
+        # cannot be asked for the same blocks twice).
+        self._current_block: int | None = None
+        self._last_data_block: int | None = None
+        self._partial_bytes = 0
+        self._extension_from: int | None = None
 
     def reset_scan_buffers(self) -> None:
         super().reset_scan_buffers()
         self._header_seen = False
         self._records_left = None
+        self._current_block = None
+        self._last_data_block = None
+        self._partial_bytes = 0
+        self._extension_from = None
+
+    def set_current_block(self, sub_byte: str, register: int) -> None:
+        """Called by the scan loop before each register read."""
+        try:
+            self._current_block = int(sub_byte, 16) << 8 | int(register)
+        except (TypeError, ValueError):
+            self._current_block = None
+
+    def extension_passes(self) -> tuple[tuple[str, tuple[int, ...]], ...]:
+        """Blocks still to read once the fixed band has been consumed.
+
+        The band the plan reads (``0x38``–``0x5F`` of sub-byte ``01``)
+        holds about 105 records; the vendor allows 1864. When the count
+        at the head of the band says more records follow than the band
+        held, this returns the sections that hold the rest — from the
+        block after the last one that answered, one block of slack, up
+        to the table's capacity — and ``()`` once the table is in, or
+        when the module stopped answering.
+        """
+        if (
+            not self._header_seen
+            or not self._records_left
+            or self._last_data_block is None
+        ):
+            return ()
+        first = self._last_data_block + 1
+        if self._extension_from is not None and first <= self._extension_from:
+            return ()
+        pending = max(self._records_left * 6 - self._partial_bytes, 1)
+        blocks = -(-pending // 16) + 1
+        last = min(first + blocks - 1, AUDIO_TABLE_LAST_BLOCK)
+        if last < first:
+            return ()
+        self._extension_from = first
+        return blocks_to_sections(first, last)
 
     def analyze_frame_payload(
         self, payload_buffer: str, payload_and_crc: str
@@ -240,6 +321,7 @@ class AudioDecoder(BaseChunkingDecoder):
         data_region = payload_and_crc[:-6]
         trailing_crc = payload_and_crc[-6:]
         stream = (payload_buffer + data_region).upper()
+        self._last_data_block = self._current_block
 
         if not self._header_seen:
             index = 0
@@ -255,8 +337,8 @@ class AudioDecoder(BaseChunkingDecoder):
                     "chunks": [],
                     "remainder": stream[index:],
                 }
-            count = _safe_int(stream[index : index + 2])
-            if not count or stream[index + 2 : index + 4] != "00":
+            count = _count_header(stream, index)
+            if count is None:
                 _LOGGER.debug(
                     "Audio module %s — no record-count header in %s",
                     self._module_address,
@@ -289,17 +371,23 @@ class AudioDecoder(BaseChunkingDecoder):
             if self._records_left is not None:
                 self._records_left -= 1
 
+        remainder = stream[idx:] if self._records_left else ""
+        self._partial_bytes = len(remainder) // 2
         return {
             "crc": trailing_crc,
             "payload_region": data_region,
             "misaligned": False,
             "chunks": chunks,
-            "remainder": stream[idx:] if self._records_left else "",
+            "remainder": remainder,
         }
 
 
 __all__ = [
+    "AUDIO_COUNT_ADDRESS",
+    "AUDIO_MAX_RECORDS",
     "AUDIO_MODE_NAMES",
+    "AUDIO_TABLE_ADDRESS",
+    "AUDIO_TABLE_LAST_BLOCK",
     "OBJECT_POWER",
     "AudioDecoder",
     "audio_function_label",

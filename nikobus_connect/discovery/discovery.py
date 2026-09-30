@@ -280,6 +280,11 @@ _SWITCH_LINK_BLOCK_END = 0x70
 #: one 8-byte record per 8-byte block).
 _DIMMER_BANK_RECORDS = 0xD9
 
+#: How many times a decoder may extend its own read (``extension_passes``)
+#: within one module scan. One round covers a table whose count was read
+#: in the fixed band; the rest is slack for a straddling record.
+_EXTENSION_ROUNDS_LIMIT = 4
+
 
 def _count_driven_passes(
     module_type: str | None, status: ModuleStatus
@@ -1273,6 +1278,14 @@ class NikobusDiscovery:
             # to ``pre_pass_sent + this_pass_sent`` — the actual reads
             # that completed — rather than the originally-planned total.
             pre_pass_sent = self._progress_module_registers_sent
+            # Decoders that size their own read (the audio table, the
+            # PC-Logic input table) are told which block each frame
+            # answers; the reply carries no block index of its own.
+            block_tracker = (
+                getattr(self._get_decoder(), "set_current_block", None)
+                if self._module_type
+                else None
+            )
             try:
                 registers_sent = 0
                 consecutive_give_ups = 0
@@ -1305,6 +1318,8 @@ class NikobusDiscovery:
                         break
                     partial_hex = f"{base_command}{reg:02X}{sub_byte}"
                     pc_link_command = make_pc_link_inventory_command(partial_hex)
+                    if block_tracker is not None:
+                        block_tracker(sub_byte, reg)
                     # Hold the command handler's bus lock for this one
                     # exchange so a queued command (a coordinator poll,
                     # a user's switch) is sent between register reads,
@@ -3237,12 +3252,72 @@ class NikobusDiscovery:
                 sub_byte=wire_sub,
             )
 
+        await self._run_extension_passes(normalized_address, base_command)
+
         # Clear per-module pass tracking so the finalize event doesn't
         # carry stale pass info from the last pass.
         self._progress_pass_index = 0
         self._progress_pass_total = 0
         self._progress_current_sub_byte = None
         await self._finalize_discovery(normalized_address)
+
+    async def _run_extension_passes(
+        self, normalized_address: str, base_command: str
+    ) -> None:
+        """Read the blocks a decoder asks for once it knows its table's size.
+
+        The audio module's link table and the PC-Logic's input table
+        carry their record count in memory, not in the module-status
+        reply, so their plans cannot be sized up front: the fixed band
+        is read first, the decoder learns the count from it, and
+        ``extension_passes()`` names the blocks that hold the rest. A
+        decoder without the hook, or one whose table fitted the band,
+        adds nothing. Bounded, and a decoder returns ``()`` once an
+        extension brought no new data, so a module that stops
+        answering cannot keep the scan going.
+        """
+        decoder = self._get_decoder() if self._module_type else None
+        extend = getattr(decoder, "extension_passes", None)
+        if extend is None:
+            return
+        for _round in range(_EXTENSION_ROUNDS_LIMIT):
+            extra = tuple(extend())
+            if not extra:
+                return
+            registers = sum(len(regs) for _sub, regs in extra)
+            _LOGGER.info(
+                "Module %s link table runs past the planned band — reading %d more register(s)",
+                normalized_address,
+                registers,
+            )
+            self._progress_module_register_total += registers
+            self._progress_pass_total += len(extra)
+            for sub_byte, register_list in extra:
+                wire_sub = _wire_sub_byte(sub_byte)
+                self._progress_pass_index += 1
+                self._progress_current_sub_byte = wire_sub
+                await self._scan_module_registers(
+                    normalized_address,
+                    base_command,
+                    register_list,
+                    sub_byte=wire_sub,
+                )
+
+    @property
+    def pc_logic_input_links(self) -> dict[str, list[dict[str, Any]]]:
+        """The PC-Logic input tables read so far, by module address.
+
+        Each entry is a decoded six-byte record of the table the vendor
+        writes at byte 1000 of a PC-Logic (see ``pc_logic_decoder``):
+        the key that feeds the logic, as stored, as a plate address and
+        as its ``#N`` frame, with the input index, slot and mode byte.
+        Surfaced for validation; not merged into the button store.
+        """
+        for decoder in getattr(self, "_decoders", []):
+            links = getattr(decoder, "input_links_by_module", None)
+            if links is not None:
+                return {address: list(records) for address, records in links.items()}
+        return {}
 
     async def parse_inventory_response(self, payload: str) -> InventoryResult | None:
         result = InventoryResult()
