@@ -63,6 +63,12 @@ def test_vendor_refs_match_product_mdb() -> None:
         "S_DB_PC_FEEDBACK_MODULE",
         # 340-00112 RGB controller, read from an install's .nkb (#519).
         "S_DB_DIM_COLORCTRL",
+        # Its family neighbours in product.mdb: the device-type byte is
+        # ``KeyProductBase``, so key 69 is the 340-00111 plinth light
+        # (type 0x45, first reported 2026-09-30) and key 71 the
+        # 340-00112 in its mono profile (0x47).
+        "S_DB_DIM_PLINT",
+        "S_DB_DIM_MONOCTRL",
         # Buttons / inputs
         "S_DB_BUSDRUKKNOP_2",
         "S_DB_BUSDRUKKNOP_2_LED",

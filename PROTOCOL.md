@@ -27,9 +27,7 @@ tracker), and, since September 2026, the vendor's Nikobus PC software
 `Niko_05_010` (colour controller), `Niko_05_100` (PC-Link),
 `Niko_05_200` (PC-Logic), `Niko_05_202` (audio), `Niko_05_207` /
 `Niko_05_207a` (feedback module), and its `product.mdb` (database
-version 21008). How that was done, what each file settled and which
-paths turned out to be dead ends is recorded in
-[`docs/vendor-software.md`](docs/vendor-software.md). The block-by-block
+version 21008). The block-by-block
 maps of what each plugin writes are in the Nikobus-HA repository,
 `documentation/vendor-plugins-memory-maps.md` and
 `documentation/rgb-controller-memory-map.md`, next to the binaries;
@@ -511,7 +509,40 @@ The vendor software dispatches on `product.mdb`'s `EEPROMtype`, its
 | 12 | Colour controller 340-00112 (colour and mono profiles) | `Niko_05_010` | never |
 
 Wall buttons and other transmitters have no memory class; they hold no
-image. The database carries no bus device-type byte: the type a module
-is filed under in the PC-Link registry (`0x46` for the colour
-controller, `mapping.py`) and the `type` signature of its `0x11` reply
-can only be learned by observing one.
+image.
+
+### The device-type byte is the product's database key
+
+The type byte a component is filed under in the PC-Link registry (§6,
+`DEVICE_TYPES` in `mapping.py`) is `product.mdb`'s `KeyProductBase`,
+the primary key of `ProductBase`. Checked over the whole catalogue:
+28 of the 33 catalogued bytes name the product row with that key (the
+five others are the library's own aliases — two virtual products, and
+three buttons the database lists under an alternative code). An
+earlier revision of this document said the database carried no
+device-type byte; it does, as its key. So every product Niko ever
+listed has a known byte, whether or not a module of it has been seen:
+
+| Byte | Key | Product | Vendor ref | Address | Status |
+|---|---|---|---|---|---|
+| `0x45` | 69 | RGB plinth light 340-00111 | `S_DB_DIM_PLINT` | 16-bit | catalogued (first seen 2026-09-30) |
+| `0x47` | 71 | Colour controller 340-00112, mono profile | `S_DB_DIM_MONOCTRL` | 16-bit | catalogued; not yet observed |
+| `0x48` | 72 | Outdoor sensor 430-00502 | `S_DB_BUITEN_SENSOR` | 22-bit | not catalogued |
+| `0x49` | 73 | Smoke detector 420-00005 | `S_DB_ROOKMELDER` | 22-bit | not catalogued |
+| `0x2E` | 46 | SMS module 05-203 (output) | `S_DB_SMSOUT` | 16-bit | not catalogued |
+| `0x24` | 36 | RF plate, 16 keys 05-310 | `S_DB_KNOP_16_RF868` | 22-bit | not catalogued |
+| `0x36` | 54 | RF plate, 8 keys 05-305 (410-00003) | `S_DB_RF_WAND_8` | 22-bit | not catalogued |
+| `0x38`, `0x3C` | 56, 60 | RF box 05-315, 2 and 4 channels | `S_DB_RFBOX2`, `S_DB_RFBOX4` | 22-bit | not catalogued |
+| `0x3E` | 62 | Remote 05-313 | `S_DB_REMOTE5x1CH` | 22-bit | not catalogued |
+| `0x27` | 39 | Remote 05-081 | `S_DB_REMOTE_CONTROL_2` | 22-bit | not catalogued |
+| `0x1A` | 26 | IR plate 05-09x, 4 keys | `S_DB_KNOP_4_IR_UNIQUE` | 22-bit | not catalogued |
+| `0x29` | 41 | Modular interface 05-055 | `S_DB_MODUL_INTERF` | 22-bit | not catalogued |
+| `0x20` | 32 | PIR 05-045 | `S_DB_PIR_OLD` | 22-bit | not catalogued |
+| `0x2C`, `0x2D` | 44, 45 | Audio inputs on a 4- / 8-key plate | `S_DB_AUDIO_IN4`, `S_DB_AUDIO_IN8` | 22-bit | not catalogued |
+| `0x0D` | 13 | PC-Logic slave 05-201 | `S_DB_LOGIC_SLAVE` | 16-bit | not catalogued |
+
+The uncatalogued ones wait for a real install: the byte is known, but
+a button-class entry needs its channel count and a module-class entry
+needs its state reply before the host can build anything from it. The
+`type` signature of a module's `0x11` reply is a different byte and is
+still learned by observing one.
