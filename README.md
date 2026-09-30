@@ -238,14 +238,15 @@ rgb_key_role(19, "1D")    # "off"
 
 Which keys are linked to a controller cannot be read from the bus — not by this library, and not by the vendor software, which only status-polls the controller and writes a project file with its settings but no link. The installer's project file is the only record, and `parse_nkb()` returns it as `rgb_links` (controller, plate, key, the bus address the key puts on the wire, mode number). A host presses the key whose role is `on` or `off`.
 
-What the vendor software *writes* into the controller is known, from its own plugin for this family (`Niko_05_010.dll`, decompiled): a 7968-byte image in four blocks — an LED profile, the link table at byte `0x190` (128 records of 18 bytes), the colour paths, a 16-byte settings record — and the plugin marks the link table as not to be read back, which is why the software only status-polls the controller. `nikobus_connect.rgb_memory` carries the layout: the blocks and their 16-byte register spans, the record codec with the plugin's parameter transformations (its two timer tables, the D65 default colour, the forced parameter values) and decoders for the settings and colour-path blocks. Nothing has been read from a module with it yet; it is what a captured write, or a read that one day answers, is checked against.
+What the vendor software *writes* into the controller is known, from its own plugin for this family (`Niko_05_010.dll`, decompiled): a 7968-byte image in four blocks — an LED profile, the link table at byte `0x190` (128 records of 18 bytes), the colour paths, a 16-byte settings record — and the plugin marks the link table as not to be read back, which is why the software only status-polls the controller. `nikobus_connect.rgb_memory` carries the layout, decode only: the blocks and their 16-byte register spans, the record decoder with the meaning of each field (its two timer tables, the D65 default colour, the forced parameter values), decoders for the settings and colour-path blocks, and the address converters. Nothing has been read from a module with it yet; it is what a capture is checked against. Nothing in it composes an image.
 
 ```python
-from nikobus_connect.rgb_memory import RGB_LINK_TABLE_BLOCK, build_rgb_link_record, record_address
+from nikobus_connect.rgb_memory import RGB_LINK_TABLE_BLOCK, RgbLinkRecord
 
 RGB_LINK_TABLE_BLOCK.registers[0]                  # ("00", 0x19), if the module is addressed in 16-byte blocks
-build_rgb_link_record(address=record_address(0x124A36, 0), mode=19, channel=0).to_bytes().hex()
-# "4928d898000f012cffffffffffffffffffff" — the validating install's M19 link (plate 124A36, key 1C), as the plugin writes it
+record = RgbLinkRecord.from_bytes(bytes.fromhex("4928D898000F012C" + "FF" * 10))
+record.wire_address, record.mode_label, record.param2_seconds
+# "1B1492", "M19 (Start/stop scenario)", 300 — the validating install's M19 link (plate 124A36, key 1C)
 ```
 
 The main executable (`nikobus.exe` 4.3.1) was decompiled too, and it settles the bus side. The software programs this family inside a link mode it keeps for the whole write, reads the module's CRC inside that same mode, and **never reads the family back**: its upload routine skips EEPROM types 10, 11 and 12 — wall buttons, the 340-00111 and the 340-00112 — before asking the module anything, which is exactly what the captured installation read showed. It has no direct colour command either: its simulation mode presses the linked key on the bus for a dimmer or colour output, exactly as a host does. Its virtual-press routine also fixes the address a record holds — the plate's project address shifted left by two with the key's 3-bit code, the bit-reversal of the `#N` wire address (`record_address()`, `address_from_wire()`). This library carries none of the programming functions; the write protocol is documented in the Nikobus-HA repository for reading captures, and nothing here writes to a module.

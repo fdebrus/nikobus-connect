@@ -35,11 +35,10 @@ question: entering link mode is a programming command.
 
 The image is 7968 bytes in four blocks (:data:`RGB_IMAGE_BLOCKS`). The
 link table is block 1: 128 slots of 18 bytes, an empty slot all
-``0xFF``. :class:`RgbLinkRecord` is one slot; :func:`build_rgb_link_record`
-applies the plugin's transformations to project values the way it does;
-:func:`decode_rgb_link_table` reads a whole block back — which nobody
-has managed on the bus yet, so it is there for the day a capture or a
-read makes it possible, and to check a captured write against.
+``0xFF``. :class:`RgbLinkRecord` is one slot, decoded; :func:`decode_rgb_link_table`
+reads a whole block — which nobody has managed on the bus yet, so it is
+there for the day a capture makes it possible. This module only decodes:
+nothing in it composes an image, and nothing in the library writes one.
 
 The address bytes hold the button address in the form the software
 keeps it, not the form the wire carries: the plate's project address
@@ -131,8 +130,8 @@ RGB_LINK_RECORD_SIZE = 18
 RGB_LINK_RECORD_COUNT = 128
 RGB_EMPTY_LINK_RECORD = b"\xff" * RGB_LINK_RECORD_SIZE
 
-#: Timer table for parameter 1 of modes 6 and 12, in seconds: a project
-#: value 0–15 is stored as the table entry, anything else as is.
+#: Timer table for parameter 1 of modes 6 and 12, in seconds: the plugin
+#: stores a project value 0–15 as the table entry, anything else as is.
 RGB_T1_SECONDS: tuple[int, ...] = (
     10, 60, 120, 180, 240, 300, 360, 420, 480, 540, 900, 1800, 2700, 3600, 5400, 7200,
 )
@@ -251,19 +250,6 @@ class RgbLinkRecord:
     def has_colour_path(self) -> bool:
         return self.colour_path != 0x7F or not self.colour_path_flag
 
-    def to_bytes(self) -> bytes:
-        out = bytearray(RGB_EMPTY_LINK_RECORD)
-        out[0:3] = (self.address & 0xFFFFFF).to_bytes(3, "big")
-        out[3] = ((self.mode & 0x1F) << 3) | (self.channel & 0x07)
-        out[4:6] = (self.param1 & 0xFFFF).to_bytes(2, "big")
-        out[6:8] = (self.param2 & 0xFFFF).to_bytes(2, "big")
-        out[8:12] = (self.colour & 0xFFFFFFFF).to_bytes(4, "big")
-        out[12:14] = (self.level & 0xFFFF).to_bytes(2, "big")
-        out[14:16] = (self.param7 & 0xFFFF).to_bytes(2, "big")
-        out[16] = (self.colour_path & 0x7F) | (0x80 if self.colour_path_flag else 0)
-        out[17] = self.filler & 0xFF
-        return bytes(out)
-
     @classmethod
     def from_bytes(cls, data: bytes | bytearray) -> RgbLinkRecord:
         raw = bytes(data[:RGB_LINK_RECORD_SIZE])
@@ -289,68 +275,6 @@ def is_empty_rgb_link_record(data: bytes | bytearray) -> bool:
     return bytes(data[:RGB_LINK_RECORD_SIZE]) == RGB_EMPTY_LINK_RECORD
 
 
-def build_rgb_link_record(
-    *,
-    address: int,
-    mode: int,
-    channel: int,
-    param1: int | None = None,
-    param2: int | None = None,
-    colour_xy: tuple[int, int] | None = None,
-    level: int | None = None,
-    param7: int | None = None,
-    colour_path: int | None = None,
-    colour_path_flag: bool = False,
-) -> RgbLinkRecord:
-    """Compose a record from project values the way the plugin does.
-
-    ``param1`` and ``param2`` are the project's 0–15 parameter values
-    (``None`` for the project's defaults, 0 and 15); parameter 1 is
-    overridden to 15 for the modes in :func:`param1_is_forced`, then
-    looked up in :data:`RGB_T1_SECONDS` for modes 6 and 12, and
-    parameter 2 in :data:`RGB_T2_SECONDS`. ``colour_xy`` is a CIE xy
-    pair in 1/65535; a mode-3 link without one gets D65 white and the
-    default level, any other mode leaves the colour bytes ``0xFF``.
-    ``level`` is the project's raw level value, stored as
-    ``((level >> 16) * 2) & 0xFFFF``; ``param7`` is stored as is below
-    0x8000 and as ``(value | 0x20000) >> 2`` above. ``colour_path`` is
-    the index of the path in block 2's table (0–31).
-    """
-    p1 = RGB_PARAM1_DEFAULT if param1 is None else param1
-    if param1_is_forced(mode):
-        p1 = 15
-    if mode in RGB_T1_MODES and 0 <= p1 < len(RGB_T1_SECONDS):
-        p1 = RGB_T1_SECONDS[p1]
-    p2 = RGB_PARAM2_DEFAULT if param2 is None else param2
-    if 0 <= p2 < len(RGB_T2_SECONDS):
-        p2 = RGB_T2_SECONDS[p2]
-
-    if colour_xy is None and mode == 3:
-        colour = (RGB_D65_XY[0] << 16) | RGB_D65_XY[1]
-        stored_level = RGB_DEFAULT_LEVEL
-        stored_p7 = 0
-    else:
-        colour = 0xFFFFFFFF if colour_xy is None else ((colour_xy[0] & 0xFFFF) << 16) | (colour_xy[1] & 0xFFFF)
-        stored_level = RGB_ABSENT if level is None else ((level >> 16) * 2) & 0xFFFF
-        if param7 is None:
-            stored_p7 = RGB_ABSENT
-        else:
-            stored_p7 = ((param7 | 0x20000) >> 2) & 0xFFFF if param7 > 0x7FFF else param7
-
-    return RgbLinkRecord(
-        address=address & 0xFFFFFF,
-        mode=mode & 0x1F,
-        channel=channel & 0x07,
-        param1=p1 & 0xFFFF,
-        param2=p2 & 0xFFFF,
-        colour=colour,
-        level=stored_level,
-        param7=stored_p7,
-        colour_path=0x7F if colour_path is None else colour_path & 0x7F,
-        colour_path_flag=True if colour_path is None else colour_path_flag,
-    )
-
-
 def decode_rgb_link_table(data: bytes | bytearray) -> tuple[RgbLinkRecord, ...]:
     """Every used slot of a link-table block, in table order.
 
@@ -365,15 +289,6 @@ def decode_rgb_link_table(data: bytes | bytearray) -> tuple[RgbLinkRecord, ...]:
             continue
         records.append(RgbLinkRecord.from_bytes(chunk))
     return tuple(records)
-
-
-def encode_rgb_link_table(records: tuple[RgbLinkRecord, ...] | list[RgbLinkRecord]) -> bytes:
-    """The link-table block the plugin would write for ``records``:
-    slots in order, the rest ``0xFF``."""
-    if len(records) > RGB_LINK_RECORD_COUNT:
-        raise ValueError(f"the link table holds {RGB_LINK_RECORD_COUNT} records, got {len(records)}")
-    body = b"".join(record.to_bytes() for record in records)
-    return body + b"\xff" * (RGB_LINK_TABLE_BLOCK.length - len(body))
 
 
 # --- the settings record ----------------------------------------------------
@@ -515,11 +430,9 @@ __all__ = [
     "RgbImageBlock",
     "RgbLinkRecord",
     "address_from_wire",
-    "build_rgb_link_record",
     "decode_rgb_colour_paths",
     "decode_rgb_config",
     "decode_rgb_link_table",
-    "encode_rgb_link_table",
     "is_empty_rgb_link_record",
     "param1_is_forced",
     "record_address",

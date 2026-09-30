@@ -21,11 +21,9 @@ from nikobus_connect.rgb_memory import (
     RGB_T2_SECONDS,
     RgbLinkRecord,
     address_from_wire,
-    build_rgb_link_record,
     decode_rgb_colour_paths,
     decode_rgb_config,
     decode_rgb_link_table,
-    encode_rgb_link_table,
     is_empty_rgb_link_record,
     param1_is_forced,
     record_address,
@@ -75,20 +73,22 @@ def test_parameter_1_is_forced_to_15_for_the_plugin_s_modes() -> None:
     assert {m for m in range(32) if param1_is_forced(m)} == {3, 7, 9, 10} | set(range(14, 32))
 
 
+M19_RECORD = bytes.fromhex("4928D898000F012C" + "FF" * 10)
+
+
 def test_the_validating_install_s_m19_link() -> None:
     """Nikobus-HA #519: plate 124A36, key 1C (code 0), mode M19 on
-    output 1, pressing #N1B1492 on the bus. The record holds the address
-    in the software's form, plate << 2 | key, which bit-reverses to the
-    wire form; parameter 1 is forced to 15 and the default parameter 2
-    (15) becomes 300 s."""
-    address = record_address(0x124A36, 0)
-    assert address == 0x4928D8
-    record = build_rgb_link_record(address=address, mode=19, channel=0)
-    assert record.to_bytes().hex().upper() == "4928D89800" "0F012C" + "FF" * 10
+    output 1, pressing #N1B1492 on the bus. The record the plugin
+    composes for it holds the address in the software's form,
+    plate << 2 | key, which bit-reverses to the wire form; parameter 1
+    forced to 15; the default parameter 2 (15) as 300 s."""
+    record = RgbLinkRecord.from_bytes(M19_RECORD)
+    assert record.address == record_address(0x124A36, 0) == 0x4928D8
     assert record.address_hex == "4928D8"
     assert record.wire_address == "1B1492"
+    assert (record.mode, record.channel) == (19, 0)
     assert record.mode_label == "M19 (Start/stop scenario)"
-    assert record.param1_seconds is None  # 15 is not a timer in mode 19
+    assert record.param1 == 15 and record.param1_seconds is None  # not a timer in mode 19
     assert record.param2_seconds == 300
     assert record.colour_xy is None
     assert not record.has_colour_path
@@ -102,49 +102,29 @@ def test_the_address_form_matches_both_observed_keys() -> None:
     assert reverse_24(reverse_24(0x123456)) == 0x123456
 
 
-def test_mode_6_parameter_1_goes_through_t1() -> None:
-    record = build_rgb_link_record(address=0x4928D8, mode=6, channel=2, param1=3, param2=0)
-    assert record.to_bytes()[3] == (6 << 3) | 2
-    assert record.param1_seconds == 180
+def test_mode_6_parameter_1_is_a_t1_timer() -> None:
+    raw = bytes.fromhex("4928D8" "32" "00B4" "0001" + "FF" * 10)  # mode 6, channel 2
+    record = RgbLinkRecord.from_bytes(raw)
+    assert (record.mode, record.channel) == (6, 2)
+    assert record.param1_seconds == 180 == RGB_T1_SECONDS[3]
     assert record.param2_seconds == 1
 
 
-def test_mode_3_without_a_colour_stores_d65_white() -> None:
-    record = build_rgb_link_record(address=0x1, mode=3, channel=0)
-    raw = record.to_bytes()
-    assert raw[8:12].hex().upper() == "500D543A"
-    assert raw[12:14].hex().upper() == "FFFE"
-    assert raw[14:16] == b"\x00\x00"
+def test_a_mode_3_default_colour_decodes_as_d65_white() -> None:
+    raw = bytes.fromhex("000001" "18" "000F" "012C" "500D543A" "FFFE" "0000" "FF" "FF")
+    record = RgbLinkRecord.from_bytes(raw)
+    assert record.mode == 3
     x, y = record.colour_xy or (0.0, 0.0)
     assert round(x, 4) == 0.3127 and round(y, 4) == 0.3290
     assert RGB_D65_XY == (0x500D, 0x543A)
-
-
-def test_level_and_param7_transformations() -> None:
-    record = build_rgb_link_record(
-        address=0x1, mode=16, channel=0, colour_xy=(0x1234, 0x5678), level=0x00050000, param7=0x9000
-    )
-    raw = record.to_bytes()
-    assert raw[8:12].hex().upper() == "12345678"
-    assert int.from_bytes(raw[12:14], "big") == 10
-    assert int.from_bytes(raw[14:16], "big") == ((0x9000 | 0x20000) >> 2) & 0xFFFF
-    small = build_rgb_link_record(address=0x1, mode=16, channel=0, param7=0x1234)
-    assert small.param7 == 0x1234
+    assert record.level == 0xFFFE and record.param7 == 0
 
 
 def test_colour_path_index_and_flag() -> None:
-    record = build_rgb_link_record(address=0x1, mode=19, channel=0, colour_path=5, colour_path_flag=True)
-    assert record.to_bytes()[16] == 0x85
+    raw = bytes.fromhex("000001" "98" "000F" "012C" "FFFFFFFF" "FFFF" "FFFF" "85" "FF")
+    record = RgbLinkRecord.from_bytes(raw)
+    assert record.colour_path == 5 and record.colour_path_flag
     assert record.has_colour_path
-    back = RgbLinkRecord.from_bytes(record.to_bytes())
-    assert back.colour_path == 5 and back.colour_path_flag
-
-
-def test_record_round_trips() -> None:
-    record = build_rgb_link_record(
-        address=0xABCDEF, mode=17, channel=7, param1=2, param2=9, colour_xy=(1, 2), level=0x00030000
-    )
-    assert RgbLinkRecord.from_bytes(record.to_bytes()) == record
     with pytest.raises(ValueError):
         RgbLinkRecord.from_bytes(b"\x00" * 5)
 
@@ -154,19 +134,18 @@ def test_an_empty_slot_is_all_ff() -> None:
     assert not is_empty_rgb_link_record(b"\xff" * 17 + b"\x00")
 
 
-def test_table_round_trips_and_skips_empty_slots() -> None:
-    first = build_rgb_link_record(address=0x4928D8, mode=19, channel=0)
-    second = build_rgb_link_record(address=0x4928DA, mode=13, channel=0)
-    table = encode_rgb_link_table([first, second])
+def test_table_decode_skips_empty_slots() -> None:
+    second = bytes.fromhex("4928DA68000F012C" + "FF" * 10)  # mode 13, channel 0
+    table = M19_RECORD + second + b"\xff" * (RGB_LINK_TABLE_BLOCK.length - 36)
     assert len(table) == RGB_LINK_TABLE_BLOCK.length
-    assert table[36:] == b"\xff" * (RGB_LINK_TABLE_BLOCK.length - 36)
-    assert decode_rgb_link_table(table) == (first, second)
+    decoded = decode_rgb_link_table(table)
+    assert [r.address_hex for r in decoded] == ["4928D8", "4928DA"]
+    assert decoded[1].mode == 13
     # a hole in the table is skipped, not a stop
-    holed = bytearray(table)
-    holed[0:18] = b"\xff" * 18
-    assert decode_rgb_link_table(holed) == (second,)
-    with pytest.raises(ValueError):
-        encode_rgb_link_table([first] * (RGB_LINK_RECORD_COUNT + 1))
+    holed = b"\xff" * 18 + table[18:]
+    assert [r.address_hex for r in decode_rgb_link_table(holed)] == ["4928DA"]
+    # a trailing partial slot is ignored
+    assert decode_rgb_link_table(table[:30]) == (decoded[0],)
 
 
 def test_config_record() -> None:
