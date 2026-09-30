@@ -134,14 +134,36 @@ DEVICE_TYPES: dict[str, dict[str, Any]] = {
     # not scanned (see ``NON_OUTPUT_MODULE_TYPES``) until a register
     # dump says where its programming lives.
     #
-    # The same product family has a mono variant
-    # (``S_DB_DIM_MONOCTRL``) and an RGB plinth dimmer (340-00111);
-    # their device-type bytes have not been observed.
+    # The device-type byte is product.mdb's ``KeyProductBase``, the
+    # primary key of ``ProductBase`` — checked over the whole catalogue
+    # (2026-09-30): 28 of the 33 bytes here name the product row with
+    # that key, and the five others are this file's own aliases. The
+    # 0x46 controller is key 70; its family neighbours are key 69, the
+    # RGB plinth light 340-00111 (``S_DB_DIM_PLINT``, memory class 11,
+    # first reported the same day as type 0x45 at a 16-bit address),
+    # and key 71, the same 340-00112 in its mono profile
+    # (``S_DB_DIM_MONOCTRL``). Both are catalogued as modules so they
+    # reach the inventory under their name; neither is routed to the
+    # RGB light platform, because no state reply from either has been
+    # captured — the mono controller may well answer the same six-byte
+    # image as 0x46, but "may well" builds no entity.
+    "45": {
+        "Category": "Module",
+        "Model": "340-00111",
+        "Name": "RGB plinth light",
+        "VendorRef": "S_DB_DIM_PLINT",
+    },
     "46": {
         "Category": "Module",
         "Model": "340-00112",
         "Name": "RGB controller",
         "VendorRef": "S_DB_DIM_COLORCTRL",
+    },
+    "47": {
+        "Category": "Module",
+        "Model": "340-00112",
+        "Name": "RGB controller, mono",
+        "VendorRef": "S_DB_DIM_MONOCTRL",
     },
     "42": {
         "Category": "Module",
