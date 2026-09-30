@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **`PROTOCOL.md` is back, brought up to date with the vendor software.** The protocol reference added in 0.35.0 and removed the next day returns, revised against the decompiled Nikobus PC software 4.3.1 (`nikobus.exe`, `serial.dll`, the eight product plugins and `product.mdb`): both CRCs and the framing confirmed from `serial.dll`; the vendor's write sequence recorded as ‡ (documented, never implemented); the vendor's retry policy beside the library's; the PC-Link and PC-Logic images block by block against the scan plans, including the registry at byte 19000 with its `5E 55 AA AA` header; the switch record as the plugin composes it, with the hash-index byte sum and the fourth link parameter in the key bits; the rule that every mode byte holds `LinkIDNumber` (M13 10, M14 11, M15 12 on the switch module, the sequencer among them); the dimmer's 48-byte configuration block at `0x7CA`; the audio image (records at byte 5000, up to 1864 of them, the library's band about 105); the feedback-module and colour-controller images the vendor never reads back; and a table of the memory classes and plugins. Documentation only.
+
 ## 0.43.0
 
 - **Switch-module modes M13, M14 and M15 read from the right bytes.** The vendor's product database numbers the switch modes M11 = 8, M12 = 9, M13 = 10, M14 = 11, M15 = 12, and the vendor plugin for the switch and roller modules (`Niko_05_000_01.dll`, decompiled) writes that number into the record's mode nibble; its own upload decoder flags byte 10 as the sequencer. The table had 10 = M14 and 11 = M15 and no 12, one short: a "light scene on" link was labelled "light scene on / off", and a real M15 link was dropped as an unknown mode. Byte 10 is now M13 (Sequencer on / off), 11 M14, 12 M15, for the compact switch as well. The mapping follows the vendor tables; it has not been checked against a captured scene-link record on a real install.
