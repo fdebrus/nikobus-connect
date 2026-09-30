@@ -238,6 +238,18 @@ rgb_key_role(19, "1D")    # "off"
 
 Which keys are linked to a controller cannot be read from the bus — not by this library, and not by the vendor software, which only status-polls the controller and writes a project file with its settings but no link. The installer's project file is the only record, and `parse_nkb()` returns it as `rgb_links` (controller, plate, key, the bus address the key puts on the wire, mode number). A host presses the key whose role is `on` or `off`.
 
+What the vendor software *writes* into the controller is known, from its own plugin for this family (`Niko_05_010.dll`, decompiled): a 7968-byte image in four blocks — an LED profile, the link table at byte `0x190` (128 records of 18 bytes), the colour paths, a 16-byte settings record — and the plugin marks the link table as not to be read back, which is why the software only status-polls the controller. `nikobus_connect.rgb_memory` carries the layout: the blocks and their 16-byte register spans, the record codec with the plugin's parameter transformations (its two timer tables, the D65 default colour, the forced parameter values) and decoders for the settings and colour-path blocks. Nothing has been read from a module with it yet; it is what a captured write, or a read that one day answers, is checked against.
+
+```python
+from nikobus_connect.rgb_memory import RGB_LINK_TABLE_BLOCK, build_rgb_link_record
+
+RGB_LINK_TABLE_BLOCK.registers[0]                  # ("00", 0x19), if the module is addressed in 16-byte blocks
+build_rgb_link_record(address=0x124A36, mode=19, channel=0).to_bytes().hex()
+# "124a3698000f012cffffffffffffffffffff" — the validating install's M19 link, as the plugin writes it
+```
+
+The DLL holds no bus code: the function code the software writes with, and whether a programming session precedes it, are the main executable's and still unknown.
+
 ## Reading a `.nkb` project
 
 `nikobus_connect.nkb` parses a Nikobus project export (a ZIP holding an Access database) locally, with a vendored pure-Python reader. It yields the module and button inventory, the friendly names and rooms the bus itself does not carry, and the scene definitions.
