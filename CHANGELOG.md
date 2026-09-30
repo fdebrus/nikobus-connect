@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **`docs/vendor-software.md` records the vendor-software work.** What was decompiled (the executable, `serial.dll`, the eight product plugins, `product.mdb`), how, the plugin interface (`CalcMemoryMap`, `GetDLLReadInfo`, `TranslateUpload`, …), what each file settled, the dead ends — the colour controller's and the feedback module's tables cannot be read from the bus, "load existing installation" reports no colour link, there is no direct colour command — what changed in the library because of it (0.42.0 to 0.44.0) and what a capture could still settle. `PROTOCOL.md` links to it. Documentation only.
+
 ## 0.44.0
 
 - **The audio module's link table is read to its count, not to a fixed band.** The vendor plugin (`Niko_05_202`, decompiled) writes a two-byte little-endian record count at byte 4998 and the records from byte 5000, with room for 1864; the scan read a fixed band of forty blocks, about 105 records, and dropped the rest without a word. The decoder now takes the count as two bytes (the validating module's `23 00` is still 35; the old rule that the second byte must be `00` capped tables at 255), and once the fixed band is consumed it asks the scan loop for the blocks that hold the remaining records (`AudioDecoder.extension_passes`), across sub-bytes `01` to `03` as needed, one block of slack, capped at the table's capacity. A table that fits the band reads exactly as before.

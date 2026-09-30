@@ -27,10 +27,13 @@ tracker), and, since September 2026, the vendor's Nikobus PC software
 `Niko_05_010` (colour controller), `Niko_05_100` (PC-Link),
 `Niko_05_200` (PC-Logic), `Niko_05_202` (audio), `Niko_05_207` /
 `Niko_05_207a` (feedback module), and its `product.mdb` (database
-version 21008). The block-by-block maps of what each plugin writes are
-in the Nikobus-HA repository, `documentation/vendor-plugins-memory-maps.md`
-and `documentation/rgb-controller-memory-map.md`; this document keeps
-what a reader of the bus needs.
+version 21008). How that was done, what each file settled and which
+paths turned out to be dead ends is recorded in
+[`docs/vendor-software.md`](docs/vendor-software.md). The block-by-block
+maps of what each plugin writes are in the Nikobus-HA repository,
+`documentation/vendor-plugins-memory-maps.md` and
+`documentation/rgb-controller-memory-map.md`, next to the binaries;
+this document keeps what a reader of the bus needs.
 
 ---
 
