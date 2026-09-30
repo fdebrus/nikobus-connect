@@ -12,14 +12,15 @@ and ``nikobus.exe`` 4.3.1 was decompiled next. What it does with this
 family (EEPROM types 11, the plinth light, and 12, the controller; 10 is
 the wall buttons):
 
-* **Writing.** Link mode on (function 0x18), clear (0x23), then every
-  16-byte block of the image that is not all ``0xFF`` with function
-  0x14 — block index = byte address / 16, so the link table is blocks
-  0x19–0xA8 — while the module stays in link mode for the whole write
-  (other families are taken out of and back into link mode between
-  blocks); then the CRC16 of the whole image is compared with what
-  function 0x13 answers, still in link mode, and link mode goes off
-  (0x19). The function codes are in :mod:`nikobus_connect.protocol`.
+* **Writing.** The software puts the module in a link (programming)
+  mode, clears it, writes the image in 16-byte blocks — block index =
+  byte address / 16, so the link table is blocks 0x19–0xA8 — keeps the
+  module in link mode for the whole write (other families are taken out
+  of and back into it between blocks), then compares the CRC16 of the
+  whole image with what the module's CRC query answers, still in link
+  mode, and leaves link mode. This library carries none of those
+  functions: a host reads state and presses keys, and nothing here
+  writes to a module.
 * **Reading.** Never. The upload routine skips EEPROM types 10, 11 and
   12 outright, before asking the module anything, and the plugin's own
   read-back lengths (:data:`RGB_READBACK_LENGTHS`) would end the loop at
@@ -29,9 +30,8 @@ the wall buttons):
 
 So the one read the software ever makes of this family is the CRC, and
 it makes it inside link mode. Whether the controller answers block reads
-(0x10) inside link mode, as it does not outside, is the open question a
-bus experiment can settle — and the reason the vendor never reads it
-back may simply be that the software was never written to.
+inside link mode, as it does not outside, is untested, and not a host's
+question: entering link mode is a programming command.
 
 The image is 7968 bytes in four blocks (:data:`RGB_IMAGE_BLOCKS`). The
 link table is block 1: 128 slots of 18 bytes, an empty slot all

@@ -153,41 +153,6 @@ FUNC_SET_TIME: Final[int] = 0x1E
 FUNC_READ_BLOCK8: Final[int] = 0x22
 """Read one 8-byte memory block (dimmer-class modules)."""
 
-# The programming functions, from the vendor software (nikobus.exe 4.3.1,
-# decompiled September 2026 for Nikobus-HA #519). The library sends none
-# of them: they are here so a capture can be read and so the write side
-# is documented where the read side is. Every frame is ``func, addr_lo,
-# addr_hi, args…`` followed by the CRC16 the library already computes.
-# The software's write sequence for a module is: link mode on (0x18),
-# clear (0x23), the non-empty blocks (0x14 / 0x21, a partially covered
-# first or last block read back first with 0x10 / 0x22 and merged), then
-# link mode on again, CRC (0x13) compared with the CRC16 of the whole
-# image, link mode off (0x19). The PC-Logic and PC-Link (EEPROM types 4
-# and 5) get no link mode but memory-invalid (0x1C) before and
-# memory-valid (0x1B) after the blocks, and no CRC check; the Audio
-# module (7) skips the CRC check too. Between blocks the software drops
-# and re-enters link mode, except for EEPROM types 10, 11 and 12
-# (buttons, the 340-00111 plinth light and the 340-00112 controller),
-# which stay in link mode for the whole write. EEPROM types, from the
-# software's own message table: 1 switch, 9 compact switch, 2 roller,
-# 3 dimmer, 8 compact dimmer, 4 PC-Logic, 5 PC-Link, 6 feedback,
-# 7 audio, 10 buttons, 11 colour plinth light, 12 colour controller,
-# 13 sensor.
-FUNC_WRITE_BLOCK16: Final[int] = 0x14
-"""Write one 16-byte memory block: args = block index (LE) + 16 bytes."""
-FUNC_WRITE_BLOCK8: Final[int] = 0x21
-"""Write one 8-byte memory block (dimmer-class modules)."""
-FUNC_LINK_MODE_ON: Final[int] = 0x18
-"""Put a module in link (programming) mode; no args."""
-FUNC_LINK_MODE_OFF: Final[int] = 0x19
-"""Take a module out of link mode; no args."""
-FUNC_MEMORY_VALID: Final[int] = 0x1B
-"""Mark a PC-Link's or PC-Logic's memory valid after a write; no args."""
-FUNC_MEMORY_INVALID: Final[int] = 0x1C
-"""Mark a PC-Link's or PC-Logic's memory invalid before a write; no args."""
-FUNC_CLEAR_EEPROM: Final[int] = 0x23
-"""Clear a module's EEPROM before a write; no args."""
-
 
 @dataclass(frozen=True)
 class ModuleStatus:
