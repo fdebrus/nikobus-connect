@@ -111,8 +111,11 @@ def test_timer_value_out_of_range_returns_none() -> None:
     """
     # M05 with nibble 10 → out of range for the 4-value push-time table
     assert _timer_value(0x04, 10) == (None, None)
-    # M01 with nibble 5 → out of range for the 3-value step table
-    assert _timer_value(0x00, 5) == (None, None)
+    # M01 with nibble 5: the vendor's third token for this table is a
+    # range, ``S_DB_DIM_ON_OFF_2-F`` — one label for nibbles 2..15.
+    assert _timer_value(0x00, 2)[0] == "T2=Dimming time off=Dimming time on"
+    assert _timer_value(0x00, 5)[0] == "T2=Dimming time off=Dimming time on"
+    assert _timer_value(0x00, 15)[0] == "T2=Dimming time off=Dimming time on"
 
 
 def test_timer_value_unparameterized_modes_return_none() -> None:

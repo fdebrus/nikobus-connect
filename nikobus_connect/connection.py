@@ -70,6 +70,14 @@ class NikobusConnect:
         """Establish the connection."""
         _LOGGER.debug("Attempting to connect to Nikobus: %s", self._connection_string)
 
+        # A reconnect after a silent bus arrives here with the previous
+        # transport still open: close it first, or the old socket stays
+        # open on the bridge (a one-client bridge then refuses the new
+        # one) and the old serial reader keeps taking its share of the
+        # bytes.
+        if self._writer is not None or self._reader is not None:
+            await self.disconnect()
+
         try:
             if ":" in self._connection_string and not self._connection_string.startswith("/"):
                 host, port = self._connection_string.split(":", 1)
@@ -83,7 +91,10 @@ class NikobusConnect:
                     stopbits=1,
                     xonxoff=False,
                     rtscts=False,
-                    dsrdtr=False
+                    dsrdtr=False,
+                    # One descriptor on the port: a second open fails
+                    # instead of silently sharing the bytes.
+                    exclusive=True,
                 )
 
             self._is_connected = True

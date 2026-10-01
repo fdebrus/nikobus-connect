@@ -148,6 +148,35 @@ def _count_header(stream: str, index: int) -> int | None:
     return count
 
 
+#: Offset of the count within the band's first block: byte 4998 sits at
+#: offset 6 of block ``0x138`` (byte 4992), the first block the plan reads.
+_HEADER_OFFSET_HEX = (AUDIO_COUNT_ADDRESS - (AUDIO_COUNT_ADDRESS // 16) * 16) * 2
+
+
+def _header_index(stream: str) -> int | None:
+    """Where the two-byte count starts in ``stream``, or ``None``.
+
+    The vendor writes the count at a fixed place, byte 4998, which is
+    offset 6 of the first block the plan reads; that position is tried
+    first. Only when nothing valid sits there is the leading ``FF``
+    filler skipped — and a count whose low byte is ``FF`` (255, 511, …)
+    is exactly what a greedy skip would eat, which is why the fixed
+    position comes first.
+    """
+    if (
+        len(stream) >= _HEADER_OFFSET_HEX + 4
+        and stream[:_HEADER_OFFSET_HEX] == "FF" * (_HEADER_OFFSET_HEX // 2)
+        and _count_header(stream, _HEADER_OFFSET_HEX) is not None
+    ):
+        return _HEADER_OFFSET_HEX
+    index = 0
+    while stream.startswith("FF", index):
+        index += 2
+    if index + 4 > len(stream):
+        return None
+    return index
+
+
 def split_link_table(stream_hex: str) -> list[str]:
     """Split a bank-01 byte stream into its six-byte records.
 
@@ -157,10 +186,8 @@ def split_link_table(stream_hex: str) -> list[str]:
     band).
     """
     stream = (stream_hex or "").upper()
-    index = 0
-    while stream.startswith("FF", index):
-        index += 2
-    if index + 4 > len(stream):
+    index = _header_index(stream)
+    if index is None:
         return []
     count = _count_header(stream, index)
     if count is None:
@@ -189,6 +216,16 @@ def decode(payload_hex: str, raw_bytes: list[str], context: Any) -> dict[str, An
         )
         return None
 
+    if raw_bytes[0] != "01":
+        # The vendor's own upload decoder takes a record only when its
+        # sixth byte is 1; anything else is an erased or partial slot.
+        _LOGGER.debug(
+            "Skipped audio module %s — validity byte %s, payload %s",
+            context.module_address,
+            raw_bytes[0],
+            payload_hex,
+        )
+        return None
     object_raw = _safe_int(raw_bytes[1])
     function_raw = _safe_int(raw_bytes[2])
     if object_raw is None or function_raw is None:
@@ -324,18 +361,16 @@ class AudioDecoder(BaseChunkingDecoder):
         self._last_data_block = self._current_block
 
         if not self._header_seen:
-            index = 0
-            while stream.startswith("FF", index):
-                index += 2
-            if index + 4 > len(stream):
-                # Nothing but filler so far — keep only a possible
-                # partial header for the next frame.
+            index = _header_index(stream)
+            if index is None:
+                # Nothing but filler so far — keep what there is for
+                # the next frame, the header may straddle the boundary.
                 return {
                     "crc": trailing_crc,
                     "payload_region": data_region,
                     "misaligned": False,
                     "chunks": [],
-                    "remainder": stream[index:],
+                    "remainder": stream,
                 }
             count = _count_header(stream, index)
             if count is None:

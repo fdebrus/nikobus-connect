@@ -211,23 +211,26 @@ def test_build_flat_channel_map_skips_non_output_device_types():
     assert build_flat_channel_map(buf, coord) == []
 
 
-def test_build_flat_channel_map_skips_modules_with_zero_channel_count():
-    """If the coordinator can't size a module (returns 0 / None),
-    that module is silently skipped — its entries can't be safely
-    placed in the flat map."""
+def test_build_flat_channel_map_sizes_unsized_modules_from_the_catalogue():
+    """A module the coordinator cannot size (not in its config yet)
+    still occupies its channels in the flat map, sized from the
+    catalogue — skipping it would shift every later link onto the
+    wrong module. A type the catalogue cannot size either is skipped."""
 
     buf = RegistryBuffer()
-    buf.add(_record("0E6C", 0x03))
+    buf.add(_record("0E6C", 0x03))   # dimmer: 12 channels in the catalogue
+    buf.add(_record("801D", 0x46))   # RGB controller: no channel count anywhere
     buf.add(_record("9105", 0x02))
 
     coord = MagicMock()
     coord.get_module_channel_count = MagicMock(side_effect=lambda addr: {
-        "0E6C": 0,  # coordinator can't size — skipped
+        "0E6C": 0,  # coordinator can't size — catalogue says 12
         "9105": 6,
     }.get(addr, 0))
 
     flat = build_flat_channel_map(buf, coord)
-    assert flat == [
+    assert flat[:12] == [("0E6C", ch) for ch in range(1, 13)]
+    assert flat[12:] == [
         ("9105", 1), ("9105", 2), ("9105", 3),
         ("9105", 4), ("9105", 5), ("9105", 6),
     ]
@@ -242,14 +245,15 @@ def test_build_flat_channel_map_handles_missing_coordinator():
 
 
 def test_build_flat_channel_map_handles_missing_get_count_method():
-    """A coordinator without ``get_module_channel_count`` returns an
-    empty map without raising — the lookup is treated as failed."""
+    """A coordinator without ``get_module_channel_count`` does not
+    raise — the lookup is treated as failed and the catalogue sizes
+    the module."""
 
     buf = RegistryBuffer()
     buf.add(_record("0E6C", 0x03))
 
     coord = object()  # bare object — no method
-    assert build_flat_channel_map(buf, coord) == []
+    assert build_flat_channel_map(buf, coord) == [("0E6C", ch) for ch in range(1, 13)]
 
 
 # ---------------------------------------------------------------------------

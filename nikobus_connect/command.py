@@ -60,7 +60,8 @@ class NikobusCommandHandler:
         # then sees the module's link table start one block late and
         # discards it as corrupt.
         self.bus_lock: asyncio.Lock = asyncio.Lock()
-        self._pending_get_futures: dict[str, asyncio.Future[str]] = {}
+        # Every caller waiting on a module group's state, by ``ADDR_group``.
+        self._pending_get_futures: dict[str, list[asyncio.Future[str]]] = {}
         self._queued_get_keys: set[str] = set()
         # Set-output requests waiting in the queue, by ``ADDR_group``: a
         # second request for the same group joins the pending item
@@ -132,6 +133,14 @@ class NikobusCommandHandler:
                     set_addr, group = set_group
                     if self._pending_set_groups.get(f"{set_addr}_{group}") is command_item:
                         del self._pending_set_groups[f"{set_addr}_{group}"]
+                    # The buffer is shared with the host, which writes a
+                    # module's answer into it whenever a state read
+                    # completes. A read that landed while this request
+                    # waited would have undone the channel writes it
+                    # carries, so they are applied again now, right
+                    # before the frame is taken from the buffer.
+                    for channel, value in command_item.get("channels", {}).items():
+                        self.set_bytearray_state(set_addr, channel, value)
                     command = self._build_set_group_command(set_addr, group)
                     command_item["command"] = command
 
@@ -158,6 +167,12 @@ class NikobusCommandHandler:
                             )
                         if future and not future.done():
                             future.set_result(result)
+                        if gid in ("12", "17"):
+                            # Callers whose duplicate GET was folded
+                            # into this exchange are answered too.
+                            self.resolve_pending_get(
+                                address, 1 if gid == "12" else 2, result
+                            )
                         if completion_handler and callable(completion_handler):
                             res = completion_handler()
                             if inspect.isawaitable(res):
@@ -171,6 +186,8 @@ class NikobusCommandHandler:
                     _LOGGER.exception("Failed to process command %s", command)
                     if future and not future.done():
                         future.set_exception(err)
+                    if gid in ("12", "17") and address:
+                        self._fail_pending_gets(address, 1 if gid == "12" else 2, err)
                 finally:
                     self._command_queue.task_done()
 
@@ -214,7 +231,12 @@ class NikobusCommandHandler:
         loop = asyncio.get_running_loop()
         future = loop.create_future()
         key = f"{address.upper()}_{group}"
-        self._pending_get_futures[key] = future
+        # Every caller waiting for this module group is listed here. A
+        # second caller whose command the queue deduplicates (below) is
+        # answered from the first caller's exchange, or by the feedback
+        # fast path, like the first — it does not wait out the timeout.
+        waiters = self._pending_get_futures.setdefault(key, [])
+        waiters.append(future)
         # Dedup key used by ``queue_command`` — mirror the layout
         # ('_1' for group 1, '_2' for group 2). Tracked locally so
         # we can clear it on cancel and let the next call re-queue
@@ -233,17 +255,36 @@ class NikobusCommandHandler:
             self._queued_get_keys.discard(dedup_key)
             raise
         finally:
-            self._pending_get_futures.pop(key, None)
+            remaining = self._pending_get_futures.get(key)
+            if remaining is not None:
+                if future in remaining:
+                    remaining.remove(future)
+                if not remaining:
+                    self._pending_get_futures.pop(key, None)
 
     def resolve_pending_get(self, address: str, group: int, state: str) -> None:
-        """Resolve a pending get_output_state future directly from a feedback callback."""
+        """Resolve every pending get_output_state future for a module group.
+
+        Called from a feedback callback (the fast path) and by the queue
+        worker once the exchange has answered.
+        """
         key = f"{address.upper()}_{group}"
-        future = self._pending_get_futures.get(key)
-        if future and not future.done():
+        resolved = False
+        for future in self._pending_get_futures.get(key, []):
+            if not future.done():
+                future.set_result(state)
+                resolved = True
+        if resolved:
             _LOGGER.debug(
-                "Feedback fast-path: resolving pending GET for %s group %s", address, group
+                "Resolved pending GET(s) for %s group %s", address, group
             )
-            future.set_result(state)
+
+    def _fail_pending_gets(self, address: str, group: int, err: BaseException) -> None:
+        """Fail every pending get_output_state future for a module group."""
+        key = f"{address.upper()}_{group}"
+        for future in self._pending_get_futures.get(key, []):
+            if not future.done():
+                future.set_exception(err)
 
     async def set_output_state(
         self,
@@ -269,6 +310,7 @@ class NikobusCommandHandler:
         key = f"{addr}_{group}"
         pending = self._pending_set_groups.get(key)
         if pending is not None:
+            pending["channels"][channel] = value
             if completion_handler is not None:
                 pending["completion_handlers"].append(completion_handler)
             _LOGGER.debug(
@@ -284,6 +326,9 @@ class NikobusCommandHandler:
             "completion_handler": None,
             "completion_handlers": [completion_handler] if completion_handler else [],
             "set_group": (addr, group),
+            # The writes this request carries, re-applied to the buffer
+            # when the frame is built (see ``_process_commands``).
+            "channels": {channel: value},
         }
         self._pending_set_groups[key] = item
         await self._command_queue.put(item)
@@ -506,6 +551,7 @@ class NikobusCommandHandler:
         command_prefix = command[:3]
         command_part = command[3:5]
         ack_signal = f"$05{command_part}"
+        address = address.upper()
         addr_le = f"{address[2:]}{address[:2]}"
 
         func_answer_prefix = {

@@ -83,56 +83,74 @@ def reverse_24bit_to_hex(n: int) -> str:
     return format(reversed_int, "06X")
 
 
-def nikobus_to_button_address(hex_address: str, button: str = "1A") -> str:
-    """Convert a 24-bit Nikobus module hex_address into the '#Nxxxxxx' form for the given button."""
-    button_map = {
-        "1A": 0b101,
-        "1B": 0b111,
-        "1C": 0b001,
-        "1D": 0b011,
-        "2A": 0b100,
-        "2B": 0b110,
-        "2C": 0b000,
-        "2D": 0b010,
-    }
-    if button not in button_map:
+def _key_code(channels: int, button: str) -> int:
+    """The 3-bit key code of ``button`` on a plate with ``channels`` keys.
+
+    The code is the nibble the inventory adds to the plate's bus address
+    (``KEY_MAPPING``), read back into the three bits the vendor stores:
+    the nibble is the code bit-reversed into the top of the first hex
+    digit (code 1 → +8, 2 → +4, 4 → +2).
+    """
+    from .discovery.mapping import KEY_MAPPING
+
+    mapping = KEY_MAPPING.get(channels)
+    if mapping is None or button not in mapping:
         raise ValueError(
-            f"Unknown button '{button}'. Must be one of {list(button_map.keys())}."
+            f"Unknown button '{button}' for a {channels}-key plate. "
+            f"Must be one of {sorted(mapping) if mapping else []}."
         )
-
-    original_24 = int(hex_address, 16) & 0xFFFFFF
-    shifted_22 = original_24 >> 2
-    btn_3bits = button_map[button]
-    combined_24 = (btn_3bits << 21) | (shifted_22 & 0x1FFFFF)
-    reversed_24 = _reverse_bits(combined_24, 24)
-    return "#N" + f"{reversed_24:06X}"
+    nibble = int(mapping[button], 16)
+    return (nibble >> 3 & 1) | (nibble >> 2 & 1) << 1 | (nibble >> 1 & 1) << 2
 
 
-def nikobus_button_to_module(button_hex: str) -> tuple[str, str]:
-    """Reverse-engineer a '#Nxxxxxx' button address to the original module address and button label."""
+def nikobus_to_button_address(
+    hex_address: str, button: str = "1A", channels: int | None = None
+) -> str:
+    """The ``#Nxxxxxx`` telegram a key of plate ``hex_address`` puts on the bus.
+
+    The vendor's rule (PROTOCOL.md §5): the plate address shifted left
+    by two with the key's 3-bit code in the low bits, bit-reversed. The
+    code depends on how many keys the plate has — key 1C is code 0 on a
+    four-key plate and code 4 on an eight-key one — so ``channels`` is
+    the plate's key count; when omitted it is 8 for a ``2x`` label and 4
+    otherwise.
+    """
+    if channels is None:
+        channels = 8 if button.startswith("2") else 4
+    plate = int(hex_address, 16) & 0x3FFFFF
+    if channels == 8:
+        # An eight-key plate is two four-key halves: the code's third
+        # bit is the half, and it sits where the plate address's lowest
+        # bit would — an eight-key plate's address is even.
+        plate &= 0x3FFFFE
+    combined = (plate << 2) | _key_code(channels, button)
+    return "#N" + f"{_reverse_bits(combined, 24):06X}"
+
+
+def nikobus_button_to_module(button_hex: str, channels: int = 8) -> tuple[str, str]:
+    """The plate address and key label behind a ``#Nxxxxxx`` telegram.
+
+    The inverse of :func:`nikobus_to_button_address`; ``channels`` is the
+    plate's key count, since the same code names different keys on a
+    four- and an eight-key plate (default 8, where every code has a
+    label).
+    """
     if not button_hex.startswith("#N") or len(button_hex) != 8:
         raise ValueError(f"'{button_hex}' is not a valid '#Nxxxxxx' format.")
+    from .discovery.mapping import KEY_MAPPING
 
-    reversed_hex = button_hex[2:]
-    reversed_24 = int(reversed_hex, 16)
-    combined_24 = _reverse_bits(reversed_24, 24)
-    button_code = (combined_24 >> 21) & 0b111
-    shifted_22 = combined_24 & 0x1FFFFF
-    original_24 = (shifted_22 << 2) & 0xFFFFFF
-
-    inverse_button_map = {
-        0b101: "1A",
-        0b111: "1B",
-        0b001: "1C",
-        0b011: "1D",
-        0b100: "2A",
-        0b110: "2B",
-        0b000: "2C",
-        0b010: "2D",
-    }
-    button_label = inverse_button_map.get(button_code, "UNKNOWN")
-    module_hex = f"{original_24:06X}"
-    return module_hex, button_label
+    combined = _reverse_bits(int(button_hex[2:], 16), 24)
+    plate = combined >> 2
+    code = combined & 0b111
+    if channels == 8:
+        plate &= 0x3FFFFE  # the half bit belongs to the code, not the plate
+    else:
+        code &= 0b011
+    mapping = KEY_MAPPING.get(channels, {})
+    label = next(
+        (b for b in mapping if _key_code(channels, b) == code), "UNKNOWN"
+    )
+    return f"{plate:06X}", label
 
 
 # ---------------------------------------------------------------------------

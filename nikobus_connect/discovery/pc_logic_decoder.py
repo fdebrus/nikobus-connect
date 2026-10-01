@@ -43,7 +43,7 @@ from .base import DecodedCommand
 from .chunk_decoder import BaseChunkingDecoder
 from .pc_link_decoder import _ScanCounts, _decode_and_log, _emit_scan_summary
 from .pc_record_parser import RegistryBuffer
-from .protocol import _reverse_24, blocks_to_sections, get_button_address
+from .protocol import _reverse_24, blocks_to_sections, get_button_address, reverse_hex
 
 _LOGGER = logging.getLogger(__name__)
 _LOG_PREFIX = "PC-Logic"
@@ -129,6 +129,10 @@ def decode_input_link(record: bytes) -> dict[str, Any] | None:
     address is reported three ways: as stored, as the plate address
     the library files buttons under (``button_address``), and as the
     ``#N`` frame the key puts on the bus (``wire_address``).
+    ``get_button_address`` takes the three address bytes in the order
+    the other decoders hand them, which is reversed (the chunk layer
+    byte-reverses a record before decoding), so the stored big-endian
+    address is reversed first.
     """
     if len(record) != _INPUT_RECORD_LEN or all(b == 0xFF for b in record):
         return None
@@ -136,7 +140,7 @@ def decode_input_link(record: bytes) -> dict[str, Any] | None:
     stored = f"{address:06X}"
     return {
         "record_address": stored,
-        "button_address": get_button_address(stored),
+        "button_address": get_button_address(reverse_hex(stored)),
         "wire_address": f"{_reverse_24(address):06X}",
         "key_code": address & 0x07,
         "input_index": record[3],

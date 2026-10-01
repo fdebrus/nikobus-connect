@@ -467,6 +467,14 @@ def build_flat_channel_map(
         except Exception:  # pragma: no cover - defensive
             count = None
         if not isinstance(count, int) or count <= 0:
+            # A module the host cannot size yet (not in its config, or
+            # inventoried this very run) still occupies its channels in
+            # the flat map; skipping it would shift every later link
+            # onto the wrong module. Its catalogue channel count stands
+            # in.
+            catalogue = DEVICE_TYPES.get(f"{record.device_type:02X}", {})
+            count = catalogue.get("Channels")
+        if not isinstance(count, int) or count <= 0:
             continue
         for ch in range(1, count + 1):
             flat.append((record.address, ch))
