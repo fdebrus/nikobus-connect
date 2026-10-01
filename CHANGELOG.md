@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.45.0
 
 - **A set-output command can no longer be lost to a state read.** The `0x15`/`0x16` frame is built from the shared state buffer when the request reaches the head of the queue; the host writes a module's answer into that same buffer whenever a state read completes, and a read landing in between undid the channel write — the frame then carried the old state and the relay stayed where it was while the host showed the new one (reproduced; frequent with a Feedback Module). The pending request now remembers the channel writes it carries, joiners add theirs, and they are re-applied to the buffer right before the frame is taken from it.
 - **A deduplicated state read is answered.** A second `get_output_state` for a module group whose read was already queued had its future dropped and waited out the full 15 s timeout although the answer had arrived — and the first caller's cleanup removed the second's future, so the feedback fast path could not rescue it either. On a one-module install that made `failures == polled` and a spurious blackout reconnect. Every caller of a module group is now listed; the exchange and the fast path answer all of them, a failure fails all of them, and each removes only its own future.
