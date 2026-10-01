@@ -139,7 +139,7 @@ def nikobus_button_to_module(button_hex: str, channels: int = 8) -> tuple[str, s
         raise ValueError(f"'{button_hex}' is not a valid '#Nxxxxxx' format.")
     from .discovery.mapping import KEY_MAPPING
 
-    combined = _reverse_bits(int(button_hex[2:], 16), 24)
+    combined = _reverse_bits(int(button_hex[2:], 16) & 0xFFFFFF, 24)
     plate = combined >> 2
     code = combined & 0b111
     if channels == 8:

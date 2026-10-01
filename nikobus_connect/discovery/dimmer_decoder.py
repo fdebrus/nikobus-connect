@@ -8,9 +8,9 @@ from typing import Any
 from ..coordinator_protocol import CoordinatorProtocol
 from .chunk_decoder import BaseChunkingDecoder
 from .mapping import (
-    DIMMER_T1_1,
     DIMMER_MODE_MAPPING,
     DIMMER_MODE_T1_LOOKUP,
+    DIMMER_T1_1,
     DIMMER_T2_RAMP,
 )
 from .protocol import (
