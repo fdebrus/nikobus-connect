@@ -1498,11 +1498,26 @@ def merge_linked_modules(
             physical_addr = receiver_addr
             matched_addresses.add(_normalize_address(push_button_address))
         elif (audio_output := _audio_link(outputs)) is not None:
-            # Audio Distribution trigger: a virtual button no plate owns,
-            # filed under its own entry so the link survives the merge.
-            physical_addr, op_point = _ensure_audio_op_point(
-                buttons, push_button_address, audio_output
+            # An audio record stores the ``#N`` frame that drives the
+            # function. When a wall key emits that frame, the link is the
+            # key's; only a frame no plate owns (a virtual button) gets an
+            # entry of its own so the link survives the merge.
+            wall = bus_to_op.get(_normalize_address(push_button_address))
+            wall_entry = buttons.get(wall[0]) if wall else None
+            wall_points = (
+                wall_entry.get("operation_points") if isinstance(wall_entry, dict) else None
             )
+            if (
+                wall is not None
+                and isinstance(wall_points, dict)
+                and isinstance(wall_points.get(wall[1]), dict)
+            ):
+                physical_addr = wall[0]
+                op_point = wall_points[wall[1]]
+            else:
+                physical_addr, op_point = _ensure_audio_op_point(
+                    buttons, push_button_address, audio_output
+                )
             matched_addresses.add(_normalize_address(push_button_address))
         elif calendar_label := _calendar_label(outputs):
             # PC-Link calendar channel: no wall button will ever match,

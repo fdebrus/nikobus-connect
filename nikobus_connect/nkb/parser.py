@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import logging
 import re
+import struct
 import tempfile
 import zipfile
 from collections.abc import Iterator
@@ -260,7 +261,11 @@ def open_nkb_db(nkb_path: str | Path) -> Iterator[Any]:
     from ._access_parser import AccessParser
 
     with tempfile.TemporaryDirectory() as tmp:
-        with zipfile.ZipFile(nkb_path) as zf:
+        try:
+            zf = zipfile.ZipFile(nkb_path)
+        except zipfile.BadZipFile as err:
+            raise ValueError(f"not a .nkb archive: {err}") from err
+        with zf:
             mdb_name = next(
                 (n for n in zf.namelist() if n.lower().endswith(".mdb")), None
             )
@@ -290,9 +295,20 @@ def open_nkb_db(nkb_path: str | Path) -> Iterator[Any]:
 def parse_nkb(nkb_path: str | Path) -> NkbData:
     """Parse ``nkb_path``. Blocking — run in an executor.
 
-    Raises on a genuinely unreadable file (bad zip / no mdb / parser
-    failure); the caller is expected to catch and degrade gracefully.
+    Raises ``ValueError`` on a genuinely unreadable file (bad zip / no
+    mdb / a database the reader cannot make sense of); a missing file
+    raises ``FileNotFoundError`` as any open would. The caller is
+    expected to catch and degrade gracefully.
     """
+    try:
+        return _parse_nkb_unguarded(nkb_path)
+    except (ValueError, FileNotFoundError):
+        raise
+    except (KeyError, AttributeError, IndexError, TypeError, struct.error, UnicodeDecodeError) as err:
+        raise ValueError(f"unreadable .nkb database: {err!r}") from err
+
+
+def _parse_nkb_unguarded(nkb_path: str | Path) -> NkbData:
     with open_nkb_db(nkb_path) as db:
         components = _rows(db, "Component")
         locations = {

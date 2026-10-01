@@ -244,72 +244,55 @@ class TestReverse24BitToHex(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 class TestButtonAddressRoundtrip(unittest.TestCase):
-    """Every button label must survive a to→from roundtrip without corruption.
+    """The vendor's rule: ``bit_reverse_24(plate << 2 | key_code)``.
 
-    The encoding discards the 2 LSBs of the module address (hardware behavior:
-    Nikobus bus addresses are always 4-byte aligned, so bits 0-1 are always 0).
-    Additionally, the internal 21-bit mask means addresses must be < 0x800000.
-    Valid test addresses: multiples of 4 in the range [0x000000, 0x7FFFFC].
+    A plate address is 22 bits wide (``plate << 2`` must fit in 24), and
+    the code a key label carries depends on the plate's key count
+    (``KEY_MAPPING``): 1C is code 0 on a four-key plate and code 4 on an
+    eight-key one. Pinned by the validating install of Nikobus-HA #519:
+    plate ``124A36``, key 1C presses ``#N1B1492``, key 1D ``#N5B1492``.
     """
 
-    ALL_BUTTONS = ["1A", "1B", "1C", "1D", "2A", "2B", "2C", "2D"]
+    FOUR = ["1A", "1B", "1C", "1D"]
+    EIGHT = ["1A", "1B", "1C", "1D", "2A", "2B", "2C", "2D"]
 
-    # These are valid Nikobus module addresses: multiples of 4 and < 0x800000.
-    VALID_ADDR_A = "1A2B3C"   # 0x1A2B3C % 4 == 0, < 0x800000
-    VALID_ADDR_B = "3BCDE0"   # 0x3BCDE0 % 4 == 0, < 0x800000
-    VALID_MAX    = "7FFFFC"   # largest valid address (0x7FFFFC)
+    def test_validated_install(self):
+        self.assertEqual(nikobus_to_button_address("124A36", "1C", 4), "#N1B1492")
+        self.assertEqual(nikobus_to_button_address("124A36", "1D", 4), "#N5B1492")
+        self.assertEqual(nikobus_button_to_module("#N1B1492", 4), ("124A36", "1C"))
+        self.assertEqual(nikobus_button_to_module("#N5B1492", 4), ("124A36", "1D"))
 
-    def _roundtrip(self, module_addr: str, btn: str):
-        frame = nikobus_to_button_address(module_addr, btn)
-        recovered_addr, recovered_btn = nikobus_button_to_module(frame)
-        return frame, recovered_addr, recovered_btn
+    def test_agrees_with_the_project_file_parser(self):
+        from nikobus_connect.nkb.parser import per_key_bus_address
 
-    def test_frame_prefix_and_length(self):
-        frame = nikobus_to_button_address(self.VALID_ADDR_A, "1A")
-        self.assertTrue(frame.startswith("#N"))
-        self.assertEqual(len(frame), 8)
+        for channels, labels in ((4, self.FOUR), (8, self.EIGHT)):
+            for btn in labels:
+                with self.subTest(channels=channels, button=btn):
+                    frame = nikobus_to_button_address("124A36", btn, channels)
+                    self.assertEqual(frame[2:], per_key_bus_address("124A36", channels, btn))
 
-    def test_roundtrip_all_buttons_valid_addr_a(self):
-        for btn in self.ALL_BUTTONS:
-            with self.subTest(button=btn):
-                frame, addr, recovered_btn = self._roundtrip(self.VALID_ADDR_A, btn)
-                self.assertEqual(addr, self.VALID_ADDR_A)
-                self.assertEqual(recovered_btn, btn)
+    def test_roundtrip_four_and_eight_key_plates(self):
+        for plate in ("1A2B3C", "3BCDE0", "000000", "3FFFFE"):
+            for channels, labels in ((4, self.FOUR), (8, self.EIGHT)):
+                for btn in labels:
+                    with self.subTest(plate=plate, channels=channels, button=btn):
+                        frame = nikobus_to_button_address(plate, btn, channels)
+                        self.assertEqual(nikobus_button_to_module(frame, channels), (plate, btn))
 
-    def test_roundtrip_all_buttons_valid_addr_b(self):
-        for btn in self.ALL_BUTTONS:
-            with self.subTest(button=btn):
-                frame, addr, recovered_btn = self._roundtrip(self.VALID_ADDR_B, btn)
-                self.assertEqual(addr, self.VALID_ADDR_B)
-                self.assertEqual(recovered_btn, btn)
-
-    def test_roundtrip_zero_address(self):
-        frame, addr, btn = self._roundtrip("000000", "2C")
-        self.assertEqual(addr, "000000")
-        self.assertEqual(btn, "2C")
-
-    def test_roundtrip_max_valid_address(self):
-        frame, addr, btn = self._roundtrip(self.VALID_MAX, "1D")
-        self.assertEqual(addr, self.VALID_MAX)
-        self.assertEqual(btn, "1D")
-
-    def test_two_lsbs_discarded_by_design(self):
-        """Addresses that differ only in their 2 LSBs encode to the same frame."""
-        # 0x1A2B3C and 0x1A2B3F differ in bits 0-1 only
-        frame_base = nikobus_to_button_address("1A2B3C", "1A")
-        frame_unaligned = nikobus_to_button_address("1A2B3F", "1A")
-        self.assertEqual(frame_base, frame_unaligned)
+    def test_default_key_count_follows_the_label(self):
+        # A ``2x`` label can only be on an eight-key plate; ``1x`` defaults to four.
+        self.assertEqual(nikobus_to_button_address("124A36", "2C"), "#N1B1492")
+        self.assertEqual(nikobus_to_button_address("124A36", "1C"), "#N1B1492")
 
     def test_different_buttons_give_different_frames(self):
-        frames = {
-            btn: nikobus_to_button_address(self.VALID_ADDR_A, btn)
-            for btn in self.ALL_BUTTONS
-        }
-        self.assertEqual(len(set(frames.values())), len(self.ALL_BUTTONS))
+        frames = {btn: nikobus_to_button_address("1A2B3C", btn, 8) for btn in self.EIGHT}
+        self.assertEqual(len(set(frames.values())), len(self.EIGHT))
 
     def test_invalid_button_raises_value_error(self):
         with self.assertRaises(ValueError):
-            nikobus_to_button_address(self.VALID_ADDR_A, "9X")
+            nikobus_to_button_address("1A2B3C", "9X")
+        with self.assertRaises(ValueError):
+            nikobus_to_button_address("1A2B3C", "2A", 4)
 
     def test_invalid_frame_too_short_raises(self):
         with self.assertRaises(ValueError):
@@ -318,11 +301,6 @@ class TestButtonAddressRoundtrip(unittest.TestCase):
     def test_invalid_frame_wrong_prefix_raises(self):
         with self.assertRaises(ValueError):
             nikobus_button_to_module("$N123456")
-
-    def test_button_1a_known_frame_format(self):
-        frame = nikobus_to_button_address("1A2B3C", "1A")
-        self.assertEqual(len(frame), 8)
-        self.assertTrue(frame.startswith("#N"))
 
 
 if __name__ == "__main__":

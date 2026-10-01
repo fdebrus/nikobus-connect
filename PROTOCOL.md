@@ -136,10 +136,10 @@ leading `FF` byte:
 | `0x11` | `11 00 00` | ack only | PC-Link presence check (handshake) |
 | `0x11` | `11 lo hi` | 7 bytes: `lo hi status type ? countA countB` | **Module status**: `status & 1` = EEPROM error; `type` signature (`0x50` PC-Link, `0x40` PC-Logic); `countA`/`countB` = records in the module's link tables |
 | `0x12` / `0x17` | `12 lo hi` / `17 lo hi` | 9 bytes: `lo hi s1..s6 ?` | Output states of channels 1–6 / 7–12 |
-| `0x15` / `0x16` | `15 lo hi s1..s6 FF` / `16 lo hi s7..s12 FF` | short ack | Set outputs 1–6 / 7–12 — **all six channels of a group atomically**; roller values are masked to 2 bits |
+| `0x15` / `0x16` | `15 lo hi s1..s6 FF` / `16 lo hi s7..s12 FF` | short ack | Set outputs 1–6 / 7–12 — **all six channels of a group atomically** (a roller channel takes `0x00` stop, `0x01` open, `0x02` close) |
 | `0x10` | `10 lo hi blk_lo blk_hi` | `lo hi` + 16 bytes | Read 16-byte memory block `blk` (offset = `blk × 16`) |
 | `0x22` | `22 lo hi blk_lo blk_hi` | `lo hi` + 8 bytes | Read 8-byte memory block (dimmer-class modules) |
-| `0x13` | `13 lo hi 00` | 7 bytes: `FF lo hi ? ? crc_lo crc_hi` | The CRC16 (same algorithm as §3) the module computes over its whole memory image |
+| `0x13` | `13 lo hi 00` | 7 bytes: `FF lo hi ? ? crc_lo crc_hi` | The CRC16 (same algorithm as §3) the module computes over its memory image — the whole image for switch and roller modules, both banks but not `0x7FA..0x7FF` for dimmers (§7, Integrity) |
 | `0x1D` | `1D lo hi` | 9 bytes: `FF lo hi YY MM DD hh mm ss` | **PC-Link date/time**, `YY` = year − 2000 |
 | `0x1E` | `1E lo hi YY MM DD hh mm ss FF` | short ack | Set the PC-Link date/time |
 | `0x18` / `0x19` ‡ | `18 lo hi` / `19 lo hi` | short ack | Link (programming) mode on / off |
@@ -186,31 +186,36 @@ with a growing pause between them. A module that is not answering
 
 ## 5. Button telegram addressing
 
-A `#N` telegram address encodes the transmitter's 24-bit physical
-address **bit-reversed**, with the pressed key folded in
-(`protocol.py: nikobus_to_button_address`):
+A `#N` telegram address is the plate's 24-bit address shifted left by
+two with the pressed key's 3-bit code in the low bits, the whole
+**bit-reversed** (`protocol.py: nikobus_to_button_address`,
+`nkb.parser.per_key_bus_address`):
 
 ```
-combined = (key_code << 21) | (physical_address >> 2)   # 24 bits
-wire     = bit_reverse_24(combined)
+record = (plate_address << 2) | key_code     # 24 bits, the form link records store (§7)
+wire   = bit_reverse_24(record)              # the #N address
 ```
 
-| Key | Code | Key | Code |
-|---|---|---|---|
-| 1A | `0b101` | 2A | `0b100` |
-| 1B | `0b111` | 2B | `0b110` |
-| 1C | `0b001` | 2C | `0b000` |
-| 1D | `0b011` | 2D | `0b010` |
+This is the vendor software's own rule: its simulation mode presses a
+key exactly this way, and a validating install confirms it — plate
+`124A36`, key 1C (code 0), presses `#N1B1492`; key 1D (code 2),
+`#N5B1492`. In the wire address the code lands in the first hex digit,
+bit-reversed: code 1 adds 8, code 2 adds 4, code 4 adds 2.
 
-For a given transmitter the **B key's bus address is the A key's with
-the first hex nibble incremented by 4**.
+The code a key label carries depends on how many keys the plate has
+(`mapping.py: KEY_MAPPING`, from the nibble each key adds):
 
-The vendor software builds the same telegram from the other side: its
-simulation mode presses a key by bit-reversing `plate_address << 2 |
-key_code` into a `#N` frame. That un-reversed form, `plate << 2 | code`,
-is what every link record stores as its 24-bit button address (§7),
-and it is what a validating install confirms: plate `124A36`, key 1C
-(code 0), presses `#N1B1492`; key 1D (code 2), `#N5B1492`.
+| Plate | 1A | 1B | 1C | 1D | 2A | 2B | 2C | 2D |
+|---|---|---|---|---|---|---|---|---|
+| 4 keys | 1 | 3 | 0 | 2 | | | | |
+| 8 keys | 5 | 7 | 4 | 6 | 1 | 3 | 0 | 2 |
+| 2 keys | 1 | 3 | | | | | | |
+
+So on a four-key plate the **B key's bus address is the A key's with
+the first hex nibble incremented by 4**, and the D key's is the C key's
+plus 4. An earlier revision of this section gave a formula that put the
+code in the top bits before reversal, with a fixed code table; that was
+wrong, and so were the two helpers that implemented it until 0.45.0.
 
 `convert_nikobus_address` maps a stored 24-bit address to the bus form
 by reversing 21 bits and **adding** the 3-bit key field into the low
@@ -414,7 +419,11 @@ the fixed vendor band (`_MODULE_SCAN_PROFILES`).
 
 ### Integrity
 
-`0x13` returns the CRC16 (§3 algorithm) of the whole image; comparing it
+`0x13` returns the CRC16 (§3 algorithm) of the image — the whole image
+for switch and roller modules; for dimmers both banks with the six
+bytes `0x7FA..0x7FF` (a version/flags word) left out, the only coverage
+that reproduces a real 05-007's reported CRC (`api.py:
+MODULE_CRC_RANGES`); comparing it
 with a CRC computed over a freshly read image verifies the programming
 (`api.py: verify_module_memory`). This is the same check the vendor
 software runs after a write. `0x11`'s status bit reports an EEPROM

@@ -178,8 +178,15 @@ _MODULE_SCAN_PROFILES: dict[str, tuple[ScanSection, ...]] = {
     "audio_module": (
         ("01", tuple(range(0x38, 0x60))),
     ),
+    # The logic programme ends at byte 484 (register 0x1E); the bytes
+    # up to the input table at 998 (register 0x3E, offset 6) are
+    # erased, and three all-FF answers end a pass. So the table's two
+    # blocks are a pass of their own, read after the band whatever the
+    # band's last registers held; ``PcLogicDecoder.extension_passes``
+    # asks for the rest of the table once its count is in.
     "pc_logic": (
-        ("00", tuple(range(0x06, 0x40))),
+        ("00", tuple(range(0x06, 0x3E))),
+        ("00", (0x3E, 0x3F)),
         ("02", tuple(range(0xAF, 0xEF))),
         ("03", tuple(range(0xE8, 0xF5))),
     ),
@@ -1597,6 +1604,10 @@ class NikobusDiscovery:
             await asyncio.sleep(self._module_timeout_seconds)
         except asyncio.CancelledError:
             return
+        if self._scan_active:
+            # Armed between two passes, fired inside the next one: the
+            # loop owns the module until its passes are done.
+            return
         await self._finalize_discovery(module_address)
 
     async def _inventory_timeout_after(self) -> None:
@@ -1609,7 +1620,25 @@ class NikobusDiscovery:
             await self._finalize_inventory_phase()
         except Exception:
             _LOGGER.exception("Failed to finalize inventory phase")
-            self.reset_state()
+            await self._abort_run_with_notification()
+
+    async def _abort_run_with_notification(self) -> None:
+        """End a run that failed: reset the state, then tell the host.
+
+        A host awaiting the finished callback would otherwise wait
+        forever; it gets whatever was discovered before the failure.
+        """
+        captured_devices = dict(self.discovered_devices)
+        captured_query_type = getattr(self._coordinator, "inventory_query_type", None)
+        self.reset_state()
+        try:
+            await _notify_discovery_finished(
+                self,
+                discovered_devices=captured_devices,
+                inventory_query_type=captured_query_type,
+            )
+        except Exception:
+            _LOGGER.exception("Discovery finished callback failed")
 
     async def _emit_progress(
         self,
@@ -3079,7 +3108,13 @@ class NikobusDiscovery:
                     "No output modules found in config to scan — dict_module_data keys %s",
                     list(dict_data.keys()) if isinstance(dict_data, dict) else type(dict_data).__name__,
                 )
-                self.reset_state()
+                # Nothing to scan is still the end of a run: a host that
+                # awaits the finished callback must get it, or it waits
+                # forever on a "Scanning…" that never started.
+                self._register_scan_queue = []
+                self._progress_module_total = 0
+                self._progress_module_index = 0
+                await self._complete_discovery_run(None)
                 return
 
             _LOGGER.info("Starting sequential discovery queue for all output modules — %s", all_addresses)
@@ -3182,6 +3217,11 @@ class NikobusDiscovery:
                 self._module_type,
             )
             if self.discovery_stage == "inventory":
+                # Undo what this call set above; nothing else will.
+                self._coordinator.discovery_module = False
+                self._coordinator.discovery_module_address = None
+                if not from_queue:
+                    self._coordinator.discovery_running = False
                 return
 
             await self._finalize_discovery(normalized_address)
@@ -3756,7 +3796,11 @@ class NikobusDiscovery:
 
             if not self._coordinator.discovery_module:
                 await self._finalize_discovery(address)
-            else:
+            elif not self._scan_active:
+                # The register scan loop finalizes the module itself
+                # when its passes are done; while it runs, a quiet
+                # stretch (silent empty registers, an ACK give-up) is
+                # not a module that went away.
                 self._schedule_timeout()
 
         except Exception:

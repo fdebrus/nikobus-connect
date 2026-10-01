@@ -10,6 +10,7 @@ from .chunk_decoder import BaseChunkingDecoder
 from .mapping import (
     DIMMER_MODE_MAPPING,
     DIMMER_MODE_T1_LOOKUP,
+    DIMMER_T1_1,
     DIMMER_T2_RAMP,
 )
 from .protocol import (
@@ -47,8 +48,13 @@ def _timer_value(
 
     t1_val: str | None = None
     t1_table = DIMMER_MODE_T1_LOOKUP.get(mode_raw)
-    if t1_table is not None and t1_raw is not None and 0 <= t1_raw < len(t1_table):
-        t1_val = t1_table[t1_raw]
+    if t1_table is not None and t1_raw is not None:
+        if t1_table is DIMMER_T1_1 and 2 <= t1_raw < 16:
+            # The vendor wrote this table's last token as a range
+            # (``S_DB_DIM_ON_OFF_2-F``): one label for nibbles 2..15.
+            t1_val = t1_table[-1]
+        elif 0 <= t1_raw < len(t1_table):
+            t1_val = t1_table[t1_raw]
 
     t2_val: str | None = None
     if t2_raw is not None and 0 <= t2_raw < len(DIMMER_T2_RAMP):

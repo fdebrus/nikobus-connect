@@ -175,9 +175,10 @@ def encode_module(spec: ModuleSpec) -> dict[str, dict[int, str]]:
     width = register_width(spec.type)
     if spec.type == "audio_module":
         records = "".join(encode_audio_trigger(t) for t in spec.triggers)
-        # Six filler bytes, then the count and a zero byte, as a real
-        # module lays it out.
-        stream = "FFFFFFFFFFFF" + f"{len(spec.triggers):02X}" + "00" + records
+        # Six filler bytes, then the two-byte little-endian count, as the
+        # vendor lays it out (byte 4998; room for 1864 records).
+        count = len(spec.triggers)
+        stream = "FFFFFFFFFFFF" + f"{count & 0xFF:02X}{count >> 8 & 0xFF:02X}" + records
     elif spec.type == "dimmer_module":
         stream = "".join(encode_dimmer_link(link) for link in spec.links)
     else:
@@ -199,7 +200,7 @@ def module_status_payload(spec: ModuleSpec, family_byte: int) -> str:
     ``<status> <family> <state> <count A> <count B>``; the counts bound
     the register scan.
     """
-    count_a = len(spec.triggers or spec.links)
+    count_a = min(len(spec.triggers or spec.links), 0xFF)
     count_b = 0xFF
     if spec.type == "dimmer_module":
         count_b = 0
