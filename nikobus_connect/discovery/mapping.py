@@ -142,11 +142,13 @@ DEVICE_TYPES: dict[str, dict[str, Any]] = {
     # RGB plinth light 340-00111 (``S_DB_DIM_PLINT``, memory class 11,
     # first reported the same day as type 0x45 at a 16-bit address),
     # and key 71, the same 340-00112 in its mono profile
-    # (``S_DB_DIM_MONOCTRL``). Both are catalogued as modules so they
-    # reach the inventory under their name; neither is routed to the
-    # RGB light platform, because no state reply from either has been
-    # captured — the mono controller may well answer the same six-byte
-    # image as 0x46, but "may well" builds no entity.
+    # (``S_DB_DIM_MONOCTRL``). All three are routed to ``rgb_module``:
+    # the same plugin programs them, the project file links keys to
+    # them the same way (``RGB_PRODUCT_REFS``), and a host drives them
+    # the same way, by pressing those keys. The plinth light's and the
+    # mono controller's state replies have not been captured yet; the
+    # on flag in byte 1 is what the host shows, and a 0x45 install
+    # (2026-10-01) is where that gets confirmed.
     "45": {
         "Category": "Module",
         "Model": "340-00111",
@@ -464,6 +466,8 @@ _MODULE_TYPE_BY_DEVICE_TYPE: dict[str, str] = {
     "09": "switch_module",
     "0A": "pc_link",
     "2B": "audio_module",
+    "45": "rgb_module",
+    "47": "rgb_module",
     "31": "switch_module",
     "32": "dimmer_module",
     "37": "interface_module",

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.46.0
+
+- **The RGB plinth light (0x45) and the mono controller (0x47) are RGB modules.** 0.45.0 catalogued them as inventory-only, which left a plinth light as a device with no entity. They now route to `rgb_module` like the 340-00112: the same plugin programs the three, the project file links keys to them the same way (`RGB_PRODUCT_REFS` already named 340-00111), and a host drives them the same way, by pressing those keys. What is not yet confirmed is the state reply: the host polls them with the same query as the controller and shows the on flag of byte 1; the colour flags may read differently on a plinth light. A 0x45 install reported on 2026-10-01 is where that gets checked.
+
 ## 0.45.0
 
 - **A set-output command can no longer be lost to a state read.** The `0x15`/`0x16` frame is built from the shared state buffer when the request reaches the head of the queue; the host writes a module's answer into that same buffer whenever a state read completes, and a read landing in between undid the channel write — the frame then carried the old state and the relay stayed where it was while the host showed the new one (reproduced; frequent with a Feedback Module). The pending request now remembers the channel writes it carries, joiners add theirs, and they are re-applied to the buffer right before the frame is taken from it.

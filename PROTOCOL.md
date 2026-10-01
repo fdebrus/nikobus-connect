@@ -534,8 +534,8 @@ listed has a known byte, whether or not a module of it has been seen:
 
 | Byte | Key | Product | Vendor ref | Address | Status |
 |---|---|---|---|---|---|
-| `0x45` | 69 | RGB plinth light 340-00111 | `S_DB_DIM_PLINT` | 16-bit | catalogued (first seen 2026-09-30) |
-| `0x47` | 71 | Colour controller 340-00112, mono profile | `S_DB_DIM_MONOCTRL` | 16-bit | catalogued; not yet observed |
+| `0x45` | 69 | RGB plinth light 340-00111 | `S_DB_DIM_PLINT` | 16-bit | catalogued, routed as `rgb_module` (first seen 2026-09-30; state reply not yet captured) |
+| `0x47` | 71 | Colour controller 340-00112, mono profile | `S_DB_DIM_MONOCTRL` | 16-bit | catalogued, routed as `rgb_module`; not yet observed |
 | `0x48` | 72 | Outdoor sensor 430-00502 | `S_DB_BUITEN_SENSOR` | 22-bit | not catalogued |
 | `0x49` | 73 | Smoke detector 420-00005 | `S_DB_ROOKMELDER` | 22-bit | not catalogued |
 | `0x2E` | 46 | SMS module 05-203 (output) | `S_DB_SMSOUT` | 16-bit | not catalogued |
