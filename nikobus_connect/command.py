@@ -76,9 +76,10 @@ class NikobusCommandHandler:
     async def stop(self) -> None:
         """Stop the command processing loop."""
         self._running = False
-        for future in list(self._pending_get_futures.values()):
-            if not future.done():
-                future.cancel()
+        for waiters in list(self._pending_get_futures.values()):
+            for future in waiters:
+                if not future.done():
+                    future.cancel()
         self._pending_get_futures.clear()
         self._queued_get_keys.clear()
         if self._command_task:
