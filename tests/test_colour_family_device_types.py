@@ -40,11 +40,14 @@ def test_the_family_sits_on_consecutive_keys() -> None:
     ]
 
 
-def test_neither_new_byte_reaches_the_rgb_light_platform_yet() -> None:
-    """Inventory only: no state reply from either has been captured."""
-    assert get_module_type_from_device_type("46") != "other_module"
-    assert get_module_type_from_device_type("45") == "other_module"
-    assert get_module_type_from_device_type("47") == "other_module"
+def test_the_whole_family_reaches_the_rgb_light_platform() -> None:
+    """One plugin, one key-link form, one way to drive them: the plinth
+    light and the mono controller route where the colour controller
+    does, so a host builds the same light for them from the keys the
+    project file links."""
+    assert get_module_type_from_device_type("45") == "rgb_module"
+    assert get_module_type_from_device_type("46") == "rgb_module"
+    assert get_module_type_from_device_type("47") == "rgb_module"
 
 
 def test_no_new_byte_has_a_channel_count() -> None:
