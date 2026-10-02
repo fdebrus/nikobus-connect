@@ -10,12 +10,12 @@ from typing import Any
 
 from .const import (
     COMMAND_ACK_WAIT_TIMEOUT,
-    COMMAND_ATTEMPT_TIMEOUT,
     COMMAND_ANSWER_WAIT_TIMEOUT,
+    COMMAND_ATTEMPT_TIMEOUT,
     COMMAND_EXECUTION_DELAY,
-    SET_COALESCE_WINDOW,
     COMMAND_POST_ACK_ANSWER_TIMEOUT,
     MAX_ATTEMPTS,
+    SET_COALESCE_WINDOW,
 )
 from .exceptions import NikobusError, NikobusSendError, NikobusTimeoutError
 from .protocol import calculate_group_number, make_pc_link_command, reply_payload
@@ -195,7 +195,7 @@ class NikobusCommandHandler:
                             res = handler(err)
                             if inspect.isawaitable(res):
                                 await res
-                        except Exception:  # noqa: BLE001 - a handler must not take the loop down
+                        except Exception:
                             _LOGGER.exception("Failure handler raised for command %s", command)
                 finally:
                     self._command_queue.task_done()
@@ -338,7 +338,8 @@ class NikobusCommandHandler:
                 "Set-output for %s channel %d joins the pending group %d write",
                 addr, channel, group,
             )
-            return pending["future"]
+            pending_future: asyncio.Future[str] = pending["future"]
+            return pending_future
 
         future: asyncio.Future[str] = asyncio.get_running_loop().create_future()
         # Nobody has to await the future; an ignored failure must not be
