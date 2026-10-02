@@ -170,7 +170,7 @@ Implemented values (`const.py`):
 | What | Value |
 |---|---|
 | Inter-command delay on the queue | 150 ms |
-| Ack wait / answer wait after the ack | 15 s / 5 s (1.5 s once the ack is in), 3 attempts |
+| A command's total wait | 15 s: 3 attempts of 5 s each (the ack within 5 s, the answer within 1.5 s of the ack) |
 | Register read during a scan | 1.5 s for the ack, 0.5 s for the block, one retry |
 | Module status (`0x11`) during discovery | 20 s |
 | Register-read ACK latency (real hardware) | 300–700 ms |

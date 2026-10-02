@@ -62,7 +62,12 @@ def decode(payload_hex: str, raw_bytes: list[str], context: Any) -> dict[str, An
         )
         return None
 
-    t2_raw = _safe_int(raw_bytes[0][1])
+    # The record's sixth byte (first after reversal) is the index of the
+    # next record with the same address hash, not a timer: these families
+    # carry no T2. Reported as ``chain_raw``; ``t2_raw`` stays in the
+    # metadata for consumers that read it, always ``None``.
+    chain_raw = _safe_int(raw_bytes[0])
+    t2_raw = None
     key_raw = _safe_int(raw_bytes[1][0])
     channel_raw = _safe_int(raw_bytes[1][1])
     t1_raw = _safe_int(raw_bytes[2][0])
@@ -125,6 +130,7 @@ def decode(payload_hex: str, raw_bytes: list[str], context: Any) -> dict[str, An
         "mode_raw": mode_raw,
         "t1_raw": t1_raw,
         "t2_raw": t2_raw,
+        "chain_raw": chain_raw,
         "K": key_raw,
         "C": _format_channel(channel_decoded),
         "T1": t1_val,
