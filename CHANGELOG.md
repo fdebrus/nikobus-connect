@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.47.0
 
 - **A set-output request reports its outcome.** `set_output_state` returned once the request was queued; a frame that was never acknowledged was logged by the queue worker and nothing else — the host kept showing the state it had asked for. The method now returns a future that resolves with the module's answer or fails after the last attempt, and takes a `failure_handler` called with that error; joiners of a pending group write share both. `NikobusAPI`'s switch, light and cover actions pass `failure_handler` through. An ignored failure is not logged by asyncio as an unretrieved exception.
 - **One attempt on the bus fits the caller's wait.** The per-attempt budget was the whole `COMMAND_ACK_WAIT_TIMEOUT` (15 s), three attempts deep, while `get_output_state` gave up after 15 s in total: one unanswered read held the bus lock for 45 s, every read queued behind it gave up unprocessed, and a host counted a whole poll cycle as failed and reconnected a healthy bus. `COMMAND_ATTEMPT_TIMEOUT` is the total divided by the attempts (5 s), ample for a module that acknowledges in under a second and answers within 1.5 s of the ack.
