@@ -70,6 +70,14 @@ COMMAND_ACK_WAIT_TIMEOUT: Final[int] = 15
 COMMAND_ANSWER_WAIT_TIMEOUT: Final[int] = 5
 COMMAND_POST_ACK_ANSWER_TIMEOUT: Final[float] = 1.5
 MAX_ATTEMPTS: Final[int] = 3
+# One attempt's wall budget on the bus. The caller of ``get_output_state``
+# gives up after COMMAND_ACK_WAIT_TIMEOUT in total, so the attempts the
+# worker makes on its behalf have to fit in it: with the budget set to
+# the whole timeout, one unanswered read held the bus lock three times
+# as long as the caller waited, every read queued behind it gave up
+# unprocessed, and a host counted a whole poll cycle as failed. A real
+# module acknowledges in 0.3–0.7 s and answers within 1.5 s of the ack.
+COMMAND_ATTEMPT_TIMEOUT: Final[float] = COMMAND_ACK_WAIT_TIMEOUT / MAX_ATTEMPTS
 
 # Module register scan (sequential send-and-wait). Each register read is
 # sent one at a time; the scan loop waits for the ACK, then up to

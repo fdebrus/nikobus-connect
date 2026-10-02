@@ -122,8 +122,14 @@ class NikobusAPI:
         target_state: int,
         cmd_key: str,
         completion_handler: Callable[..., Any] | None = None,
+        failure_handler: Callable[[BaseException], Any] | None = None,
     ) -> None:
-        """Unified dispatcher for all module actions."""
+        """Unified dispatcher for all module actions.
+
+        ``failure_handler`` is called with the error when the set-output
+        exchange fails after its last attempt (the call itself returns as
+        soon as the request is queued).
+        """
         chan_info = self._get_channel_info(module_key, address, channel)
         bus_cmd = chan_info.get(cmd_key)
 
@@ -135,7 +141,9 @@ class NikobusAPI:
             else:
                 _LOGGER.debug("Setting output state for %s chan %d to %s", address, channel, hex(target_state))
                 await self._command_handler.set_output_state(
-                    address, channel, target_state, completion_handler=completion_handler
+                    address, channel, target_state,
+                    completion_handler=completion_handler,
+                    failure_handler=failure_handler,
                 )
         except NikobusError as err:
             _LOGGER.error("API action failed for %s: %s", address, err)
@@ -143,13 +151,25 @@ class NikobusAPI:
 
     # --- SWITCHES ---
 
-    async def turn_on_switch(self, address: str, channel: int, completion_handler: Callable[..., Any] | None = None) -> None:
+    async def turn_on_switch(
+        self,
+        address: str,
+        channel: int,
+        completion_handler: Callable[..., Any] | None = None,
+        failure_handler: Callable[[BaseException], Any] | None = None,
+    ) -> None:
         """Turn on a switch module output."""
-        await self._dispatch_action("switch_module", address, channel, STATE_ON, "led_on", completion_handler)
+        await self._dispatch_action("switch_module", address, channel, STATE_ON, "led_on", completion_handler, failure_handler)
 
-    async def turn_off_switch(self, address: str, channel: int, completion_handler: Callable[..., Any] | None = None) -> None:
+    async def turn_off_switch(
+        self,
+        address: str,
+        channel: int,
+        completion_handler: Callable[..., Any] | None = None,
+        failure_handler: Callable[[BaseException], Any] | None = None,
+    ) -> None:
         """Turn off a switch module output."""
-        await self._dispatch_action("switch_module", address, channel, STATE_OFF, "led_off", completion_handler)
+        await self._dispatch_action("switch_module", address, channel, STATE_OFF, "led_off", completion_handler, failure_handler)
 
     # --- DIMMERS ---
 
@@ -160,6 +180,7 @@ class NikobusAPI:
         brightness: int,
         current_brightness: int = 0,
         completion_handler: Callable[..., Any] | None = None,
+        failure_handler: Callable[[BaseException], Any] | None = None,
     ) -> None:
         """Turn on a dimmer output to a specific brightness.
 
@@ -180,7 +201,9 @@ class NikobusAPI:
                 await self._send_bus_command(led_on)
 
             await self._command_handler.set_output_state(
-                address, channel, brightness, completion_handler=completion_handler
+                address, channel, brightness,
+                completion_handler=completion_handler,
+                failure_handler=failure_handler,
             )
         except NikobusError as err:
             _LOGGER.error("API dimmer action failed for %s: %s", address, err)
@@ -192,6 +215,7 @@ class NikobusAPI:
         channel: int,
         current_brightness: int = 1,
         completion_handler: Callable[..., Any] | None = None,
+        failure_handler: Callable[[BaseException], Any] | None = None,
     ) -> None:
         """Turn off a dimmer output.
 
@@ -209,7 +233,9 @@ class NikobusAPI:
                 await self._send_bus_command(led_off)
 
             await self._command_handler.set_output_state(
-                address, channel, STATE_OFF, completion_handler=completion_handler
+                address, channel, STATE_OFF,
+                completion_handler=completion_handler,
+                failure_handler=failure_handler,
             )
         except NikobusError as err:
             _LOGGER.error("API dimmer action failed for %s: %s", address, err)
@@ -217,15 +243,34 @@ class NikobusAPI:
 
     # --- COVERS ---
 
-    async def open_cover(self, address: str, channel: int, completion_handler: Callable[..., Any] | None = None) -> None:
+    async def open_cover(
+        self,
+        address: str,
+        channel: int,
+        completion_handler: Callable[..., Any] | None = None,
+        failure_handler: Callable[[BaseException], Any] | None = None,
+    ) -> None:
         """Open a cover/roller shutter."""
-        await self._dispatch_action("roller_module", address, channel, STATE_OPEN, "led_on", completion_handler)
+        await self._dispatch_action("roller_module", address, channel, STATE_OPEN, "led_on", completion_handler, failure_handler)
 
-    async def close_cover(self, address: str, channel: int, completion_handler: Callable[..., Any] | None = None) -> None:
+    async def close_cover(
+        self,
+        address: str,
+        channel: int,
+        completion_handler: Callable[..., Any] | None = None,
+        failure_handler: Callable[[BaseException], Any] | None = None,
+    ) -> None:
         """Close a cover/roller shutter."""
-        await self._dispatch_action("roller_module", address, channel, STATE_CLOSE, "led_off", completion_handler)
+        await self._dispatch_action("roller_module", address, channel, STATE_CLOSE, "led_off", completion_handler, failure_handler)
 
-    async def stop_cover(self, address: str, channel: int, direction: str, completion_handler: Callable[..., Any] | None = None) -> None:
+    async def stop_cover(
+        self,
+        address: str,
+        channel: int,
+        direction: str,
+        completion_handler: Callable[..., Any] | None = None,
+        failure_handler: Callable[[BaseException], Any] | None = None,
+    ) -> None:
         """Stop cover movement."""
         chan_info = self._get_channel_info("roller_module", address, channel)
         cmd_key = "led_on" if direction == "opening" else "led_off"
@@ -235,7 +280,9 @@ class NikobusAPI:
                 await self._send_bus_command(bus_cmd, completion_handler)
                 self._command_handler.set_bytearray_state(address, channel, STATE_OFF)
             else:
-                await self._command_handler.set_output_state(address, channel, STATE_OFF, completion_handler)
+                await self._command_handler.set_output_state(
+                    address, channel, STATE_OFF, completion_handler, failure_handler
+                )
         except NikobusError as err:
             _LOGGER.error("API cover action failed for %s: %s", address, err)
             raise

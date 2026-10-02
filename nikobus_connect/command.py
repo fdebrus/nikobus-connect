@@ -11,10 +11,11 @@ from typing import Any
 from .const import (
     COMMAND_ACK_WAIT_TIMEOUT,
     COMMAND_ANSWER_WAIT_TIMEOUT,
+    COMMAND_ATTEMPT_TIMEOUT,
     COMMAND_EXECUTION_DELAY,
-    SET_COALESCE_WINDOW,
     COMMAND_POST_ACK_ANSWER_TIMEOUT,
     MAX_ATTEMPTS,
+    SET_COALESCE_WINDOW,
 )
 from .exceptions import NikobusError, NikobusSendError, NikobusTimeoutError
 from .protocol import calculate_group_number, make_pc_link_command, reply_payload
@@ -189,6 +190,13 @@ class NikobusCommandHandler:
                         future.set_exception(err)
                     if gid in ("12", "17") and address:
                         self._fail_pending_gets(address, 1 if gid == "12" else 2, err)
+                    for handler in command_item.get("failure_handlers") or []:
+                        try:
+                            res = handler(err)
+                            if inspect.isawaitable(res):
+                                await res
+                        except Exception:
+                            _LOGGER.exception("Failure handler raised for command %s", command)
                 finally:
                     self._command_queue.task_done()
 
@@ -293,8 +301,18 @@ class NikobusCommandHandler:
         channel: int,
         value: int,
         completion_handler: Callable[[], Awaitable[None]] | None = None,
-    ) -> None:
-        """Set a single channel state and queue the command."""
+        failure_handler: Callable[[BaseException], Any] | None = None,
+    ) -> asyncio.Future[str]:
+        """Set a single channel state and queue the command.
+
+        Returns a future that resolves with the module's answer once the
+        frame has been acknowledged, or fails with the error after the
+        last attempt; a caller may await it or ignore it. ``failure_handler``
+        is called with that error instead, for a host that reports
+        optimistically and only needs to hear when the write did not
+        happen. Requests for the same module group that are still
+        waiting share one frame, one future and each other's handlers.
+        """
         _LOGGER.debug(
             "Setting output state - Address: %s, Channel: %d, Value: %d",
             address, channel, value
@@ -314,18 +332,28 @@ class NikobusCommandHandler:
             pending["channels"][channel] = value
             if completion_handler is not None:
                 pending["completion_handlers"].append(completion_handler)
+            if failure_handler is not None:
+                pending["failure_handlers"].append(failure_handler)
             _LOGGER.debug(
                 "Set-output for %s channel %d joins the pending group %d write",
                 addr, channel, group,
             )
-            return
+            pending_future: asyncio.Future[str] = pending["future"]
+            return pending_future
 
+        future: asyncio.Future[str] = asyncio.get_running_loop().create_future()
+        # Nobody has to await the future; an ignored failure must not be
+        # logged by asyncio as "exception was never retrieved".
+        future.add_done_callback(
+            lambda f: f.exception() if not f.cancelled() else None
+        )
         item: dict[str, Any] = {
             "command": f"<set {addr} group {group}>",
             "address": addr,
-            "future": None,
+            "future": future,
             "completion_handler": None,
             "completion_handlers": [completion_handler] if completion_handler else [],
+            "failure_handlers": [failure_handler] if failure_handler else [],
             "set_group": (addr, group),
             # The writes this request carries, re-applied to the buffer
             # when the frame is built (see ``_process_commands``).
@@ -334,6 +362,7 @@ class NikobusCommandHandler:
         self._pending_set_groups[key] = item
         await self._command_queue.put(item)
         _LOGGER.debug("Set-output queued for module %s group %d (channel %d)", addr, group, channel)
+        return future
 
     def _build_set_group_command(self, address: str, group: int) -> str:
         """The ``0x15`` / ``0x16`` frame for a module group, from the buffer."""
@@ -646,7 +675,7 @@ class NikobusCommandHandler:
             wait_answer.startswith("$1C") and not wait_answer.startswith("$1CFF") and not raw
         )
         loop = asyncio.get_running_loop()
-        end_time = loop.time() + COMMAND_ACK_WAIT_TIMEOUT
+        end_time = loop.time() + COMMAND_ATTEMPT_TIMEOUT
 
         while loop.time() < end_time:
             try:

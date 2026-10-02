@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.47.0
+
+- **A set-output request reports its outcome.** `set_output_state` returned once the request was queued; a frame that was never acknowledged was logged by the queue worker and nothing else — the host kept showing the state it had asked for. The method now returns a future that resolves with the module's answer or fails after the last attempt, and takes a `failure_handler` called with that error; joiners of a pending group write share both. `NikobusAPI`'s switch, light and cover actions pass `failure_handler` through. An ignored failure is not logged by asyncio as an unretrieved exception.
+- **One attempt on the bus fits the caller's wait.** The per-attempt budget was the whole `COMMAND_ACK_WAIT_TIMEOUT` (15 s), three attempts deep, while `get_output_state` gave up after 15 s in total: one unanswered read held the bus lock for 45 s, every read queued behind it gave up unprocessed, and a host counted a whole poll cycle as failed and reconnected a healthy bus. `COMMAND_ATTEMPT_TIMEOUT` is the total divided by the attempts (5 s), ample for a module that acknowledges in under a second and answers within 1.5 s of the ack.
+- Switch and roller records report their sixth byte as `chain_raw`, the index of the next record with the same address hash; `t2_raw` stays in the metadata and is always `None` for these families, which carry no T2.
+
 ## 0.46.0
 
 - **The RGB plinth light (0x45) and the mono controller (0x47) are RGB modules.** 0.45.0 catalogued them as inventory-only, which left a plinth light as a device with no entity. They now route to `rgb_module` like the 340-00112: the same plugin programs the three, the project file links keys to them the same way (`RGB_PRODUCT_REFS` already named 340-00111), and a host drives them the same way, by pressing those keys. What is not yet confirmed is the state reply: the host polls them with the same query as the controller and shows the on flag of byte 1; the colour flags may read differently on a plinth light. A 0x45 install reported on 2026-10-01 is where that gets checked.
