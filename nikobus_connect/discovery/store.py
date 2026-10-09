@@ -14,6 +14,7 @@ Every function here is pure: stores in, plain data out.
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
+from dataclasses import dataclass, field
 from typing import Any
 
 from ..nkb.parser import mode_code
@@ -40,6 +41,13 @@ STATUS_LEGACY_ORPHAN = "legacy_orphan"
 STATUS_LEGACY_UNDECODED = "legacy_undecoded"
 STATUS_SYNTHESIZED_INPUT = "synthesized_input"
 STATUS_INPUT_ONLY = "input_only"
+#: The two a host asks the user about: residue, or a key kept unlinked.
+LEGACY_STATUSES: tuple[str, ...] = (STATUS_LEGACY_UNDECODED, STATUS_LEGACY_ORPHAN)
+#: Set on a button entry the user chose to keep in that review, so a
+#: later scan does not raise it again. Dropped by
+#: :func:`reconcile_inventory` when the button stops being legacy, so a
+#: relapse is reviewed again.
+LEGACY_KEEP_KEY = "legacy_keep"
 
 MemberSet = frozenset[tuple[str, int, str]]
 
@@ -177,6 +185,64 @@ def classify_button_status(
     if not (linked & remaining_modules):
         return STATUS_LEGACY_ORPHAN
     return STATUS_ACTIVE
+
+
+@dataclass
+class InventoryReconciliation:
+    """What :func:`reconcile_inventory` did."""
+
+    #: Module addresses removed from the store, upper-case, store order.
+    evicted: list[str] = field(default_factory=list)
+    #: Module addresses still in the store afterwards, upper-case.
+    remaining: set[str] = field(default_factory=set)
+    #: Whether a PC-Logic is among them (the registry-residue gate).
+    has_pc_logic: bool = False
+    #: Buttons per status, every status present even when zero.
+    counts: dict[str, int] = field(default_factory=lambda: {
+        STATUS_ACTIVE: 0,
+        STATUS_LEGACY_ORPHAN: 0,
+        STATUS_LEGACY_UNDECODED: 0,
+        STATUS_SYNTHESIZED_INPUT: 0,
+        STATUS_INPUT_ONLY: 0,
+    })
+
+
+def reconcile_inventory(
+    modules: dict[str, Any],
+    buttons: dict[str, Any],
+    absent: Iterable[str],
+    *,
+    evict: bool,
+) -> InventoryReconciliation:
+    """Settle the stores after a scan: evict what is gone, file every button.
+
+    ``modules`` is the module store (``{address: entry}``), ``buttons``
+    the button store, ``absent`` the addresses the residue probe found
+    silent. With ``evict`` — only after a full PC-Link sweep, never
+    after a per-module scan — the absent modules are removed from the
+    store. Then every button gets its ``status`` from
+    :func:`classify_button_status` against the modules that remain,
+    and a button that is no longer legacy loses its keep flag. Both
+    stores are changed in place; the caller saves them.
+    """
+    result = InventoryReconciliation()
+    absent_set = {str(a).upper() for a in absent}
+    if evict:
+        for addr in list(modules):
+            if str(addr).upper() in absent_set:
+                modules.pop(addr, None)
+                result.evicted.append(str(addr).upper())
+    result.remaining = {str(a).upper() for a in modules}
+    result.has_pc_logic = has_pc_logic_module({"nikobus_module": modules})
+    for phys in buttons.values():
+        if not isinstance(phys, dict):
+            continue
+        status = classify_button_status(phys, result.remaining, result.has_pc_logic)
+        phys["status"] = status
+        result.counts[status] = result.counts.get(status, 0) + 1
+        if status not in LEGACY_STATUSES:
+            phys.pop(LEGACY_KEEP_KEY, None)
+    return result
 
 
 def build_controlled_by_index(
@@ -493,12 +559,15 @@ def apply_rgb_links(
 __all__ = [
     "BUTTON_BACKED_SCENE_PATTERNS",
     "INPUT_ONLY_BUTTON_TYPES",
+    "LEGACY_KEEP_KEY",
+    "LEGACY_STATUSES",
     "REGISTRY_SOURCES",
     "STATUS_ACTIVE",
     "STATUS_INPUT_ONLY",
     "STATUS_LEGACY_ORPHAN",
     "STATUS_LEGACY_UNDECODED",
     "STATUS_SYNTHESIZED_INPUT",
+    "InventoryReconciliation",
     "MemberSet",
     "all_outputs_registry_sourced",
     "apply_rgb_links",
@@ -515,4 +584,5 @@ __all__ = [
     "is_pure_roller_cf",
     "is_roller_member",
     "member_set_from_outputs",
+    "reconcile_inventory",
 ]

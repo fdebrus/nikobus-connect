@@ -378,3 +378,70 @@ def test_input_only_types_are_the_catalogue_names():
 
     assert INPUT_ONLY_BUTTON_TYPES == {DEVICE_TYPES["43"]["Name"], DEVICE_TYPES["44"]["Name"]}
     assert "Universal interface, switch mode" in INPUT_ONLY_BUTTON_TYPES
+
+
+# ---------------------------------------------------------------------------
+# reconcile_inventory — evict what the probe found silent, file every button
+# ---------------------------------------------------------------------------
+
+from nikobus_connect.discovery.store import (
+    LEGACY_KEEP_KEY,
+    LEGACY_STATUSES,
+    reconcile_inventory,
+)
+
+
+def _linked(*modules):
+    return _button([(m, 1, "output_module_table") for m in modules])
+
+
+def test_evicts_absent_modules_only_after_a_full_sweep():
+    modules = {"AABB": {"module_type": "switch_module"}, "ccdd": {"module_type": "dimmer_module"}}
+    result = reconcile_inventory(modules, {}, ["CCDD"], evict=True)
+    assert result.evicted == ["CCDD"]
+    assert set(modules) == {"AABB"} and result.remaining == {"AABB"}
+
+    modules = {"AABB": {"module_type": "switch_module"}, "CCDD": {"module_type": "dimmer_module"}}
+    result = reconcile_inventory(modules, {}, ["CCDD"], evict=False)
+    assert result.evicted == [] and set(modules) == {"AABB", "CCDD"}
+
+
+def test_every_button_gets_its_status_and_the_counts_add_up():
+    modules = {"AABB": {"module_type": "switch_module"}, "CCDD": {"module_type": "dimmer_module"}}
+    buttons = {
+        "111111": _linked("AABB"),
+        "222222": _linked("CCDD"),
+        "333333": _button([]),
+        "444444": _button([], pc_logic_parent_address="8806"),
+        "555555": _button([], type="Universal interface, switch mode"),
+        "junk": "not a button",
+    }
+    result = reconcile_inventory(modules, buttons, ["CCDD"], evict=True)
+    assert {a: b["status"] for a, b in buttons.items() if isinstance(b, dict)} == {
+        "111111": "active",
+        "222222": "legacy_orphan",
+        "333333": "legacy_undecoded",
+        "444444": "synthesized_input",
+        "555555": "input_only",
+    }
+    assert result.counts == {
+        "active": 1, "legacy_orphan": 1, "legacy_undecoded": 1,
+        "synthesized_input": 1, "input_only": 1,
+    }
+    assert result.has_pc_logic is False
+
+
+def test_the_pc_logic_gate_is_read_from_what_remains():
+    modules = {"8806": {"module_type": "pc_logic"}, "AABB": {"module_type": "switch_module"}}
+    assert reconcile_inventory(modules, {}, [], evict=False).has_pc_logic is True
+    assert reconcile_inventory(modules, {}, ["8806"], evict=True).has_pc_logic is False
+
+
+def test_a_kept_button_that_gained_links_loses_its_keep():
+    modules = {"AABB": {"module_type": "switch_module"}}
+    active = _linked("AABB"); active[LEGACY_KEEP_KEY] = True
+    legacy = _button([]); legacy[LEGACY_KEEP_KEY] = True
+    reconcile_inventory(modules, {"1": active, "2": legacy}, [], evict=False)
+    assert LEGACY_KEEP_KEY not in active
+    assert legacy[LEGACY_KEEP_KEY] is True
+    assert legacy["status"] in LEGACY_STATUSES
