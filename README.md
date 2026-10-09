@@ -13,7 +13,7 @@ Asynchronous Python library for communicating with the **Nikobus** home-automati
 - Async serial and TCP connections, with a **presence probe** that proves a Nikobus device is on the line rather than just an open port
 - Framing and both checksums verified: the PC-Link's CRC-8 over the serial hop **and** the module's CRC-16 over the payload, so a byte flipped on the bus is dropped instead of decoded
 - Command queue with retries and ACK tracking; every bus exchange takes a shared lock, so a queued command can never be sent on top of a discovery read
-- Real-time listener for button presses and Feedback Module pushes
+- Real-time listener for button presses and Feedback Module pushes, and a press tracker that turns a key's frame stream into tap / hold / release with wire-time duration and burst-tolerant release detection
 - High-level API: switches, dimmers, covers (open / close / stop)
 - Discovery: PC-Link inventory, then a per-module register scan bounded by the record count the module itself reports
 - Decoders for switch, roller, dimmer and Audio Distribution link records, PC-Link and PC-Logic registry records, with mode and timer tables taken from the vendor's own parameter tables — and the RGB controller's mode table from its programming leaflet
@@ -121,6 +121,21 @@ await api.press_button("295682")
 ```
 
 One write: the `#N` telegram repeated as a real key repeats it while held, back to back. Do not queue the repeats yourself — spaced 150 ms apart, an impulse/toggle link can count them as two presses. The interface never relays the host's own press back, so refresh the impacted module afterwards if you need its state.
+
+### A press from its frames
+
+A key repeats its `#N` frame every 40 ms while held. `nikobus_connect.press` infers the press from that stream: duration is the frame count times the cadence (the only measure that survives a bridge delivering frames in a burst), hold milestones at 1, 2 and 3 s are reported once each, and release is silence that outlasts a patience the tracker extends after a burst. The clock is injected.
+
+```python
+from nikobus_connect.press import PressTracker
+
+tracker = PressTracker()
+state, started, milestones = tracker.frame("C5E952")   # on every #N frame
+...
+if (ended := tracker.release_due("C5E952")) is not None:  # from your loop
+    tracker.end("C5E952", ended.press_id)
+    ended.duration_s, ended.bucket, ended.is_short
+```
 
 ### Listening to button presses
 

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.48.0
+
+- **What a key press is, inferred from its frames, now lives in the library.** A Nikobus key sends no "pressed" or "released": it repeats its `#N` frame every 40 ms while held, and stops. `nikobus_connect.press` turns that stream into a press — `PressTracker.frame()` on every frame, `release_due()` from whatever clock the host runs — with the two rules a host otherwise has to get right on its own: duration is wire time, `frame_count × 40 ms`, which is the only measure that survives a bridge delivering frames in a burst; and release is silence, with patience extended to the wire time a burst implied, up to five seconds, and relaxed once the cadence is normal again. Hold milestones at 1, 2 and 3 s are reported once each, in order, even when one burst crosses all three. Nothing in it knows an event bus, a task or a module; the clock is injected, so a test drives it without sleeping. `impacted_groups()` and `primary_link()` read what a key's links drive from a button-store operation point, by output group. Moved from the Home Assistant integration (3.24.0), where it had been since 3.17; the constants keep their values.
+
 ## 0.47.0
 
 - **A set-output request reports its outcome.** `set_output_state` returned once the request was queued; a frame that was never acknowledged was logged by the queue worker and nothing else — the host kept showing the state it had asked for. The method now returns a future that resolves with the module's answer or fails after the last attempt, and takes a `failure_handler` called with that error; joiners of a pending group write share both. `NikobusAPI`'s switch, light and cover actions pass `failure_handler` through. An ignored failure is not logged by asyncio as an unretrieved exception.
