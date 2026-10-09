@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.51.0
+
+- **Where a shutter is, from how long it has been moving.** A roller module reports only whether a channel drives up, drives down or is idle; a position has to be timed. `nikobus_connect.travel.TravelCalculator` does the timing: the two run times the module was programmed with, 0 closed to 100 open, a start that can be backdated by the latency with which a move was noticed, a re-target in flight that anchors on the position in flight rather than snapping back, a stop that commits what was reached, and a zero run time that never moves. The clock is injected. Moved from the Home Assistant integration (3.27.0) with its tests; the last of the four moves that started with 0.48.0.
+
 ## 0.50.0
 
 - **The discovery bar's arithmetic.** `nikobus_connect.discovery.progress` turns a run's stage and counters into one percentage: the stages' weights (inventory 10, identity 20, register scan 65, finalizing 5), the inventory tracking frames once a total is known, identity driven by the `$2E` answers rather than the queued reads, the register scan as modules done plus the current one's share, finalizing at its midpoint and the residue probe after it at three quarters so the bar never falls back while it runs, and the rescaling of a partial run — an overview, or a scan on its own — to span the bar. `progress_percent(stage, ProgressCounters(...), scope)`; ported from the Home Assistant integration (3.26.0) with the tests that pinned it against real runs.
