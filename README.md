@@ -224,6 +224,8 @@ Discovery runs in two stages. The first reads the PC-Link's own registry — the
 from nikobus_connect.discovery import NikobusDiscovery
 ```
 
+Once the stores are filled, `nikobus_connect.discovery.store` reads them back for a host: the `controlled_by` index (which keys drive an output), a button's status after a scan (active, residue of a previous owner, or an input that never writes a link table), whether a central function is a shutter group or a light scene, and the full trigger-to-outputs routing graph. Pure functions, stores in and plain data out.
+
 `NikobusDiscovery` is designed to be driven by a coordinator that owns the command handler and a background task scheduler — see the [Home Assistant integration](https://github.com/fdebrus/Nikobus-HA) for a complete reference implementation.
 
 ### Audio Distribution module
