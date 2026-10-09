@@ -105,6 +105,9 @@ await api.turn_off_light("D1E2F3", 2)
 
 ### Cover / roller shutter
 
+A roller module reports direction, not position; `nikobus_connect.travel.TravelCalculator` times the travel from the module's run times (`start_travel("opening", latency=…)`, `stop()`, `current_position()`), with an injectable clock.
+
+
 ```python
 await api.open_cover("C0FFEE", 1)
 await asyncio.sleep(5)
