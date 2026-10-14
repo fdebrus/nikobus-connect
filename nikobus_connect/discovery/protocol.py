@@ -193,6 +193,45 @@ def convert_nikobus_address(address_string: str) -> str:
 #   slot 1 → 0x64A061, ..., slot 6 → 0x64A066
 
 
+#: Physical-address classes of buttons that exist only in programming:
+#: nothing on a wall emits them, yet output modules hold links on them.
+VIRTUAL_CLASS_PC_LOGIC = "pc_logic"
+VIRTUAL_CLASS_BANK = "bank"
+
+
+def virtual_button_class(physical: str) -> str | None:
+    """The class of a button address no plate can own, or ``None``.
+
+    * ``"pc_logic"`` — ``0x600000``–``0x6FFFFF``, the PC-Logic's own
+      address class: its inputs (``0x600000 | (addr >> 1) << 4 | slot``,
+      above) and its logic outputs. A logic function fires like a key:
+      on a real install (Nikobus-HA, 2026-10) PC-Logic ``8DC8`` put
+      ``#N002087`` / ``#N402087`` on the bus for L01 on / off, which is
+      physical ``684100`` with the ordinary key-nibble offsets. The rule
+      for the lower bits of a logic output is not known; it is not
+      needed either, since the output module's link record carries the
+      exact address.
+    * ``"bank"`` — ``0x3CF000``–``0x3CFFFF``, the Nikobus software's
+      generic virtual input banks (its ``virt-02`` / ``virt-04`` /
+      ``virt-64`` products, allocated down from ``0x3CF3E0``..``F1``):
+      programs and scenes fire them. An install with a 64-key bank held
+      52 of them at ``3CF000``–``3CF03E``, with the audio bank right
+      after at ``3CF040``.
+
+    Anything else is a plate, known or not, and stays unmatched when no
+    plate is found: inventing a wall button is worse than dropping a link.
+    """
+    try:
+        value = int(physical, 16)
+    except (TypeError, ValueError):
+        return None
+    if 0x600000 <= value <= 0x6FFFFF:
+        return VIRTUAL_CLASS_PC_LOGIC
+    if 0x3CF000 <= value <= 0x3CFFFF:
+        return VIRTUAL_CLASS_BANK
+    return None
+
+
 def derive_pc_logic_input_physicals(
     pc_logic_address: str,
     channel_count: int = 6,
@@ -565,6 +604,9 @@ __all__ = [
     "reverse_hex",
     "convert_nikobus_address",
     "derive_pc_logic_input_physicals",
+    "virtual_button_class",
+    "VIRTUAL_CLASS_PC_LOGIC",
+    "VIRTUAL_CLASS_BANK",
     "pc_logic_address_for_input",
     "pc_logic_input_slot_index",
     "classify_device_type",
