@@ -36,6 +36,7 @@ buffering the resolver can't run.
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 from ..coordinator_protocol import CoordinatorProtocol
@@ -151,6 +152,34 @@ def decode_input_link(record: bytes) -> dict[str, Any] | None:
     }
 
 
+#: The PC-Logic's logic-output table: the bus frames the module can put
+#: on the bus when a logic function fires, in order, one three-byte
+#: address after two zero bytes each — ``0000 002087 0000 102087 …`` —
+#: between runs of ``FF``. On a real install (8DC8, 2026-10) the first
+#: entry, ``002087``, was logic function L01; the table listed 192
+#: addresses in six families (``xx2087``, ``xxA087``, …). Only the first
+#: form of each output is listed: the module's other event for the same
+#: function is the next key of the same plate (``402087`` for L01).
+_LOGIC_OUTPUT_RUN = re.compile(r"(?:0000[0-9A-F]{4}87)+")
+#: Shorter runs are a coincidence in registry data, not a table.
+LOGIC_OUTPUT_TABLE_MIN = 8
+
+
+def parse_logic_output_table(stream_hex: str) -> list[str]:
+    """The logic-output addresses in a PC-Logic's memory stream, in order.
+
+    ``stream_hex`` is the module's chunk stream as read; the table is
+    the longest run of ``0000 xxxx87`` units in it, and at least
+    ``LOGIC_OUTPUT_TABLE_MIN`` long. ``[]`` when there is none.
+    """
+    best = ""
+    for match in _LOGIC_OUTPUT_RUN.finditer(stream_hex.upper()):
+        if len(match.group(0)) > len(best):
+            best = match.group(0)
+    entries = [best[i + 4 : i + 10] for i in range(0, len(best), 10)]
+    return entries if len(entries) >= LOGIC_OUTPUT_TABLE_MIN else []
+
+
 class PcLogicDecoder(BaseChunkingDecoder):
     """PC-Logic variant of the chunk-based decoder pipeline.
 
@@ -176,6 +205,8 @@ class PcLogicDecoder(BaseChunkingDecoder):
         self._extension_from: int | None = None
         self.input_links: list[dict[str, Any]] = []
         self.input_links_by_module: dict[str, list[dict[str, Any]]] = {}
+        self._chunk_stream: list[str] = []
+        self.logic_outputs_by_module: dict[str, list[str]] = {}
 
     def reset_registry(self) -> None:
         """Clear the registry buffer between scans."""
@@ -200,10 +231,22 @@ class PcLogicDecoder(BaseChunkingDecoder):
                 self._input_count,
                 len(self.input_links),
             )
+        if self._chunk_stream and self._module_address:
+            outputs = parse_logic_output_table("".join(self._chunk_stream))
+            if outputs:
+                self.logic_outputs_by_module[self._module_address] = outputs
+                _LOGGER.info(
+                    "%s scan of module %s — logic output table lists %d addresses, first %s",
+                    _LOG_PREFIX,
+                    self._module_address,
+                    len(outputs),
+                    ", ".join(outputs[:4]),
+                )
         _emit_scan_summary(
             _LOG_PREFIX, self._module_address, self._scan_counts, _LOGGER
         )
         self._registry.reset()
+        self._chunk_stream = []
         self._current_block = None
         self._input_stream = bytearray()
         self._input_count = None
@@ -331,6 +374,9 @@ class PcLogicDecoder(BaseChunkingDecoder):
     ) -> list[DecodedCommand]:
         chunk = chunk.strip().upper()
         addr = module_address or self._module_address
+        # Kept whole: the logic-output table is parsed from the stream at
+        # the end of the scan, since its units straddle chunk boundaries.
+        self._chunk_stream.append(chunk)
         return _decode_and_log(
             chunk,
             addr,
@@ -344,10 +390,12 @@ class PcLogicDecoder(BaseChunkingDecoder):
 
 
 __all__ = [
+    "LOGIC_OUTPUT_TABLE_MIN",
     "PC_LOGIC_INPUT_COUNT_ADDRESS",
     "PC_LOGIC_INPUT_MAX_RECORDS",
     "PC_LOGIC_INPUT_TABLE_ADDRESS",
     "PcLogicDecoder",
     "decode",
     "decode_input_link",
+    "parse_logic_output_table",
 ]
