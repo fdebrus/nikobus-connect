@@ -724,6 +724,9 @@ def merge_discovered_buttons(
             "pc_logic_slot_index",
             "remote_transmitter_address",
             "remote_transmitter_suffix",
+            "virtual_button",
+            "virtual_class",
+            "virtual_parent_address",
         ):
             if provenance_key in device:
                 phys_entry[provenance_key] = device[provenance_key]
@@ -1309,6 +1312,10 @@ def _ensure_ir_op_point(
     return op_point
 
 
+#: Store ``type`` / ``model`` of an entry synthesized for a button that
+#: exists only in programming (see ``protocol.virtual_button_class``).
+VIRTUAL_BUTTON_TYPE = "Virtual button"
+VIRTUAL_BUTTON_MODEL = "Virtual"
 CALENDAR_CHANNEL_TYPE = "PC-Link Calendar Channel"
 CALENDAR_OP_POINT_KEY = "CAL"
 
