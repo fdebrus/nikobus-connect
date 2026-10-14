@@ -202,21 +202,27 @@ VIRTUAL_CLASS_BANK = "bank"
 def virtual_button_class(physical: str) -> str | None:
     """The class of a button address no plate can own, or ``None``.
 
-    * ``"pc_logic"`` — ``0x600000``–``0x6FFFFF``, the PC-Logic's own
-      address class: its inputs (``0x600000 | (addr >> 1) << 4 | slot``,
-      above) and its logic outputs. A logic function fires like a key:
-      on a real install (Nikobus-HA, 2026-10) PC-Logic ``8DC8`` put
-      ``#N002087`` / ``#N402087`` on the bus for L01 on / off, which is
-      physical ``684100`` with the ordinary key-nibble offsets. The rule
-      for the lower bits of a logic output is not known; it is not
-      needed either, since the output module's link record carries the
-      exact address.
+    Addresses come in two spellings that give the same bus frame: the
+    vendor's, as a project file or the input formula above write it
+    (``0x6xxxxx`` for a PC-Logic), and the library's canonical one,
+    which every decoder produces from a link record (``0x38xxxx`` for
+    the same addresses — ``convert_nikobus_address`` keeps 21 address
+    bits plus the key bits, so it has no unique inverse). Both are
+    accepted.
+
+    * ``"pc_logic"`` — the PC-Logic's logic outputs. A logic function
+      fires like a key: on a real install (Nikobus-HA, 2026-10)
+      PC-Logic ``8DC8`` put ``#N002087`` / ``#N402087`` on the bus for
+      L01's two events, and the switch module held the link as
+      canonical ``384100`` key 0. Which PC-Logic owns an address, and
+      its number, come from the module's own output table (see
+      ``pc_logic_decoder.parse_logic_output_table``); the class alone
+      does not say, since the PC-Link's central functions share it.
     * ``"bank"`` — ``0x3CF000``–``0x3CFFFF``, the Nikobus software's
       generic virtual input banks (its ``virt-02`` / ``virt-04`` /
-      ``virt-64`` products, allocated down from ``0x3CF3E0``..``F1``):
-      programs and scenes fire them. An install with a 64-key bank held
-      52 of them at ``3CF000``–``3CF03E``, with the audio bank right
-      after at ``3CF040``.
+      ``virt-64`` products): programs and scenes fire them. An install
+      with a 64-key bank held 52 of them at ``3CF000``–``3CF03E``, with
+      the audio bank right after at ``3CF040``.
 
     Anything else is a plate, known or not, and stays unmatched when no
     plate is found: inventing a wall button is worse than dropping a link.
@@ -225,11 +231,40 @@ def virtual_button_class(physical: str) -> str | None:
         value = int(physical, 16)
     except (TypeError, ValueError):
         return None
-    if 0x600000 <= value <= 0x6FFFFF:
+    if 0x380000 <= value <= 0x38FFFF or 0x600000 <= value <= 0x6FFFFF:
         return VIRTUAL_CLASS_PC_LOGIC
     if 0x3CF000 <= value <= 0x3CFFFF:
         return VIRTUAL_CLASS_BANK
     return None
+
+
+def virtual_record_bus_address(physical: str, key_raw: Any) -> str | None:
+    """The ``#N`` frame a link record on a virtual button listens for.
+
+    The frame is what the module compares, so it is what a record is
+    filed by when no entry owns its spelling of the address (a store
+    written in the vendor's form, say). ``384100`` key 0 is ``002087``,
+    the same plate's key 2 (1D) ``402087``, and ``384102`` key 0 the
+    next output's ``102087``. ``None`` when the key index is unknown.
+    """
+    try:
+        converted = convert_nikobus_address(physical)
+        nibble = int(converted[0], 16)
+        add = KEY_MAPPING_MODULE[8 if int(key_raw) >= 4 else 4][int(key_raw)]
+    except (KeyError, TypeError, ValueError, IndexError):
+        return None
+    return f"{(nibble + int(add, 16)) & 0xF:X}{converted[1:]}"
+
+
+def virtual_plate_address(physical: str) -> str:
+    """The canonical spelling of a virtual button address.
+
+    Clears the key bits of the bus frame and converts back: the identity
+    for a canonical address (``384102`` stays ``384102``), and the
+    canonical form of the vendor's (``684100`` becomes ``384100``).
+    """
+    base = int(convert_nikobus_address(physical), 16) & 0x3FFFFF
+    return convert_nikobus_address(f"{base:06X}")
 
 
 def derive_pc_logic_input_physicals(
@@ -605,6 +640,8 @@ __all__ = [
     "convert_nikobus_address",
     "derive_pc_logic_input_physicals",
     "virtual_button_class",
+    "virtual_plate_address",
+    "virtual_record_bus_address",
     "VIRTUAL_CLASS_PC_LOGIC",
     "VIRTUAL_CLASS_BANK",
     "pc_logic_address_for_input",

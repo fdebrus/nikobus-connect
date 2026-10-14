@@ -39,6 +39,7 @@ from .protocol import (
     derive_pc_logic_input_physicals,
     reverse_hex,
     virtual_button_class,
+    virtual_plate_address,
 )
 from ..coordinator_protocol import CoordinatorProtocol
 from ..const import (
@@ -2155,29 +2156,53 @@ class NikobusDiscovery:
         _LOGGER.info(
             "CF light-scene classification — total scenes %d", len(found)
         )
+    def _logic_output_tables(self) -> dict[str, tuple[str, int]]:
+        """``bus frame -> (PC-Logic address, 1-based index)`` for every
+        PC-Logic whose logic-output table is known: read in this run, or
+        kept in the module store from an earlier one."""
+        tables: dict[str, tuple[str, int]] = {}
+        stored: dict[str, list[str]] = {}
+        if self._module_data is not None:
+            for addr, entry in (self._module_data.get("nikobus_module") or {}).items():
+                if not isinstance(entry, dict) or entry.get("module_type") != "pc_logic":
+                    continue
+                info = entry.get("discovered_info")
+                outputs = info.get("logic_outputs") if isinstance(info, dict) else None
+                if isinstance(outputs, list) and outputs:
+                    stored[str(addr).upper()] = [str(o).upper() for o in outputs]
+        for pc_logic, outputs in {**stored, **self.pc_logic_logic_outputs}.items():
+            for index, bus in enumerate(outputs, start=1):
+                tables.setdefault(bus.upper(), (pc_logic.upper(), index))
+        return tables
+
+    def _attach_logic_output_tables(self) -> None:
+        """Carry each PC-Logic's logic-output table into its module entry."""
+        for pc_logic, outputs in self.pc_logic_logic_outputs.items():
+            device = self.discovered_devices.get(pc_logic.upper())
+            if isinstance(device, dict) and device.get("module_type") == "pc_logic":
+                device["logic_outputs"] = list(outputs)
+
     def _synthesize_virtual_buttons_from_unmatched(self) -> int:
-        """Give an entry to every unmatched address in a virtual class.
+        """Give an entry to every unmatched address that is a button
+        existing only in programming.
 
-        After the remote-transmitter pass, an address still unmatched
-        is either a plate the inventory does not know — left alone, a
-        guessed wall button is worse than a dropped link — or a button
-        that exists only in programming: a PC-Logic logic output, or a
-        key of the software's virtual input banks. Those two classes
-        are recognisable by address (``virtual_button_class``), and the
-        output modules' own tables say which keys they use, so an
-        entry is synthesized as a plate of four keys (eight when a key
-        index above three was seen) and the links merge onto it like
-        any other button's. Only records read from an output module's
-        table count: a registry-only record may be residue.
-
-        A PC-Logic-class entry is attributed to the install's PC-Logic
-        when there is exactly one (``virtual_parent_address``); with
-        several, the rule for a logic output's lower bits is unknown
-        and no guess is made. Returns the number of entries added.
+        Two classes qualify (``virtual_button_class``): a PC-Logic logic
+        output — only when a PC-Logic's own output table lists it, since
+        the PC-Link's central functions share the address class and stay
+        scenes — and a key of the software's virtual input banks. The
+        output modules' tables say which keys are used, so an entry is a
+        plate of four keys (eight when a key index above three was
+        seen), keyed by the plate's canonical address, so the vendor's
+        spelling of the same plate (``684100`` for ``384100``) names the
+        same entry and the links merge onto it. Only records read from an
+        output module's table count: a registry-only record may be
+        residue. Consumed addresses leave the unmatched set. Returns the
+        number of entries added.
         """
         if self._button_data is None:
             return 0
         buttons = self._button_data.get("nikobus_button") or {}
+        tables = self._logic_output_tables()
 
         keys_by_address: dict[str, set[int]] = {}
         for mapping_key, outputs in self._accumulated_command_mapping.items():
@@ -2196,34 +2221,38 @@ class NikobusDiscovery:
             if isinstance(key_raw, int):
                 keys_by_address[address].add(key_raw)
 
-        pc_logics = sorted(
-            str(addr).upper()
-            for addr, dev in self.discovered_devices.items()
-            if isinstance(dev, dict) and dev.get("module_type") == "pc_logic"
-        )
-        if not pc_logics and self._module_data is not None:
-            modules = self._module_data.get("nikobus_module") or {}
-            pc_logics = sorted(
-                str(addr).upper()
-                for addr, entry in modules.items()
-                if isinstance(entry, dict) and entry.get("module_type") == "pc_logic"
-            )
-        parent = pc_logics[0] if len(pc_logics) == 1 else None
-
-        added = 0
+        # Group the unmatched addresses by plate.
+        plates: dict[str, dict[str, Any]] = {}
         for address in sorted(self._accumulated_unmatched):
             normalized = str(address).upper()
-            if normalized in self.discovered_devices or normalized in buttons:
-                continue
             virtual_class = virtual_button_class(normalized)
             if virtual_class is None or normalized not in keys_by_address:
                 continue
-            keys = keys_by_address[normalized]
+            plate = virtual_plate_address(normalized)
+            bus_first = convert_nikobus_address(plate)
+            owner = tables.get(bus_first)
+            if virtual_class == VIRTUAL_CLASS_PC_LOGIC and owner is None:
+                continue  # a central function of the PC-Link, or unknown
+            group = plates.setdefault(
+                plate, {"class": virtual_class, "owner": owner, "members": [], "keys": set()}
+            )
+            group["members"].append(normalized)
+            group["keys"] |= keys_by_address[normalized]
+
+        added = 0
+        for plate, group in sorted(plates.items()):
+            if plate in self.discovered_devices or plate in buttons:
+                self._accumulated_unmatched -= set(group["members"])
+                continue
+            keys: set[int] = group["keys"]
             channels = 8 if any(k >= 4 for k in keys) else 4
-            if virtual_class == VIRTUAL_CLASS_PC_LOGIC:
-                description = f"PC-Logic virtual output {normalized}"
+            owner = group["owner"]
+            if owner is not None:
+                pc_logic, index = owner
+                # The software numbers them L01, L02 … in table order.
+                description = f"PC-Logic {pc_logic} L{index:02d}"
             else:
-                description = f"Virtual button {normalized}"
+                description = f"Virtual button {plate}"
             entry: dict[str, Any] = {
                 "description": description,
                 "discovered_name": description,
@@ -2231,24 +2260,27 @@ class NikobusDiscovery:
                 "device_type": "VB",  # synthetic marker, not a DEVICE_TYPES byte
                 "type": VIRTUAL_BUTTON_TYPE,
                 "model": VIRTUAL_BUTTON_MODEL,
-                "address": normalized,
+                "address": plate,
                 "channels": channels,
                 "channels_count": channels,
                 "module_type": "other_module",
                 "discovered": True,
                 "virtual_button": True,
-                "virtual_class": virtual_class,
+                "virtual_class": group["class"],
             }
-            if virtual_class == VIRTUAL_CLASS_PC_LOGIC and parent is not None:
-                entry["virtual_parent_address"] = parent
-            self.discovered_devices[normalized] = entry
+            if owner is not None:
+                entry["virtual_parent_address"] = owner[0]
+                entry["virtual_output_index"] = owner[1]
+            self.discovered_devices[plate] = entry
+            self._accumulated_unmatched -= set(group["members"])
             added += 1
             _LOGGER.info(
-                "Synthesized virtual button %s (%s, %d keys, keys seen %s)",
-                normalized,
-                virtual_class,
+                "Synthesized virtual button %s (%s, %d keys) for %s — spellings %s",
+                plate,
+                group["class"],
                 channels,
-                sorted(keys),
+                description,
+                ", ".join(group["members"]),
             )
         return added
 
@@ -2403,6 +2435,7 @@ class NikobusDiscovery:
         # writes them into the button store as 2-channel virtual
         # buttons, parented under the PC-Logic module.
         self._synthesize_pc_logic_inputs()
+        self._attach_logic_output_tables()
 
         # Stage 2: inventory complete -> persist results
         _LOGGER.debug("Starting updates for module and button data")
@@ -2625,15 +2658,17 @@ class NikobusDiscovery:
             # mis-synthesised as RF transmitters: each ``38 41 XX`` /
             # ``38 80 XX`` address is a single CF, not 8+ siblings of
             # one remote.
-            self._classify_cf_broadcasts_from_unmatched()
             pre_synth_count = len(self.discovered_devices)
-            self._synthesize_remote_transmitters_from_unmatched()
-            # What is left and lives in a virtual address class — the
-            # PC-Logic's logic outputs, the software's virtual input
-            # banks — gets an entry of its own, so the links the output
-            # modules hold on it survive the merge and a host can see
-            # the frame it puts on the bus as a known press.
+            # First the buttons that exist only in programming — a
+            # PC-Logic's logic outputs, by its own output table, and the
+            # software's virtual input banks — so each gets an entry of
+            # its own: the links the output modules hold on it survive
+            # the merge and a host sees the frame it puts on the bus as
+            # a known press. A logic output shares the CF address class,
+            # so this runs before the CF classifier claims it.
             self._synthesize_virtual_buttons_from_unmatched()
+            self._classify_cf_broadcasts_from_unmatched()
+            self._synthesize_remote_transmitters_from_unmatched()
             synthesised = len(self.discovered_devices) - pre_synth_count
             if synthesised:
                 try:
@@ -3449,6 +3484,17 @@ class NikobusDiscovery:
                     register_list,
                     sub_byte=wire_sub,
                 )
+
+    @property
+    def pc_logic_logic_outputs(self) -> dict[str, list[str]]:
+        """Each PC-Logic's logic-output table read so far, by module
+        address: the ``#N`` frames it can put on the bus, in order
+        (see ``pc_logic_decoder.parse_logic_output_table``)."""
+        for decoder in self._decoders:
+            outputs = getattr(decoder, "logic_outputs_by_module", None)
+            if outputs is not None:
+                return {address: list(items) for address, items in outputs.items()}
+        return {}
 
     @property
     def pc_logic_input_links(self) -> dict[str, list[dict[str, Any]]]:

@@ -9,6 +9,7 @@ from collections.abc import Callable
 from typing import Any
 
 from .mapping import KEY_MAPPING, KEY_MAPPING_MODULE
+from .protocol import virtual_button_class, virtual_record_bus_address
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -326,6 +327,11 @@ def merge_discovered_modules(
         }
         if channels_count > 0:
             info["channels_count"] = channels_count
+        # A PC-Logic's logic-output table, so a later per-module scan
+        # can still tell its outputs from the PC-Link's central functions.
+        outputs = device.get("logic_outputs")
+        if isinstance(outputs, list) and outputs:
+            info["logic_outputs"] = [str(o).upper() for o in outputs]
         return info
 
     def _generate_description(module_type: str) -> str:
@@ -1015,6 +1021,21 @@ def _resolve_operation_point(
             op_point = (physical.get("operation_points") or {}).get(key_label)
             if isinstance(op_point, dict):
                 return normalized, key_label, op_point
+
+    # 1b) A button that exists only in programming (a PC-Logic logic
+    # output, a software bank key) whose entry is spelled differently
+    # from the record (the vendor's form against the decoders'
+    # canonical one): resolve by the frame the module listens for.
+    if virtual_button_class(normalized) is not None:
+        bus = virtual_record_bus_address(normalized, key_raw)
+        bus_hit = bus_to_op.get(bus) if bus else None
+        if bus_hit is not None:
+            phys_addr, key_label = bus_hit
+            physical = buttons.get(phys_addr)
+            if isinstance(physical, dict):
+                op_point = (physical.get("operation_points") or {}).get(key_label)
+                if isinstance(op_point, dict):
+                    return phys_addr, key_label, op_point
 
     # 1a) 8-channel +1 alias fallback. An 8-control-point button occupies
     # TWO consecutive bus addresses: the even base ``N`` carries the
