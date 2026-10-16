@@ -40,18 +40,28 @@ async def test_press_repeat_is_honoured_with_a_floor_of_one() -> None:
     assert api.press_command("295682").count("#N") == 3
 
 
-async def test_led_trigger_and_switch_key_use_the_same_burst() -> None:
+async def test_led_trigger_and_switch_key_use_the_same_burst(monkeypatch) -> None:
+    monkeypatch.setattr("nikobus_connect.api.FEEDBACK_KEY_SETTLE_S", 0)
     module_data = {
         "switch_module": {
             "81F6": {"channels": [{}] * 6 + [{"led_on": "295682", "led_off": "295682"}] + [{}] * 5}
         }
     }
     api, handler = _api(module_data)
+
+    async def _queue(command, *args, completion_handler=None, **kwargs):
+        if completion_handler is not None:
+            await completion_handler()
+
+    handler.queue_command = AsyncMock(side_effect=_queue)
+    # Channel 7 (group 2, first byte) reads off, then on after the press.
+    handler.get_output_state = AsyncMock(side_effect=["00" * 6, "FF" + "00" * 5])
     await api.turn_on_switch("81F6", 7)
     command = handler.queue_command.await_args.args[0]
     assert command.count("#N295682") == 3
-    # The key is pressed instead of the output being set.
-    handler.set_bytearray_state.assert_called_once_with("81F6", 7, 0xFF)
+    # The key is pressed instead of the output being set; the buffer holds what was read.
+    handler.set_output_state.assert_not_called()
+    handler.set_bytearray_state.assert_any_call("81F6", 7, 0xFF)
 
 
 async def test_completion_handler_is_passed_through() -> None:

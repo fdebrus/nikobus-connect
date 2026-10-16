@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Callable
 from datetime import datetime
 from typing import Any, Final
 
-from .const import DEFAULT_PRESS_REPEAT
+from .const import COMMAND_ACK_WAIT_TIMEOUT, DEFAULT_PRESS_REPEAT
 from .exceptions import NikobusError
 from .protocol import (
     FUNC_GET_TIME,
@@ -32,6 +33,10 @@ STATE_OFF = 0x00
 STATE_ON = 0xFF
 STATE_OPEN = 0x01
 STATE_CLOSE = 0x02
+
+#: Wait between a feedback key's press leaving the interface and the read
+#: that checks it: the module switches within a few hundred milliseconds.
+FEEDBACK_KEY_SETTLE_S: Final[float] = 0.6
 
 # Programming-image sizes per output-module family (bytes). Switch and
 # roller modules share one layout (256-byte index, 6-byte link records
@@ -133,6 +138,14 @@ class NikobusAPI:
         chan_info = self._get_channel_info(module_key, address, channel)
         bus_cmd = chan_info.get(cmd_key)
 
+        if bus_cmd and module_key == "switch_module":
+            await self._switch_by_key(
+                address, channel, target_state != STATE_OFF, bus_cmd,
+                completion_handler=completion_handler,
+                failure_handler=failure_handler,
+            )
+            return
+
         try:
             if bus_cmd:
                 _LOGGER.debug("Sending bus trigger for %s — %s", address, bus_cmd)
@@ -148,6 +161,115 @@ class NikobusAPI:
         except NikobusError as err:
             _LOGGER.error("API action failed for %s: %s", address, err)
             raise
+
+    # --- FEEDBACK KEYS ---
+
+    def has_feedback_key(self, module_key: str, address: str, channel: int) -> bool:
+        """Whether the channel is driven by pressing a key (``led_on`` / ``led_off``)."""
+        info = self._get_channel_info(module_key, address, channel)
+        return bool(info.get("led_on") or info.get("led_off"))
+
+    async def _read_channel(self, address: str, channel: int) -> bool | None:
+        """Read the channel's group from the module; ``None`` when unanswered.
+
+        The answer is written into the state buffer, so the host shows what
+        the module reports rather than what was asked for.
+        """
+        group = 1 if channel <= 6 else 2
+        try:
+            state_hex = await self._command_handler.get_output_state(address, group)
+            image = bytes.fromhex((state_hex or "")[:12])
+        except (NikobusError, TimeoutError, ValueError) as err:
+            _LOGGER.debug("Reading %s group %d failed: %s", address, group, err)
+            return None
+        if len(image) < 6:
+            return None
+        first = 1 if group == 1 else 7
+        for offset, value in enumerate(image):
+            self._command_handler.set_bytearray_state(address, first + offset, value)
+        return image[(channel - 1) % 6] != STATE_OFF
+
+    async def _switch_by_key(
+        self,
+        address: str,
+        channel: int,
+        want_on: bool,
+        key: str,
+        *,
+        current: bool | None = None,
+        completion_handler: Callable[..., Any] | None = None,
+        failure_handler: Callable[[BaseException], Any] | None = None,
+    ) -> bool:
+        """Bring a switch channel to ``want_on`` by pressing its feedback key.
+
+        A feedback key keeps the plate's LED in step, which a set-output
+        does not; but it is usually a toggle, so pressing it blindly can
+        switch the wrong way and a lost press goes unnoticed. The channel
+        is read first (unless ``current`` is given) and the key is left
+        alone when the output is already where it should be; after the
+        press the channel is read again, and an output that did not move
+        is set directly — the output is then right, the LED may lag until
+        the next real press. When the channel cannot be read, the output
+        is set directly. Returns ``True`` once the module has been read,
+        so the host can show the state from the buffer.
+        """
+        target = STATE_ON if want_on else STATE_OFF
+        if current is None:
+            current = await self._read_channel(address, channel)
+        if current is None:
+            _LOGGER.warning(
+                "Module %s did not answer before pressing feedback key %s — "
+                "setting channel %d directly",
+                address, key, channel,
+            )
+            await self._command_handler.set_output_state(
+                address, channel, target,
+                completion_handler=completion_handler,
+                failure_handler=failure_handler,
+            )
+            return False
+        if current == want_on:
+            _LOGGER.debug(
+                "Module %s channel %d already %s — feedback key %s not pressed",
+                address, channel, "on" if want_on else "off", key,
+            )
+            if completion_handler is not None:
+                await completion_handler()
+            return True
+
+        loop = asyncio.get_running_loop()
+        on_wire: asyncio.Future[None] = loop.create_future()
+
+        async def _sent() -> None:
+            if not on_wire.done():
+                on_wire.set_result(None)
+
+        _LOGGER.debug(
+            "Pressing feedback key %s to switch %s channel %d %s",
+            key, address, channel, "on" if want_on else "off",
+        )
+        await self.press_button(key, completion_handler=_sent)
+        try:
+            await asyncio.wait_for(on_wire, timeout=COMMAND_ACK_WAIT_TIMEOUT)
+        except TimeoutError:
+            _LOGGER.warning("Feedback key %s was not sent within %ss", key, COMMAND_ACK_WAIT_TIMEOUT)
+        await asyncio.sleep(FEEDBACK_KEY_SETTLE_S)
+        after = await self._read_channel(address, channel)
+        if after == want_on:
+            if completion_handler is not None:
+                await completion_handler()
+            return True
+        _LOGGER.warning(
+            "Feedback key %s did not switch %s channel %d %s — setting it directly; "
+            "the key's LED may lag until the next press",
+            key, address, channel, "on" if want_on else "off",
+        )
+        await self._command_handler.set_output_state(
+            address, channel, target,
+            completion_handler=completion_handler,
+            failure_handler=failure_handler,
+        )
+        return after is not None
 
     # --- SWITCHES ---
 
@@ -170,6 +292,51 @@ class NikobusAPI:
     ) -> None:
         """Turn off a switch module output."""
         await self._dispatch_action("switch_module", address, channel, STATE_OFF, "led_off", completion_handler, failure_handler)
+
+    async def toggle_switch(
+        self,
+        address: str,
+        channel: int,
+        completion_handler: Callable[..., Any] | None = None,
+        failure_handler: Callable[[BaseException], Any] | None = None,
+    ) -> bool | None:
+        """Toggle a switch module output from the state the module reports.
+
+        A host's own idea of the state may be stale, and with a toggle key
+        it decides nothing anyway: the channel is read, then switched to
+        the other state — by its feedback key when it has one (verified as
+        in ``turn_on_switch``), else by a set-output. Returns the state
+        asked for, or ``None`` when the module could not be read; a lone
+        toggle key is then pressed blind, the only press that can still
+        be right.
+        """
+        info = self._get_channel_info("switch_module", address, channel)
+        on_key, off_key = info.get("led_on"), info.get("led_off")
+        current = await self._read_channel(address, channel)
+        if current is None:
+            if on_key and on_key == off_key:
+                _LOGGER.warning(
+                    "Module %s did not answer — pressing toggle key %s blind", address, on_key
+                )
+                await self.press_button(on_key, completion_handler=completion_handler)
+            else:
+                _LOGGER.warning("Module %s did not answer — toggle of channel %d skipped", address, channel)
+            return None
+        want_on = not current
+        key = on_key if want_on else off_key
+        if key:
+            await self._switch_by_key(
+                address, channel, want_on, key, current=current,
+                completion_handler=completion_handler,
+                failure_handler=failure_handler,
+            )
+        else:
+            await self._command_handler.set_output_state(
+                address, channel, STATE_ON if want_on else STATE_OFF,
+                completion_handler=completion_handler,
+                failure_handler=failure_handler,
+            )
+        return want_on
 
     # --- DIMMERS ---
 

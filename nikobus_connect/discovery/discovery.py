@@ -56,11 +56,13 @@ from ..const import (
     PC_LINK_INVENTORY_SIGNATURE_BYTE,
 )
 from .fileio import (
+    REGISTRY_RECORD_SOURCES,
     VIRTUAL_BUTTON_MODEL,
     VIRTUAL_BUTTON_TYPE,
     merge_discovered_buttons,
     merge_discovered_modules,
     merge_linked_modules,
+    strip_module_links,
 )
 from ..protocol import (
     FUNC_MODULE_STATUS,
@@ -291,6 +293,12 @@ _SWITCH_LINK_BLOCK_END = 0x70
 #: Records per dimmer link bank (bank 0: 0x100..0x7C7, bank 1: 0x900..0xFCF,
 #: one 8-byte record per 8-byte block).
 _DIMMER_BANK_RECORDS = 0xD9
+
+#: Output modules whose link table a count-driven scan reads in full;
+#: their links are rebuilt from it (``_rebuild_module_links``).
+_LINK_TABLE_MODULE_TYPES: frozenset[str] = frozenset(
+    {"switch_module", "dimmer_module", "roller_module"}
+)
 
 #: How many times a decoder may extend its own read (``extension_passes``)
 #: within one module scan. One round covers a table whose count was read
@@ -1028,6 +1036,11 @@ class NikobusDiscovery:
         # passthrough children for clusters above the threshold.
         self._accumulated_unmatched: set[str] = set()
         self._accumulated_command_mapping: dict[Any, Any] = {}
+        # Output modules whose own link table was read in full in this
+        # session (see ``_rebuild_module_links``), and the register reads
+        # of the current module scan that went unacknowledged.
+        self._complete_link_tables: set[str] = set()
+        self._scan_missed_acks = 0
         # CF (Central Function) activation broadcasts classified from
         # unmatched link-record source addresses. Populated at end of
         # discovery by ``_classify_cf_broadcasts_from_unmatched``.
@@ -1355,6 +1368,7 @@ class NikobusDiscovery:
                         consecutive_give_ups = 0
                     else:
                         consecutive_give_ups += 1
+                        self._scan_missed_acks += 1
                         if consecutive_give_ups >= MODULE_SCAN_CONSECUTIVE_GIVE_UP_LIMIT:
                             # Expected on bank-incompatible sub-bytes; fast-fail
                             # is a feature, not a problem. Keep at DEBUG so it
@@ -2691,6 +2705,7 @@ class NikobusDiscovery:
                     ) = merge_linked_modules(
                         self._button_data,
                         self._accumulated_command_mapping,
+                        self._authoritative_link_modules(),
                     )
                     _LOGGER.info(
                         "Remote-transmitter cluster synthesis — "
@@ -3390,6 +3405,11 @@ class NikobusDiscovery:
         scan_passes: tuple[ScanSection, ...] = ()
         if not self._broad_scan:
             scan_passes = await self._count_bounded_passes(normalized_address)
+        # Only a plan sized by the module's own record count can tell a
+        # complete read from a partial one: the fixed band reads banks a
+        # module legitimately does not answer.
+        count_driven = bool(scan_passes)
+        self._scan_missed_acks = 0
         if not scan_passes:
             scan_passes = _scan_passes_for_module_type(
                 self._module_type, broad_scan=self._broad_scan
@@ -3436,12 +3456,85 @@ class NikobusDiscovery:
 
         await self._run_extension_passes(normalized_address, base_command)
 
+        if (
+            count_driven
+            and self._scan_missed_acks == 0
+            and self._module_type in _LINK_TABLE_MODULE_TYPES
+        ):
+            await self._rebuild_module_links(normalized_address)
+        elif count_driven and self._scan_missed_acks:
+            _LOGGER.info(
+                "Module %s — %d register read(s) unanswered; its stored links "
+                "are kept and only added to",
+                normalized_address,
+                self._scan_missed_acks,
+            )
+
         # Clear per-module pass tracking so the finalize event doesn't
         # carry stale pass info from the last pass.
         self._progress_pass_index = 0
         self._progress_pass_total = 0
         self._progress_current_sub_byte = None
         await self._finalize_discovery(normalized_address)
+
+    def _authoritative_link_modules(self) -> set[str]:
+        """Output modules whose own link table is known to have been read
+        in full: in this session, or in an earlier one (``links_read_at``
+        in the module store). Their table is what they execute, so a copy
+        of their links from a controller's memory is not merged."""
+        modules = set(self._complete_link_tables)
+        if self._module_data is not None:
+            for address, entry in (self._module_data.get("nikobus_module") or {}).items():
+                if isinstance(entry, dict) and entry.get("links_read_at"):
+                    modules.add(str(address).upper())
+        return modules
+
+    async def _rebuild_module_links(self, address: str) -> None:
+        """File a fully read module's links afresh from its own table.
+
+        The store only ever added links, so it kept what older versions
+        had filed: records under an older label or timer, records an
+        older merge put on the wrong key, copies from the PC-Link's
+        memory. Once a module's table has been read in full (its record
+        count reported, every planned register acknowledged), every link
+        stored for it is removed and this session's records from its
+        table are merged again. Links to modules that could not be read
+        are left alone.
+        """
+        normalized = address.upper()
+        self._complete_link_tables.add(normalized)
+        if self._module_data is not None:
+            entry = (self._module_data.get("nikobus_module") or {}).get(normalized)
+            if isinstance(entry, dict):
+                entry["links_read_at"] = datetime.now(timezone.utc).isoformat()
+                if self._on_module_save is not None:
+                    await self._on_module_save()
+        if self._button_data is None:
+            return
+        own: dict[Any, list[dict[str, Any]]] = {}
+        for key, outputs in self._accumulated_command_mapping.items():
+            mine = [
+                o
+                for o in outputs
+                if isinstance(o, dict)
+                and str(o.get("module_address") or "").upper() == normalized
+                and o.get("record_source") not in REGISTRY_RECORD_SOURCES
+            ]
+            if mine:
+                own[key] = mine
+        removed = strip_module_links(self._button_data, {normalized})
+        _updated, _links, added, _unmatched = merge_linked_modules(
+            self._button_data, own, self._authoritative_link_modules()
+        )
+        _LOGGER.info(
+            "Module %s links rebuilt from its own table — %d stored link(s) "
+            "replaced by %d",
+            normalized,
+            removed,
+            added,
+        )
+        if self._on_button_save is not None and (removed or added):
+            await self._on_button_save()
 
     async def _run_extension_passes(
         self, normalized_address: str, base_command: str
@@ -4020,7 +4113,9 @@ class NikobusDiscovery:
             links_added,
             outputs_added,
             unmatched,
-        ) = merge_linked_modules(self._button_data, command_mapping)
+        ) = merge_linked_modules(
+            self._button_data, command_mapping, self._authoritative_link_modules()
+        )
         # Accumulate unmatched references and the originating command
         # mapping across module scans so we can run the remote-
         # transmitter cluster-synthesis pass at end-of-discovery.

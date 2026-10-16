@@ -1,0 +1,264 @@
+{
+  "type": "Push button, 8 control buttons with feedback LEDs (graphite)",
+  "model": "05-078-02",
+  "channels": 8,
+  "description": "Push button, 8 control buttons with feedback LEDs (graphite) #N106218",
+  "operation_points": {
+    "1A": {
+      "bus_address": "A61182",
+      "description": "Push button 1A #NA61182",
+      "linked_modules": [
+        {
+          "module_address": "C7C1",
+          "outputs": [
+            {
+              "channel": 5,
+              "mode": "M05 (Impulse)",
+              "t1": null,
+              "t2": null,
+              "payload": "0314F4648841",
+              "button_address": "106219",
+              "record_source": "output_module_table"
+            }
+          ]
+        }
+      ]
+    },
+    "1B": {
+      "bus_address": "E61182",
+      "description": "Push button 1B #NE61182",
+      "linked_modules": [
+        {
+          "module_address": "C7C1",
+          "outputs": [
+            {
+              "channel": 6,
+              "mode": "M05 (Impulse)",
+              "t1": null,
+              "t2": null,
+              "payload": "0435F4648841",
+              "button_address": "106219",
+              "record_source": "output_module_table"
+            }
+          ]
+        }
+      ]
+    },
+    "1C": {
+      "bus_address": "261182",
+      "description": "Push button 1C #N261182",
+      "linked_modules": [
+        {
+          "module_address": "C7C1",
+          "outputs": [
+            {
+              "channel": 7,
+              "mode": "M05 (Impulse)",
+              "t1": null,
+              "t2": null,
+              "payload": "FF06F4648841",
+              "button_address": "106219",
+              "record_source": "output_module_table"
+            }
+          ]
+        }
+      ]
+    },
+    "1D": {
+      "bus_address": "661182",
+      "description": "Push button 1D #N661182",
+      "linked_modules": [
+        {
+          "module_address": "C95D",
+          "outputs": [
+            {
+              "channel": 3,
+              "mode": "M14 (Dim on/off memory (1 button))",
+              "t1": null,
+              "t2": null,
+              "payload": "FFB400220B648841",
+              "button_address": "106219",
+              "record_source": "output_module_table"
+            },
+            {
+              "channel": 3,
+              "mode": "M14 (Dim on/off memory (1 button))",
+              "t1": null,
+              "t2": "1 s",
+              "payload": "FFB400220B648841",
+              "button_address": "106219",
+              "record_source": "output_module_table"
+            }
+          ]
+        }
+      ]
+    },
+    "2A": {
+      "bus_address": "861182",
+      "description": "Push button 2A #N861182",
+      "linked_modules": [
+        {
+          "module_address": "C7C1",
+          "outputs": [
+            {
+              "channel": 5,
+              "mode": "M05 (Impulse)",
+              "t1": null,
+              "t2": null,
+              "payload": "0314F4648841",
+              "button_address": "106219"
+            }
+          ]
+        },
+        {
+          "module_address": "C95D",
+          "outputs": [
+            {
+              "channel": 2,
+              "mode": "M14 (Dim on/off memory (1 button))",
+              "t1": null,
+              "t2": null,
+              "payload": "FFB400110B608841",
+              "button_address": "106218",
+              "record_source": "output_module_table"
+            },
+            {
+              "channel": 2,
+              "mode": "M14 (Dim on/off memory (1 button))",
+              "t1": null,
+              "t2": "1 s",
+              "payload": "FFB400110B608841",
+              "button_address": "106218",
+              "record_source": "output_module_table"
+            },
+            {
+              "channel": 2,
+              "mode": "M14 (Dim on/off memory (1key))",
+              "t1": null,
+              "t2": null,
+              "payload": "FFB400110B608841",
+              "button_address": "106218"
+            }
+          ]
+        }
+      ]
+    },
+    "2B": {
+      "bus_address": "C61182",
+      "description": "Push button 2B #NC61182",
+      "linked_modules": [
+        {
+          "module_address": "C7C1",
+          "outputs": [
+            {
+              "channel": 4,
+              "mode": "M05 (Impulse)",
+              "t1": null,
+              "t2": null,
+              "payload": "3633F4608841",
+              "button_address": "106218",
+              "record_source": "output_module_table"
+            },
+            {
+              "channel": 6,
+              "mode": "M05 (Impulse)",
+              "t1": null,
+              "t2": null,
+              "payload": "0435F4648841",
+              "button_address": "106219"
+            }
+          ]
+        }
+      ]
+    },
+    "2C": {
+      "bus_address": "061182",
+      "description": "Push button 2C #N061182",
+      "linked_modules": [
+        {
+          "module_address": "C7C1",
+          "outputs": [
+            {
+              "channel": 6,
+              "mode": "M02 (On + Operating time)",
+              "t1": null,
+              "t2": null,
+              "payload": "05000000410000001862100009000000",
+              "button_address": "106218",
+              "record_source": "pc_link_registry"
+            },
+            {
+              "channel": 6,
+              "mode": "M02 (On, with operating time)",
+              "t1": null,
+              "t2": null,
+              "payload": "05000000410000001862100009000000",
+              "button_address": "106218"
+            },
+            {
+              "channel": 7,
+              "mode": "M05 (Impulse)",
+              "t1": null,
+              "t2": null,
+              "payload": "FF06F4648841",
+              "button_address": "106219"
+            },
+            {
+              "channel": 11,
+              "mode": "M05 (Impulse)",
+              "t1": null,
+              "t2": null,
+              "payload": "310AF4608841",
+              "button_address": "106218",
+              "record_source": "output_module_table"
+            }
+          ]
+        }
+      ]
+    },
+    "2D": {
+      "bus_address": "461182",
+      "description": "Push button 2D #N461182",
+      "linked_modules": [
+        {
+          "module_address": "C95D",
+          "outputs": [
+            {
+              "channel": 3,
+              "mode": "M14 (Dim on/off memory (1 button))",
+              "t1": null,
+              "t2": null,
+              "payload": "FFB400220B648841",
+              "button_address": "106219",
+              "record_source": "output_module_table"
+            },
+            {
+              "channel": 3,
+              "mode": "M14 (Dim on/off memory (1key))",
+              "t1": null,
+              "t2": null,
+              "payload": "FFB400220B648841",
+              "button_address": "106219"
+            }
+          ]
+        },
+        {
+          "module_address": "C9D7",
+          "outputs": [
+            {
+              "channel": 11,
+              "mode": "M05 (Impulse)",
+              "t1": null,
+              "t2": null,
+              "payload": "FF2AF4608841",
+              "button_address": "106218",
+              "record_source": "output_module_table"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "status": "active",
+  "component_number": 9
+}
