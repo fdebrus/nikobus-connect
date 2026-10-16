@@ -5,7 +5,7 @@ import json
 import logging
 import os
 import tempfile
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from typing import Any
 
 from .mapping import KEY_MAPPING, KEY_MAPPING_MODULE
@@ -1454,8 +1454,60 @@ def _ensure_calendar_op_point(
     return physical_addr, op_point
 
 
+#: Record sources read from a controller's memory rather than from the
+#: output module's own table: a copy that may be stale.
+REGISTRY_RECORD_SOURCES: frozenset[str] = frozenset(
+    {"pc_link_registry", "pc_logic_registry"}
+)
+
+
+def strip_module_links(
+    button_data: dict[str, Any], module_addresses: Collection[str]
+) -> int:
+    """Remove every stored link to the given output modules.
+
+    Used before a module's links are filed again from its own table:
+    whatever the store held for it — a record of an older decoder with
+    another label or timer, one an older merge filed on the wrong key,
+    a copy from the PC-Link's memory — goes, and only what the module
+    holds now comes back. Empty module blocks are dropped. Returns the
+    number of outputs removed.
+    """
+    targets = {str(a).upper() for a in module_addresses}
+    if not targets:
+        return 0
+    removed = 0
+    for entry in _ensure_buttons_dict(button_data).values():
+        if not isinstance(entry, dict):
+            continue
+        op_points = entry.get("operation_points")
+        if not isinstance(op_points, dict):
+            continue
+        for op_point in op_points.values():
+            if not isinstance(op_point, dict):
+                continue
+            blocks = op_point.get("linked_modules")
+            if not isinstance(blocks, list):
+                continue
+            kept = []
+            for block in blocks:
+                if (
+                    isinstance(block, dict)
+                    and str(block.get("module_address") or "").upper() in targets
+                ):
+                    outputs = block.get("outputs")
+                    removed += len(outputs) if isinstance(outputs, list) else 0
+                    continue
+                kept.append(block)
+            if len(kept) != len(blocks):
+                op_point["linked_modules"] = kept
+    return removed
+
+
 def merge_linked_modules(
-    button_data: dict[str, Any], command_mapping: dict[Any, Any]
+    button_data: dict[str, Any],
+    command_mapping: dict[Any, Any],
+    authoritative_modules: Collection[str] | None = None,
 ) -> tuple[int, int, int, set[str]]:
     """Merge a discovery ``command_mapping`` into the caller-owned ``button_data``.
 
@@ -1469,8 +1521,14 @@ def merge_linked_modules(
     on a virtual IR op-point (``operation_points["IR:{code}"]``) on the
     physical IR receiver, not on one of its wall keys (``1A``-``1D``).
 
+    ``authoritative_modules`` names the output modules whose own link
+    table has been read in full; a record from a controller's memory
+    (``REGISTRY_RECORD_SOURCES``) that targets one of them is skipped,
+    since the module's table is what the module executes.
+
     Returns ``(updated_buttons, links_added, outputs_added)``.
     """
+    authoritative = {str(a).upper() for a in authoritative_modules or ()}
 
     buttons = _ensure_buttons_dict(button_data)
 
@@ -1502,6 +1560,18 @@ def merge_linked_modules(
             continue
         if not isinstance(outputs, list) or not outputs:
             continue
+        if authoritative:
+            outputs = [
+                output
+                for output in outputs
+                if not (
+                    isinstance(output, dict)
+                    and output.get("record_source") in REGISTRY_RECORD_SOURCES
+                    and str(output.get("module_address") or "").upper() in authoritative
+                )
+            ]
+            if not outputs:
+                continue
 
         # IR records: route to the receiver's virtual IR op-point (create
         # it if missing). The resolver's wall-key lookup would fail when
