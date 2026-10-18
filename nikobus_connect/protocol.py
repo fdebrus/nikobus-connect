@@ -246,13 +246,16 @@ def family_name(signature: int) -> str | None:
 def family_matches(module_type: str, signature: int) -> bool | None:
     """Whether ``signature`` is the family of ``module_type``.
 
-    ``None`` when the module type has no known signature (nothing to
-    compare against), so a caller can tell "unknown" from "mismatch".
+    ``None`` when there is nothing to compare: the module type has no
+    known signature, or the byte belongs to no known family. Only a byte
+    of another known family is a mismatch — a byte the table does not
+    list yet (a product revision, a compact variant) says nothing about
+    the stored type being wrong.
     """
     from .const import FAMILY_SIGNATURES
 
     codes = FAMILY_SIGNATURES.get(module_type)
-    if codes is None:
+    if codes is None or family_name(signature) is None:
         return None
     return signature in codes
 

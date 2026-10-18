@@ -67,6 +67,73 @@ def image_crc(image: bytes, module_type: str) -> int:
     return calc_crc1(covered.hex())
 
 
+# Bytes a module rewrites by itself, outside any programming, that its
+# function-0x13 CRC still covers. A 05-008-02 dimmer stores state there
+# when power drops — 0x7EE onwards one byte per channel, the level the
+# channel had (12 bytes reach exactly the end of the CRC range at
+# 0x7FA); 0x7E3/0x7E4 changed at a first power cut too, meaning unknown.
+# Observed on a real install (Nikobus-HA, 2026-10): after two power cuts
+# only these bytes differed between backups, and the module CRC moved.
+MODULE_VOLATILE_RANGES: Final[dict[str, tuple[tuple[int, int], ...]]] = {
+    "dimmer_module": ((0x7E3, 0x7FA),),
+}
+
+
+def _covered_length(module_type: str) -> int | None:
+    size = MODULE_IMAGE_SIZES.get(module_type)
+    if size is None:
+        return None
+    ranges = MODULE_CRC_RANGES.get(module_type)
+    return size if ranges is None else sum(end - start for start, end in ranges)
+
+
+def _covered_position(module_type: str, offset: int) -> int | None:
+    """Position of image byte ``offset`` in the sequence the CRC covers."""
+    ranges = MODULE_CRC_RANGES.get(module_type)
+    if ranges is None:
+        return offset
+    position = 0
+    for start, end in ranges:
+        if start <= offset < end:
+            return position + offset - start
+        position += end - start
+    return None
+
+
+def predict_module_crc(
+    module_type: str,
+    old_crc: int,
+    old_bytes: dict[int, bytes],
+    new_bytes: dict[int, bytes],
+) -> int | None:
+    """The CRC the module would report if only these bytes had changed.
+
+    ``old_bytes`` / ``new_bytes`` map an image offset to the bytes found
+    there when ``old_crc`` was read and now. The module's CRC16 (init
+    0xFFFF, polynomial 0x1021, nothing reflected) is affine over GF(2):
+    for messages of one length, ``crc(a ^ d) = crc(a) ^ crc(d) ^ crc(0)``,
+    so the new CRC follows from the old one and the change alone, without
+    the rest of the image. A module reporting exactly this CRC changed
+    those bytes and nothing else. ``None`` when the layout is unknown or
+    the two maps do not describe the same bytes.
+    """
+    length = _covered_length(module_type)
+    if length is None or set(old_bytes) != set(new_bytes):
+        return None
+    delta = bytearray(length)
+    for offset, before in old_bytes.items():
+        after = new_bytes[offset]
+        if len(after) != len(before):
+            return None
+        for index, (x, y) in enumerate(zip(before, after, strict=True)):
+            position = _covered_position(module_type, offset + index)
+            if position is not None:
+                delta[position] ^= x ^ y
+    if not any(delta):
+        return old_crc
+    return old_crc ^ calc_crc1(bytes(delta).hex()) ^ calc_crc1(bytes(length).hex())
+
+
 class NikobusAPI:
     """Nikobus API with optimistic state updates and consolidated logic."""
 
@@ -544,6 +611,41 @@ class NikobusAPI:
             if progress is not None:
                 progress(block + 1, total)
         return bytes(image)
+
+    async def read_module_range(
+        self, address: str, module_type: str, start: int, end: int
+    ) -> bytes:
+        """Read image bytes ``start``..``end`` (exclusive) — only the blocks holding them."""
+        if module_type not in MODULE_IMAGE_SIZES:
+            raise NikobusError(f"no memory image layout known for {module_type}")
+        func, block_size = (
+            (FUNC_READ_BLOCK8, 8) if module_type == "dimmer_module" else (FUNC_READ_BLOCK16, 16)
+        )
+        first, last = start // block_size, (end - 1) // block_size
+        data = bytearray()
+        for block in range(first, last + 1):
+            payload = await self._command_handler.query(
+                func, address, make_block_index_args(block)
+            )
+            chunk = payload[2:]
+            if len(chunk) != block_size:
+                raise NikobusError(
+                    f"block {block} of {address}: expected {block_size} bytes, got {len(chunk)}"
+                )
+            data += chunk
+        offset = start - first * block_size
+        return bytes(data[offset : offset + end - start])
+
+    async def read_module_volatile(self, address: str, module_type: str) -> dict[int, bytes]:
+        """The bytes of ``MODULE_VOLATILE_RANGES`` as the module holds them now.
+
+        ``{}`` for a module type without such bytes. Read-only: a few
+        block reads (four for a dimmer).
+        """
+        return {
+            start: await self.read_module_range(address, module_type, start, end)
+            for start, end in MODULE_VOLATILE_RANGES.get(module_type, ())
+        }
 
     async def verify_module_memory(
         self, address: str, module_type: str, image: bytes | None = None
