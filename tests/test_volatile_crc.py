@@ -110,4 +110,6 @@ def test_an_unknown_family_byte_is_not_a_mismatch() -> None:
     assert family_matches("dimmer_module", 0x30) is True
     assert family_matches("dimmer_module", 0x10) is False  # a switch answering
     assert family_matches("dimmer_module", 0x77) is None  # no known family
+    assert family_matches("dimmer_module", 0x80) is True  # compact 05-008-02
+    assert family_matches("switch_module", 0x80) is False
     assert family_matches("audio_module", 0x30) is None

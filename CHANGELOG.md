@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.55.1
+
+- **The compact 05-008-02 dimmer is recognised by its family byte.** It answers the module-status query with 0x80 rather than the 0x30 of the full-size dimmer, as the compact 05-002-02 switch answers 0x90 next to 0x10. `FAMILY_SIGNATURES["dimmer_module"]` now lists both, so a host's family check reports these modules as dimmers instead of an unknown family. Reported by two 05-008-02 on one install.
+
 ## 0.55.0
 
 - **Telling a power cut from a reprogramming.** A 05-008-02 dimmer writes state into its memory when power drops (0x7EE onwards, one byte per channel — the level the channel had; 0x7E3/0x7E4 too, meaning unknown), inside the range its function-0x13 CRC covers. On a real install two power cuts moved the CRC of two dimmers whose link tables were unchanged, and a host checking that CRC took them for reprogrammed. `MODULE_VOLATILE_RANGES` names those bytes (`dimmer_module`: 0x7E3–0x7F9); `NikobusAPI.read_module_volatile()` reads them (four read-only block reads), `read_module_range()` any range by its blocks. `predict_module_crc(module_type, old_crc, old_bytes, new_bytes)` gives the CRC the module would report if only those bytes had changed: the module's CRC16 is affine, so the new CRC follows from the old one and the change alone. It reproduces the CRCs that install's dimmers reported after each cut, and a changed link byte no longer matches.

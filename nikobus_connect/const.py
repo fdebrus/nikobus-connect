@@ -46,7 +46,10 @@ PRESENCE_PROBE_IDENTITY_WAIT: Final[float] = 0.5
 FAMILY_SIGNATURES: Final[dict[str, tuple[int, ...]]] = {
     "switch_module": (0x10, 0x90),
     "roller_module": (0x20,),
-    "dimmer_module": (0x30,),
+    # 0x80: the compact 05-008-02 dimmer, as the compact 05-002-02 switch
+    # is 0x90 next to the full-size 0x10 — reported by two 05-008-02 on
+    # one install (Nikobus-HA, 2026-10).
+    "dimmer_module": (0x30, 0x80),
     "pc_link": (0x50,),
     "pc_logic": (0x40,),
     "feedback_module": (0xA0,),
