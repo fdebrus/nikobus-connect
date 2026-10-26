@@ -9,7 +9,7 @@ from collections.abc import Callable, Collection
 from typing import Any
 
 from .mapping import KEY_MAPPING, KEY_MAPPING_MODULE
-from .protocol import virtual_button_class, virtual_record_bus_address
+from .protocol import record_bus_address, virtual_button_class, virtual_record_bus_address
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -1090,6 +1090,23 @@ def _resolve_operation_point(
             op_point = (physical.get("operation_points") or {}).get(key_label)
             if isinstance(op_point, dict):
                 return phys_addr, key_label, op_point
+
+    # 2b) Match by the frame the module listens for. A link record names
+    # its button by the button's own address and the key by index; a
+    # store that knows the key only by its bus address — a manual config
+    # written from pressed keys, where the button's own address is not
+    # known — still holds that frame. The module compares exactly this
+    # frame, so a key stored under it is the key the record means.
+    frame = record_bus_address(normalized, key_raw)
+    if frame and frame != normalized:
+        frame_hit = bus_to_op.get(frame)
+        if frame_hit is not None:
+            phys_addr, key_label = frame_hit
+            physical = buttons.get(phys_addr)
+            if isinstance(physical, dict):
+                op_point = (physical.get("operation_points") or {}).get(key_label)
+                if isinstance(op_point, dict):
+                    return phys_addr, key_label, op_point
 
     # 3) IR-slot fallback: resolve the physical IR receiver from the prefix
     # table and pick the operation point from key_raw.
