@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.56.0
+
+- **A key stored by its bus address alone receives its links.** An install without a PC-Link lists its keys in `nikobus_button_config.json` from what it can observe — each key's bus address — and often cannot know the button's own address, which is what an output module's link record names (with the key as an index). Such records used to stay unmatched, so the key had no links: no `controlled_by`, no refresh after a press, and flagged as legacy. `merge_linked_modules` now also files a record by the frame the module listens for, computed from the record's button address and key index (`protocol.record_bus_address`, the general name of 0.53.0's `virtual_record_bus_address`, kept as an alias). A key stored under that frame is the key the record means — the module compares exactly that frame — so the match is certain. An 8-key button's first row, recorded on the sibling address, resolves the same way. A store that holds the button by its own address matches as before, first.
+
 ## 0.55.1
 
 - **The compact 05-008-02 dimmer is recognised by its family byte.** It answers the module-status query with 0x80 rather than the 0x30 of the full-size dimmer, as the compact 05-002-02 switch answers 0x90 next to 0x10. `FAMILY_SIGNATURES["dimmer_module"]` now lists both, so a host's family check reports these modules as dimmers instead of an unknown family. Reported by two 05-008-02 on one install.

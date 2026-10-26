@@ -238,14 +238,17 @@ def virtual_button_class(physical: str) -> str | None:
     return None
 
 
-def virtual_record_bus_address(physical: str, key_raw: Any) -> str | None:
-    """The ``#N`` frame a link record on a virtual button listens for.
+def record_bus_address(physical: str, key_raw: Any) -> str | None:
+    """The ``#N`` frame a link record listens for: button ``physical``, key ``key_raw``.
 
     The frame is what the module compares, so it is what a record is
-    filed by when no entry owns its spelling of the address (a store
-    written in the vendor's form, say). ``384100`` key 0 is ``002087``,
+    filed by when no entry owns the button's own address — a store
+    written in the vendor's spelling, or a manual config that lists
+    keys by their bus address only. ``384100`` key 0 is ``002087``,
     the same plate's key 2 (1D) ``402087``, and ``384102`` key 0 the
-    next output's ``102087``. ``None`` when the key index is unknown.
+    next output's ``102087``; an 8-key button's first row, stored on
+    the sibling address, comes out right too (``106219`` key 1 is
+    ``A61182``, its 1A). ``None`` when the key index is unknown.
     """
     try:
         converted = convert_nikobus_address(physical)
@@ -254,6 +257,10 @@ def virtual_record_bus_address(physical: str, key_raw: Any) -> str | None:
     except (KeyError, TypeError, ValueError, IndexError):
         return None
     return f"{(nibble + int(add, 16)) & 0xF:X}{converted[1:]}"
+
+
+#: The name 0.53.0 introduced it under, for virtual buttons.
+virtual_record_bus_address = record_bus_address
 
 
 def virtual_plate_address(physical: str) -> str:
@@ -641,6 +648,7 @@ __all__ = [
     "derive_pc_logic_input_physicals",
     "virtual_button_class",
     "virtual_plate_address",
+    "record_bus_address",
     "virtual_record_bus_address",
     "VIRTUAL_CLASS_PC_LOGIC",
     "VIRTUAL_CLASS_BANK",
