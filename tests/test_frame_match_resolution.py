@@ -15,7 +15,10 @@ row on the sibling address 106219).
 from __future__ import annotations
 
 from nikobus_connect.discovery.fileio import merge_linked_modules
-from nikobus_connect.discovery.protocol import record_bus_address, virtual_record_bus_address
+from nikobus_connect.discovery.protocol import (
+    record_bus_address,
+    virtual_record_bus_address,
+)
 
 BP9_KEYS = {
     "1A": "A61182", "1B": "E61182", "1C": "261182", "1D": "661182",
@@ -64,7 +67,7 @@ def _links(store, bus) -> set[tuple[str, int]]:
 
 def test_the_frame_of_each_bp9_record_is_its_keys_bus_address() -> None:
     labels = {1: "1A", 3: "1B", 0: "1C", 2: "1D"}
-    for (addr, key), _ in BP9_RECORDS.items():
+    for addr, key in BP9_RECORDS:
         expected = BP9_KEYS[labels[key]] if addr == "106219" else BP9_KEYS["2" + labels[key][1]]
         assert record_bus_address(addr, key) == expected, (addr, key)
     assert virtual_record_bus_address is record_bus_address
