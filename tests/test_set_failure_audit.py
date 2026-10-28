@@ -83,9 +83,13 @@ async def test_a_failed_set_fails_the_future_and_calls_the_handlers(handler) -> 
             failure_handler=failures.append,
         )
         second = await handler.set_output_state("81F6", 2, 0xFF, failure_handler=failures.append)
-        assert second is first, "a joiner shares the pending request's future"
+        # A joiner gets its own view of the pending request's future (0.56.2):
+        # both follow the one exchange and both fail with it.
+        assert second is not first
         with pytest.raises(NikobusTimeoutError):
             await asyncio.wait_for(first, 5.0)
+        with pytest.raises(NikobusTimeoutError):
+            await second
         await asyncio.sleep(0.02)
     finally:
         await handler.stop()

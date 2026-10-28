@@ -1041,6 +1041,10 @@ class NikobusDiscovery:
         # of the current module scan that went unacknowledged.
         self._complete_link_tables: set[str] = set()
         self._scan_missed_acks = 0
+        # The current module scan: records the module announced in its
+        # status reply, and records actually decoded from its table.
+        self._scan_expected_records: int | None = None
+        self._scan_decoded_records = 0
         # CF (Central Function) activation broadcasts classified from
         # unmatched link-record source addresses. Populated at end of
         # discovery by ``_classify_cf_broadcasts_from_unmatched``.
@@ -1215,6 +1219,8 @@ class NikobusDiscovery:
         passes = _count_driven_passes(self._module_type, status)
         if not passes:
             return ()
+        second = status.record_count_b if 0 < status.record_count_b < 0xFF else 0
+        self._scan_expected_records = status.record_count_a + second
         _LOGGER.info(
             "Module %s reports %d/%d link record(s) — scanning %d register(s)",
             address,
@@ -3403,6 +3409,8 @@ class NikobusDiscovery:
         # vendor band is the fallback when the module doesn't answer
         # (and always under ``broad_scan``).
         scan_passes: tuple[ScanSection, ...] = ()
+        self._scan_expected_records = None
+        self._scan_decoded_records = 0
         if not self._broad_scan:
             scan_passes = await self._count_bounded_passes(normalized_address)
         # Only a plan sized by the module's own record count can tell a
@@ -3456,19 +3464,16 @@ class NikobusDiscovery:
 
         await self._run_extension_passes(normalized_address, base_command)
 
-        if (
-            count_driven
-            and self._scan_missed_acks == 0
-            and self._module_type in _LINK_TABLE_MODULE_TYPES
-        ):
-            await self._rebuild_module_links(normalized_address)
-        elif count_driven and self._scan_missed_acks:
-            _LOGGER.info(
-                "Module %s — %d register read(s) unanswered; its stored links "
-                "are kept and only added to",
-                normalized_address,
-                self._scan_missed_acks,
-            )
+        if self._module_type in _LINK_TABLE_MODULE_TYPES:
+            why = self._link_table_incomplete(normalized_address, count_driven)
+            if why is None:
+                await self._rebuild_module_links(normalized_address)
+            elif count_driven:
+                _LOGGER.info(
+                    "Module %s — %s; its stored links are kept and only added to",
+                    normalized_address,
+                    why,
+                )
 
         # Clear per-module pass tracking so the finalize event doesn't
         # carry stale pass info from the last pass.
@@ -3476,6 +3481,30 @@ class NikobusDiscovery:
         self._progress_pass_total = 0
         self._progress_current_sub_byte = None
         await self._finalize_discovery(normalized_address)
+
+    def _link_table_incomplete(self, address: str, count_driven: bool) -> str | None:
+        """Why the module's link table cannot be taken as read in full, or ``None``.
+
+        A rebuild replaces every stored link of the module, so it needs
+        the whole table: a plan sized by the module's own record count,
+        every planned register acknowledged, a table the decoder did not
+        flag as corrupt, and as many records decoded as the module
+        announced — an acknowledged read whose data frame was lost (a
+        CRC error, a gap the empty-run terminator ended the pass on)
+        shows up as fewer records, not as a missed ack.
+        """
+        if not count_driven:
+            return "scanned with the fixed band"
+        if self._scan_missed_acks:
+            return f"{self._scan_missed_acks} register read(s) unanswered"
+        if address.upper() in self.corrupt_link_tables:
+            return "link table flagged as corrupt"
+        expected = self._scan_expected_records
+        if expected is None:
+            return "record count unknown"
+        if self._scan_decoded_records < expected:
+            return f"{self._scan_decoded_records} of {expected} announced record(s) decoded"
+        return None
 
     def _authoritative_link_modules(self) -> set[str]:
         """Output modules whose own link table is known to have been read
@@ -4061,9 +4090,10 @@ class NikobusDiscovery:
         # link; the button-store merge further down may deduplicate, but
         # the on-wire reality is "we saw this many records."
         if isinstance(decoded_commands, list):
-            self._progress_decoded_records += sum(
-                1 for c in decoded_commands if isinstance(c, DecodedCommand)
-            )
+            decoded_now = sum(1 for c in decoded_commands if isinstance(c, DecodedCommand))
+            self._progress_decoded_records += decoded_now
+            if module_address and module_address.upper() == (self._module_address or "").upper():
+                self._scan_decoded_records += decoded_now
         # Build IR receiver lookup from the current in-memory button store
         # so that split_ir_button_address and decode_ir_channel work for
         # any IR receiver, not just hardcoded prefixes.

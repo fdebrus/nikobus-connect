@@ -97,6 +97,14 @@ class NikobusCommandHandler:
             except asyncio.CancelledError:
                 _LOGGER.info("Command processing task was cancelled")
             self._command_task = None
+        # Nothing queued survives a stop: every waiter is released now
+        # rather than at its own timeout, and a later start on a new
+        # connection does not replay stale frames.
+        discarded = self.drain_queue()
+        self._pending_set_groups.clear()
+        self._writing_sets.clear()
+        if discarded:
+            _LOGGER.debug("Command handler stopped: %d queued command(s) discarded", discarded)
 
     async def _process_commands(self) -> None:
         """Process commands from the queue."""
@@ -125,6 +133,12 @@ class NikobusCommandHandler:
                         self._queued_get_keys.discard(
                             f"{address.upper()}_{'1' if gid_skip == '12' else '2'}"
                         )
+                    skipped_group = command_item.get("set_group")
+                    if skipped_group is not None:
+                        # A later request for this group must queue anew.
+                        skipped_key = f"{skipped_group[0]}_{skipped_group[1]}"
+                        if self._pending_set_groups.get(skipped_key) is command_item:
+                            del self._pending_set_groups[skipped_key]
                     _LOGGER.debug(
                         "Skipping stale command %s — caller future cancelled",
                         command,
@@ -196,6 +210,11 @@ class NikobusCommandHandler:
                                 res = handler()
                                 if inspect.isawaitable(res):
                                     await res
+                except asyncio.CancelledError:
+                    # Stopped mid-exchange: the caller must not wait on.
+                    if future and not future.done():
+                        future.cancel()
+                    raise
                 except Exception as err:
                     _LOGGER.exception("Failed to process command %s", command)
                     if future and not future.done():
@@ -284,7 +303,7 @@ class NikobusCommandHandler:
         command = make_pc_link_command(0x12 if int(group) == 1 else 0x17, address)
         try:
             async with self.bus_lock:
-                answer = await self._send_command_get_answer(command, address)
+                answer = await self._send_command_get_answer(command, address, attempts=1)
         except Exception as err:  # noqa: BLE001 - the write must not depend on the read
             _LOGGER.debug("Read before writing %s group %s failed: %s", address, group, err)
             return
@@ -424,8 +443,7 @@ class NikobusCommandHandler:
                 "Set-output for %s channel %d joins the pending group %d write",
                 addr, channel, group,
             )
-            pending_future: asyncio.Future[str] = pending["future"]
-            return pending_future
+            return self._derived_future(pending["future"])
 
         future: asyncio.Future[str] = asyncio.get_running_loop().create_future()
         # Nobody has to await the future; an ignored failure must not be
@@ -448,7 +466,35 @@ class NikobusCommandHandler:
         self._pending_set_groups[key] = item
         await self._command_queue.put(item)
         _LOGGER.debug("Set-output queued for module %s group %d (channel %d)", addr, group, channel)
-        return future
+        return self._derived_future(future)
+
+    @staticmethod
+    def _derived_future(shared: asyncio.Future[str]) -> asyncio.Future[str]:
+        """A caller's own view of a shared set-output future.
+
+        It follows the shared one (result, error or cancellation) but a
+        caller cancelling it — ``asyncio.wait_for`` on a timeout does —
+        leaves the shared future, the queued frame and the other callers
+        untouched. Handing out the shared future itself let one caller's
+        timeout cancel the item; the worker then skipped it while it was
+        still registered as the group's pending write, and every later
+        request for that group joined a frame that would never be sent.
+        """
+        own: asyncio.Future[str] = asyncio.get_running_loop().create_future()
+
+        def _follow(source: asyncio.Future[str]) -> None:
+            if own.done():
+                return
+            if source.cancelled():
+                own.cancel()
+            elif (err := source.exception()) is not None:
+                own.set_exception(err)
+            else:
+                own.set_result(source.result())
+
+        shared.add_done_callback(_follow)
+        own.add_done_callback(lambda f: f.exception() if not f.cancelled() else None)
+        return own
 
     def _build_set_group_command(self, address: str, group: int) -> str:
         """The ``0x15`` / ``0x16`` frame for a module group, from the buffer."""
@@ -609,8 +655,14 @@ class NikobusCommandHandler:
             _LOGGER.exception("Failed to send command %s", command)
             raise
 
-    async def _send_command_get_answer(self, command: str, address: str) -> str:
-        """Send a command and wait for an answer from the Nikobus system."""
+    async def _send_command_get_answer(
+        self, command: str, address: str, attempts: int = MAX_ATTEMPTS
+    ) -> str:
+        """Send a command and wait for an answer from the Nikobus system.
+
+        ``attempts`` bounds the wire-level retries (``MAX_ATTEMPTS`` by
+        default); a best-effort exchange passes 1.
+        """
         _LOGGER.debug(
             "Sending command %s to address %s, waiting for answer", command, address
         )
@@ -626,10 +678,11 @@ class NikobusCommandHandler:
             wait_ack,
             wait_answer,
             raw=gid in _RAW_REPLY_FUNCS,
+            attempts=attempts,
         )
         if state is None:
             raise NikobusTimeoutError(
-                f"Failed to receive state for command '{command}' after {MAX_ATTEMPTS} attempts."
+                f"Failed to receive state for command '{command}' after {attempts} attempts."
             )
         return state
 
@@ -699,6 +752,7 @@ class NikobusCommandHandler:
         wait_ack: str,
         wait_answer: str,
         raw: bool = False,
+        attempts: int = MAX_ATTEMPTS,
     ) -> str | None:
         """Wait for an acknowledgment and answer with retries.
 
@@ -708,7 +762,7 @@ class NikobusCommandHandler:
         self._listener._awaiting_response = True
         self._listener._awaited_answer = wait_answer
         try:
-            for attempt in range(1, MAX_ATTEMPTS + 1):
+            for attempt in range(1, attempts + 1):
                 while not self._listener.response_queue.empty():
                     try:
                         self._listener.response_queue.get_nowait()
@@ -719,33 +773,55 @@ class NikobusCommandHandler:
                     await self._connection.send(command)
                     _LOGGER.debug(
                         "Attempt %d/%d waiting for ACK %s, answer %s",
-                        attempt, MAX_ATTEMPTS, wait_ack, wait_answer,
+                        attempt, attempts, wait_ack, wait_answer,
                     )
                     state = await self._wait_for_ack_and_answer_state(
-                        wait_ack, wait_answer, raw=raw
+                        wait_ack, wait_answer, raw=raw, use_held=attempts > 1
                     )
                     if state is not None:
                         _LOGGER.debug("Received valid state from device")
                         return state
                 except (NikobusSendError, NikobusTimeoutError) as err:
                     _LOGGER.warning("Attempt %d failed: %s", attempt, err, exc_info=True)
-                    if attempt == MAX_ATTEMPTS:
+                    if attempt == attempts:
                         raise
                 except Exception as err:
                     _LOGGER.exception("Unhandled exception on attempt %d", attempt)
-                    if attempt == MAX_ATTEMPTS:
+                    if attempt == attempts:
                         raise NikobusError(f"Unhandled exception: {err}") from err
             raise NikobusTimeoutError(
-                f"Failed to receive ACK and state for command '{command}' after {MAX_ATTEMPTS} attempts."
+                f"Failed to receive ACK and state for command '{command}' after {attempts} attempts."
             )
         finally:
             self._listener._awaiting_response = False
             self._listener._awaited_answer = None
 
+    def _pushed_for_other_group(self, wait_ack: str, wait_answer: str) -> bool:
+        """Whether a ``$1C`` frame seen now belongs to the module's other group.
+
+        A ``$1C`` answer names the module but not the group. The listener
+        notes the group of every state query it sees on the bus, the
+        Feedback Module's own ones included, so when the module's last
+        query was for the other group, a frame arriving before our ack
+        is that query's answer, not ours.
+        """
+        last = getattr(self._listener, "_last_query_group", None)
+        if not isinstance(last, dict) or len(wait_answer) < 7:
+            return False
+        ours = 1 if wait_ack.endswith("12") else 2
+        addr = (wait_answer[5:7] + wait_answer[3:5]).upper()
+        other = last.get(addr)
+        return other is not None and int(other) != ours
+
     async def _wait_for_ack_and_answer_state(
-        self, wait_ack: str, wait_answer: str, raw: bool = False
+        self, wait_ack: str, wait_answer: str, raw: bool = False, use_held: bool = True
     ) -> str | None:
-        """Wait for both acknowledgment and answer signals, then extract the state."""
+        """Wait for both acknowledgment and answer signals, then extract the state.
+
+        ``use_held`` allows a state frame that arrived before our ack to
+        stand in for a missing answer (see ``held_early_answer``); a
+        best-effort read passes ``False`` and gives up instead.
+        """
         ack_received = False
         answer_received = False
         state: str | None = None
@@ -781,6 +857,13 @@ class NikobusCommandHandler:
                     ack_received = True
                 if wait_answer in message:
                     if answer_is_output_state and not ack_received:
+                        if self._pushed_for_other_group(wait_ack, wait_answer):
+                            _LOGGER.debug(
+                                "State answer before our ack is the other group's "
+                                "(feedback module query) — discarded: %s",
+                                message,
+                            )
+                            continue
                         _LOGGER.debug(
                             "State answer before our ack held, not taken (pushed by a "
                             "feedback module?): %s",
@@ -808,17 +891,17 @@ class NikobusCommandHandler:
                 if ack_received and answer_received:
                     return state
             except TimeoutError:
-                if ack_received and held_early_answer is not None:
+                if ack_received and held_early_answer is not None and use_held:
                     _LOGGER.debug("No answer after the ack — using the held early answer")
-                    return self._parse_state_from_message(held_early_answer, wait_answer)
+                    return self._parse_state_from_message(held_early_answer, wait_answer) or None
                 _LOGGER.debug("Timeout while waiting for ACK/answer")
                 break
             except Exception as err:
                 _LOGGER.exception("Failed while waiting for messages")
                 raise NikobusError(f"Error while waiting for messages: {err}") from err
 
-        if ack_received and held_early_answer is not None:
-            return self._parse_state_from_message(held_early_answer, wait_answer)
+        if ack_received and held_early_answer is not None and use_held:
+            return self._parse_state_from_message(held_early_answer, wait_answer) or None
         return None
 
     def _parse_state_from_message(self, message: str, answer_signal: str) -> str:
