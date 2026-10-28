@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.56.2
+
+Fixes from an audit of 0.56.1; two of them were reproduced with probes.
+
+- **A caller's timeout no longer kills writes to a module group.** `set_output_state` handed every caller the one future shared by all requests joining a group frame. A caller cancelling it — `asyncio.wait_for` on a timeout does — cancelled the shared item; the worker skipped it but it stayed registered as the group's pending write, so every later request for that group joined a frame that was never sent, until a reset. Each caller now gets its own future that follows the shared exchange, and a skipped item is unregistered.
+- **`stop()` releases every waiter.** Only state-read futures were cancelled; a caller awaiting a set-output or a `query()` (module status, memory read) during a reconnect hung until its own timeout, and a later `start()` on a new connection replayed the stale frames. The queue is drained on stop, pending groups and in-flight writes cleared, and an exchange cut by the stop cancels its caller's future.
+- **A module's links are rebuilt only after its whole table was read.** 0.54.0 rebuilt after a count-driven scan with every register acknowledged, but a read is acknowledged even when its data frame was lost — on a CRC error, or past a gap the empty-run terminator ended the pass on — and a table the decoder flagged as corrupt still counted. The rebuild now also needs at least as many records decoded as the module announced in its status reply; otherwise the stored links are kept and only added to, and the log says why.
+- **The read before a stale group write is one attempt.** It used the full three, so a module that never answers held the bus 30 s per write instead of 15, and the host's poll reads queued behind it timed out.
+- **A pushed frame for the other output group is not our answer.** A `$1C` frame names the module but not the group; one pushed for the Feedback Module's own query of the other group, arriving just before our ack, was held and returned as ours when the module then stayed silent. The listener notes the group of every state query on the bus, so such a frame is now discarded. A best-effort read never uses a held frame, and a held frame too short to carry a state is no answer.
+
 ## 0.56.1
 
 - **A group whose state is not recent is read before it is written.** A switch or dimmer module is written six outputs at a time, from the host's state buffer; an output switched at the wall that the host had not heard about yet was switched back along with the one being set (Nikobus-HA #557: a kitchen light came back on when, seconds after a wall press, an automation switched on another output of the same group). The queue worker now reads the group first when its state is unknown or older than `SET_READ_BEFORE_WRITE_S` (3 s), one read that costs nothing when the state is fresh: an acknowledged write of our own, a pushed frame or a poll answer all count. A failed read leaves the buffer as it is and the write goes ahead.
