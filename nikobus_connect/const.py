@@ -63,6 +63,12 @@ COMMAND_EXECUTION_DELAY: Final[float] = 0.15
 # by one service call, or by consecutive script actions) become one
 # frame instead of one each.
 SET_COALESCE_WINDOW: Final[float] = 0.05
+# A switch or dimmer module is written a group of six outputs at a time,
+# from the host's state buffer, so a group whose state is no longer
+# recent is read first: an output changed at the wall that the host has
+# not heard about yet would otherwise be switched back. Older than this
+# many seconds counts as not recent.
+SET_READ_BEFORE_WRITE_S: Final[float] = 3.0
 # How many times a host-injected key press (``#N``) is repeated. A real
 # key repeats its telegram while held and modules act on a telegram seen
 # at least twice: "2 to register, 3 to be sure". The repeats go out in

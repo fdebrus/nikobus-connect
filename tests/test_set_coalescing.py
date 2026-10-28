@@ -30,16 +30,26 @@ class _Listener:
 
 
 class _Connection:
-    """Acknowledges and answers every set frame as a PC-Link would."""
+    """Acknowledges and answers every frame as a PC-Link would.
+
+    ``sent`` holds the set frames the tests count; the state reads the
+    handler makes before writing a group whose state it does not know
+    yet (0.56.1) are answered with all outputs off and kept in ``reads``.
+    """
 
     def __init__(self, listener: _Listener) -> None:
         self.sent: list[str] = []
+        self.reads: list[str] = []
         self._listener = listener
 
     async def send(self, command: str) -> None:
+        gid, addr_le = command[3:5], command[5:9]
+        self._listener.response_queue.put_nowait(f"$05{gid}")
+        if gid in ("12", "17"):
+            self.reads.append(command)
+            self._listener.response_queue.put_nowait(f"$1C{addr_le}0000{'00' * 6}0000")
+            return
         self.sent.append(command)
-        addr_le = command[5:9]
-        self._listener.response_queue.put_nowait(f"$05{command[3:5]}")
         self._listener.response_queue.put_nowait(f"$0EFF{addr_le}00")
 
 

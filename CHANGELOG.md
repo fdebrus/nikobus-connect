@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.56.1
+
+- **A group whose state is not recent is read before it is written.** A switch or dimmer module is written six outputs at a time, from the host's state buffer; an output switched at the wall that the host had not heard about yet was switched back along with the one being set (Nikobus-HA #557: a kitchen light came back on when, seconds after a wall press, an automation switched on another output of the same group). The queue worker now reads the group first when its state is unknown or older than `SET_READ_BEFORE_WRITE_S` (3 s), one read that costs nothing when the state is fresh: an acknowledged write of our own, a pushed frame or a poll answer all count. A failed read leaves the buffer as it is and the write goes ahead.
+- **`apply_group_state(address, group, state_hex)`** is how a host should put a module's answer or a pushed frame into the shared buffer: the six bytes are stored and the channel writes still waiting for their frame, or being sent right now, are laid on top again, so a read that lands just before a write never undoes it. `group_state_age()` tells how old a group's state is.
+
 ## 0.56.0
 
 - **A key stored by its bus address alone receives its links.** An install without a PC-Link lists its keys in `nikobus_button_config.json` from what it can observe — each key's bus address — and often cannot know the button's own address, which is what an output module's link record names (with the key as an index). Such records used to stay unmatched, so the key had no links: no `controlled_by`, no refresh after a press, and flagged as legacy. `merge_linked_modules` now also files a record by the frame the module listens for, computed from the record's button address and key index (`protocol.record_bus_address`, the general name of 0.53.0's `virtual_record_bus_address`, kept as an alias). A key stored under that frame is the key the record means — the module compares exactly that frame — so the match is certain. An 8-key button's first row, recorded on the sibling address, resolves the same way. A store that holds the button by its own address matches as before, first.

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import logging
+import time
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -16,6 +17,7 @@ from .const import (
     COMMAND_POST_ACK_ANSWER_TIMEOUT,
     MAX_ATTEMPTS,
     SET_COALESCE_WINDOW,
+    SET_READ_BEFORE_WRITE_S,
 )
 from .exceptions import NikobusError, NikobusSendError, NikobusTimeoutError
 from .protocol import calculate_group_number, make_pc_link_command, reply_payload
@@ -68,6 +70,11 @@ class NikobusCommandHandler:
         # second request for the same group joins the pending item
         # instead of queueing a frame of its own (see ``set_output_state``).
         self._pending_set_groups: dict[str, dict[str, Any]] = {}
+        # When each module group's state was last known (an answer, a
+        # pushed frame, our own acknowledged write), on the monotonic
+        # clock; and the channel writes of a group frame being sent now.
+        self._group_known_at: dict[tuple[str, int], float] = {}
+        self._writing_sets: dict[tuple[str, int], dict[int, int]] = {}
 
     async def start(self) -> None:
         """Start the command processing loop."""
@@ -141,6 +148,8 @@ class NikobusCommandHandler:
                     # waited would have undone the channel writes it
                     # carries, so they are applied again now, right
                     # before the frame is taken from the buffer.
+                    self._writing_sets[(set_addr, group)] = dict(command_item.get("channels", {}))
+                    await self._refresh_stale_group(set_addr, group)
                     for channel, value in command_item.get("channels", {}).items():
                         self.set_bytearray_state(set_addr, channel, value)
                     command = self._build_set_group_command(set_addr, group)
@@ -179,6 +188,9 @@ class NikobusCommandHandler:
                             res = completion_handler()
                             if inspect.isawaitable(res):
                                 await res
+                        if set_group is not None:
+                            # The module now holds exactly the frame we sent.
+                            self._group_known_at[set_group] = time.monotonic()
                         for handler in command_item.get("completion_handlers") or []:
                             if callable(handler):
                                 res = handler()
@@ -198,6 +210,8 @@ class NikobusCommandHandler:
                         except Exception:
                             _LOGGER.exception("Failure handler raised for command %s", command)
                 finally:
+                    if set_group is not None:
+                        self._writing_sets.pop(set_group, None)
                     self._command_queue.task_done()
 
                 await asyncio.sleep(COMMAND_EXECUTION_DELAY)
@@ -212,6 +226,76 @@ class NikobusCommandHandler:
         idx = channel - 1
         if 0 <= idx < 12:
             self._module_states[addr][idx] = value
+
+    def group_state_age(self, address: str, group: int) -> float | None:
+        """Seconds since the state of a module group was last known, or ``None``."""
+        known = self._group_known_at.get((address.upper(), int(group)))
+        return None if known is None else time.monotonic() - known
+
+    def apply_group_state(self, address: str, group: int, state_hex: str) -> bool:
+        """Store a module group's reported state, keeping writes not yet made.
+
+        The way for a host to put an answer or a pushed frame into the
+        shared buffer: the six bytes are written, then the channel writes
+        still waiting for their frame, or being sent right now, are laid
+        on top again. A read made just before a write — the read this
+        handler makes itself when a group's state is stale — therefore
+        never shows the old value of a channel about to change. Returns
+        ``False`` when ``state_hex`` is not six bytes.
+        """
+        try:
+            image = bytes.fromhex((state_hex or "")[:12])
+        except ValueError:
+            return False
+        if len(image) < 6:
+            return False
+        addr = address.upper()
+        group = int(group)
+        buf = self._module_states.get(addr)
+        if buf is None:
+            buf = bytearray(12)
+            self._module_states[addr] = buf
+        start = 0 if group == 1 else 6
+        if start + 6 > len(buf):
+            return False
+        buf[start : start + 6] = image
+        pending = self._pending_set_groups.get(f"{addr}_{group}")
+        for writes in (
+            pending.get("channels", {}) if isinstance(pending, dict) else {},
+            self._writing_sets.get((addr, group), {}),
+        ):
+            for channel, value in writes.items():
+                self.set_bytearray_state(addr, channel, value)
+        self._group_known_at[(addr, group)] = time.monotonic()
+        return True
+
+    async def _refresh_stale_group(self, address: str, group: int) -> None:
+        """Read a module group before writing it when its state is not recent.
+
+        A group write carries all six outputs, taken from the buffer: an
+        output switched at the wall since the last read would be switched
+        back. Called by the queue worker, so the exchange is made here
+        directly; a failed read leaves the buffer as it was and the
+        write goes ahead.
+        """
+        age = self.group_state_age(address, group)
+        if age is not None and age <= SET_READ_BEFORE_WRITE_S:
+            return
+        command = make_pc_link_command(0x12 if int(group) == 1 else 0x17, address)
+        try:
+            async with self.bus_lock:
+                answer = await self._send_command_get_answer(command, address)
+        except Exception as err:  # noqa: BLE001 - the write must not depend on the read
+            _LOGGER.debug("Read before writing %s group %s failed: %s", address, group, err)
+            return
+        if self.apply_group_state(address, group, answer or ""):
+            _LOGGER.debug(
+                "Read %s group %s before writing it (state %s)",
+                address,
+                group,
+                "unknown" if age is None else f"{age:.0f} s old",
+            )
+            self.resolve_pending_get(address, group, answer)
 
     def get_bytearray_group_state(self, address: str, group: int) -> bytearray:
         """Return a copy of the 6-byte state for a specific group."""
@@ -278,6 +362,8 @@ class NikobusCommandHandler:
         worker once the exchange has answered.
         """
         key = f"{address.upper()}_{group}"
+        if state and len(state) >= 12:
+            self._group_known_at[(address.upper(), int(group))] = time.monotonic()
         resolved = False
         for future in self._pending_get_futures.get(key, []):
             if not future.done():
