@@ -62,7 +62,6 @@ def test_expected_records_come_from_the_status_reply(tmp_path) -> None:
     from nikobus_connect.discovery.discovery import _count_driven_passes
     from nikobus_connect.protocol import ModuleStatus
 
-    d = _discovery(tmp_path)
     # Mirrors _count_bounded_passes: count_b 0xFF means "no second table".
     for count_b, expected in ((0xFF, 12), (0, 12), (5, 17)):
         status = ModuleStatus(address="C7C1", eeprom_error=False, type_code=0x10,
