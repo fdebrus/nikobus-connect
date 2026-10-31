@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import fnmatch
 import json
 import logging
 import os
@@ -8,7 +9,18 @@ import tempfile
 from collections.abc import Callable, Collection
 from typing import Any
 
-from .mapping import DEVICE_TYPE_KEY_MAPPING, KEY_MAPPING, KEY_MAPPING_MODULE
+from .mapping import (
+    DEVICE_TYPE_KEY_MAPPING,
+    DEVICE_TYPES,
+    KEY_MAPPING,
+    KEY_MAPPING_MODULE,
+    PER_PLATE_LAYOUT_TYPES,
+    TWO_BUTTON_LAYOUT_GENERIC,
+    TWO_BUTTON_LAYOUT_KEY_INDICES,
+    TWO_BUTTON_LAYOUT_RIGHT_PAIR,
+    TWO_BUTTON_LAYOUTS,
+)
+from .protocol import convert_nikobus_address as _convert_nikobus_address
 from .protocol import record_bus_address, virtual_button_class, virtual_record_bus_address
 
 _LOGGER = logging.getLogger(__name__)
@@ -664,6 +676,7 @@ def merge_discovered_buttons(
 
         mapping = key_mapping.get(num_channels, {})
         keyed_by_device_type: str | None = None
+        keyed_layout: str | None = None
         # PC-Logic logical inputs don't follow the standard 2-channel
         # nibble layout (+8 / +C). Hardware-captured presses on a
         # 940C install show offsets +0 (primary) and +4 (alias) —
@@ -685,6 +698,14 @@ def merge_discovered_buttons(
             if dt_mapping is not None:
                 mapping = dt_mapping
                 keyed_by_device_type = device_type
+            elif device_type in PER_PLATE_LAYOUT_TYPES and num_channels == 2:
+                # The layout this plate was found in, if known; else the
+                # generic one until its links say otherwise.
+                keyed_by_device_type = device_type
+                layout = _known_two_button_layout(physical_addr, buttons.get(physical_addr))
+                mapping = TWO_BUTTON_LAYOUTS[layout or TWO_BUTTON_LAYOUT_GENERIC]
+                if layout == TWO_BUTTON_LAYOUT_RIGHT_PAIR:
+                    keyed_layout = layout
         converted_address = convert_nikobus_address(physical_addr)
         try:
             original_nibble = int(converted_address[0], 16)
@@ -725,6 +746,8 @@ def merge_discovered_buttons(
         # motion detector from a push button).
         if keyed_by_device_type is not None:
             phys_entry["device_type"] = keyed_by_device_type
+        if keyed_layout is not None:
+            phys_entry["key_layout"] = keyed_layout
         # Carry through PC-Logic provenance fields when present —
         # synthesized PC-Logic logical-input entries set
         # ``pc_logic_parent_address`` + ``pc_logic_slot_index`` so the
@@ -1546,6 +1569,140 @@ def strip_module_links(
     return removed
 
 
+def has_per_plate_key_layout(entry: Any) -> bool:
+    """Whether a button-store entry is a two-button plate found in either layout.
+
+    By its stored type byte, or by its model for an entry written before
+    the type was kept (``PER_PLATE_LAYOUT_TYPES``).
+    """
+    if not isinstance(entry, dict) or entry.get("channels") != 2:
+        return False
+    if str(entry.get("device_type") or "").upper() in PER_PLATE_LAYOUT_TYPES:
+        return True
+    model = str(entry.get("model") or "").strip().upper()
+    if not model:
+        return False
+    for device_type in PER_PLATE_LAYOUT_TYPES:
+        spec = DEVICE_TYPES.get(device_type) or {}
+        for field in ("Model", "ModelAlt", "ModelAltLegacy"):
+            pattern = str(spec.get(field) or "").strip().upper()
+            if pattern and fnmatch.fnmatchcase(model, pattern):
+                return True
+    return False
+
+
+def two_button_bus_addresses(physical: str, layout: str) -> dict[str, str]:
+    """The 1A / 1B frames of the two-button plate at ``physical`` in ``layout``."""
+    converted = _convert_nikobus_address(physical)
+    nibble = int(converted[0], 16)
+    return {
+        label: f"{(nibble + int(offset, 16)) & 0xF:X}{converted[1:]}"
+        for label, offset in TWO_BUTTON_LAYOUTS[layout].items()
+    }
+
+
+def _known_two_button_layout(physical: str, entry: Any) -> str | None:
+    """The layout a stored two-button plate is known to be in, or ``None``.
+
+    Its ``key_layout`` when set. Else, for an entry written by 0.57.1
+    (which put every such plate at 0 / 4), the right pair only when its
+    keys there carry links — the evidence the plate is one; without
+    links nothing is known.
+    """
+    if not isinstance(entry, dict):
+        return None
+    stored = entry.get("key_layout")
+    if stored in TWO_BUTTON_LAYOUTS:
+        return str(stored)
+    try:
+        right_pair = two_button_bus_addresses(physical, TWO_BUTTON_LAYOUT_RIGHT_PAIR)
+    except (ValueError, IndexError):
+        return None
+    ops = entry.get("operation_points") or {}
+    at_right_pair = all(
+        isinstance(ops.get(label), dict)
+        and str(ops[label].get("bus_address") or "").upper() == bus
+        for label, bus in right_pair.items()
+    )
+    if at_right_pair and any(
+        isinstance(ops.get(label), dict) and ops[label].get("linked_modules")
+        for label in right_pair
+    ):
+        return TWO_BUTTON_LAYOUT_RIGHT_PAIR
+    return None
+
+
+def _apply_two_button_layout(physical: str, entry: dict[str, Any], layout: str) -> bool:
+    """Put a two-button plate's keys at ``layout``; ``True`` when anything moved."""
+    addresses = two_button_bus_addresses(physical, layout)
+    ops = entry.setdefault("operation_points", {})
+    changed = False
+    for label, bus in addresses.items():
+        op = ops.setdefault(label, {})
+        previous = str(op.get("bus_address") or "").upper()
+        if previous == bus:
+            continue
+        op["bus_address"] = bus
+        description = op.get("description")
+        if not description or description == f"Push button {label} #N{previous}":
+            op["description"] = f"Push button {label} #N{bus}"
+        changed = True
+    if layout == TWO_BUTTON_LAYOUT_RIGHT_PAIR:
+        changed = changed or entry.get("key_layout") != layout
+        entry["key_layout"] = layout
+    elif "key_layout" in entry:
+        entry.pop("key_layout")
+        changed = True
+    return changed
+
+
+def _settle_two_button_layouts(buttons: dict[str, Any], command_mapping: dict[Any, Any]) -> None:
+    """Give each two-button plate the layout its link records show.
+
+    A module's record names the key index the plate sends: 1 / 3 in the
+    generic layout, 0 / 2 in the right pair. A plate whose records use
+    only one family takes that layout (keys moved, generated
+    descriptions regenerated, ``key_layout`` kept for the next
+    inventory); records of both families leave it as it is.
+    """
+    indices_by_plate: dict[str, set[int]] = {}
+    for mapping_key in command_mapping:
+        if not isinstance(mapping_key, tuple) or len(mapping_key) < 2:
+            continue
+        if len(mapping_key) >= 3 and mapping_key[2] is not None:
+            continue  # an IR code, not a wall key
+        plate = _normalize_address(mapping_key[0])
+        try:
+            key_raw = int(mapping_key[1])
+        except (TypeError, ValueError):
+            continue
+        if plate:
+            indices_by_plate.setdefault(plate, set()).add(key_raw)
+    for plate, indices in indices_by_plate.items():
+        entry = buttons.get(plate)
+        if not isinstance(entry, dict) or not has_per_plate_key_layout(entry):
+            continue
+        layouts = [
+            layout
+            for layout, family in TWO_BUTTON_LAYOUT_KEY_INDICES.items()
+            if indices <= family
+        ]
+        if len(layouts) != 1:
+            _LOGGER.info(
+                "Two-button plate %s: link records use key indices %s — layout left as it is",
+                plate,
+                sorted(indices),
+            )
+            continue
+        if _apply_two_button_layout(plate, entry, layouts[0]):
+            _LOGGER.info(
+                "Two-button plate %s: its links use key indices %s — keys set to the %s layout",
+                plate,
+                sorted(indices),
+                "0 / 4" if layouts[0] == TWO_BUTTON_LAYOUT_RIGHT_PAIR else "8 / C",
+            )
+
+
 def merge_linked_modules(
     button_data: dict[str, Any],
     command_mapping: dict[Any, Any],
@@ -1582,6 +1739,10 @@ def merge_linked_modules(
         if len(mapping_key) == 3:
             return mapping_key[0], mapping_key[1], mapping_key[2]
         return (mapping_key[0] if mapping_key else None), None, None
+
+    # A two-button plate found in either layout takes the one its link
+    # records show, before any record is resolved against its keys.
+    _settle_two_button_layouts(buttons, command_mapping)
 
     bus_to_op = _build_bus_to_op_index(buttons)
     ir_base_lookup = _build_ir_base_lookup(buttons)
