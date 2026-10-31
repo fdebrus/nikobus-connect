@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.57.1
+
+**Two-button wall plates send their keys at nibbles 0 / 4 (#184).**
+
+An install with 14 05-060 plates (type 0x04) showed it on the bus and in its output modules: plate 1772B8 sends `0753BA` (upper key) and `4753BA` (lower key), and the link record its module holds for the upper key (`FF06F0E0CA5D`) has key index 0. The library generated `8753BA` / `C753BA`, the generic two-key layout, so the plate's presses matched no module and no link landed on its keys. That layout had never been seen on a two-button plate; the 4\*-082 (0x10) was already known to use 0 / 4.
+
+- The 05-060 / 4\*-072 (0x04), 05-061 (0x05) and 05-060-02 (0x3F) now use the 4\*-082's layout: 1A at nibble 0, 1B at nibble 4. The 05-061 and 05-060-02 are the 05-060 with feedback LEDs. The interfaces (05-056, 05-057) and the RF push button (05-302) keep 8 / C.
+- A PC-Link inventory moves the existing keys to the right addresses; a key description that was still the generated one is regenerated, a name the user gave it is kept.
+- The `.nkb` path (manual config built from a project file, the RGB controller's keys) derives a plate's key addresses from its product reference the same way (`key_layout_for_model`); it used the generic layout for every two-key plate.
+
 ## 0.57.0
 
 **The motion detector with Nikobus interface (05-7\*5 / 430-00500, type 0x28) has four keys.**

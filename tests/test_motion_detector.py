@@ -124,12 +124,12 @@ def test_recognised_by_type_byte_model_or_name() -> None:
     assert not is_motion_detector(None)
 
 
-def test_ordinary_two_key_buttons_are_unchanged() -> None:
+def test_an_interface_keeps_the_generic_two_key_layout() -> None:
     button_data = {"nikobus_button": {}}
     merge_discovered_buttons(
         button_data,
-        {"0A0908": {"category": "Button", "device_type": "04", "model": "05-060", "channels": 2,
-                    "description": "Bus push button, 2 control buttons"}},
+        {"0A0908": {"category": "Button", "device_type": "21", "model": "05-056", "channels": 2,
+                    "description": "Push-button interface"}},
         KEY_MAPPING,
         convert_nikobus_address,
     )

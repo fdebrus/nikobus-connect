@@ -804,9 +804,16 @@ def merge_discovered_buttons(
                     key_label,
                     {"bus_address": updated_addr, "description": generated_op_desc},
                 )
+                previous_addr = str(op_point.get("bus_address") or "")
                 op_point["bus_address"] = updated_addr
                 current_op_desc = op_point.get("description")
-                if not current_op_desc or current_op_desc.endswith(f"#N{updated_addr}"):
+                # Regenerated when it is still the generated one — for this
+                # address, or for the one a corrected key layout replaced.
+                if (
+                    not current_op_desc
+                    or current_op_desc.endswith(f"#N{updated_addr}")
+                    or (previous_addr and current_op_desc == f"Push button {key_label} #N{previous_addr}")
+                ):
                     op_point["description"] = generated_op_desc
 
         # Surface channel-address mapping on the discovered device so later

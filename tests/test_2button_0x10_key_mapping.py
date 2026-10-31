@@ -11,8 +11,8 @@ op-points were generated at the wrong addresses (8/C) and its decoded
 link records (at key indices 0/2) never resolved, so all 10 two-buttons
 showed zero linked_modules.
 
-The fix must NOT disturb the 05-060 / 05-056 2-channel devices, which
-legitimately use keys 1/3 → nibbles 8/C.
+The 05-060 (0x04) turned out to use the same layout (#184); the 05-056
+interface keeps keys 1/3 → nibbles 8/C.
 """
 
 from __future__ import annotations
@@ -64,11 +64,12 @@ def test_0x10_op_points_use_nibble_0_and_4() -> None:
     assert ops["1B"]["bus_address"] == "478032"  # nibble 4
 
 
-def test_0x04_2button_still_uses_nibble_8_and_C() -> None:
-    """The 05-060 (0x04) 2-button must keep the default 8/C layout."""
+def test_0x04_2button_uses_nibble_0_and_4_too() -> None:
+    """The 05-060 (0x04) uses the same 0/4 layout (nikobus-connect #184):
+    plate 1772B8 sends 0753BA / 4753BA on 14 units of one install."""
     button_data = {"nikobus_button": {}}
     discovered = {
-        "0A0908": {
+        "1772B8": {
             "category": "Button",
             "device_type": "04",
             "model": "05-060",
@@ -79,15 +80,9 @@ def test_0x04_2button_still_uses_nibble_8_and_C() -> None:
     merge_discovered_buttons(
         button_data, discovered, KEY_MAPPING, convert_nikobus_address
     )
-    ops = button_data["nikobus_button"]["0A0908"]["operation_points"]
-    # convert_nikobus_address("0A0908") → first nibble + 8 / + C.
-    conv = convert_nikobus_address("0A0908")
-    base = int(conv[0], 16)
-    assert ops["1A"]["bus_address"][0] == f"{(base + 0x8) & 0xF:X}"
-    assert ops["1B"]["bus_address"][0] == f"{(base + 0xC) & 0xF:X}"
-
-
-# --- link resolution -------------------------------------------------------
+    ops = button_data["nikobus_button"]["1772B8"]["operation_points"]
+    assert ops["1A"]["bus_address"] == "0753BA"
+    assert ops["1B"]["bus_address"] == "4753BA"
 
 def test_0x10_link_keys_0_and_2_resolve() -> None:
     """Decoded 0x10 link records arrive at key indices 0 and 2; they
