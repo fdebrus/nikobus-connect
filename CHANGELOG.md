@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.57.2
+
+**The 05-060 two-button plate is found in two key layouts; each plate now takes the one its links show.** Fixes a regression in 0.57.1.
+
+0.57.1 moved every 05-060 (type 0x04), 05-061 (0x05) and 05-060-02 (0x3F) from the generic layout (key indices 1 / 3, nibbles 8 / C) to the four-button's right-hand pair (0 / 2, nibbles 0 / 4), from one install whose 14 plates use it (#184). Another install's plates use the generic layout: switch module C9A5's record `FF16F0583160` for plate 180C56 holds key index 1, and the plate sends `9A8C06` / `DA8C06`. Both report the same type byte and model. On that install, 0.57.1's inventory moved the keys away from what the plates send and the link scan found nothing for them.
+
+- An inventory starts these plates in the generic layout again, unless the plate is known to be in the right pair: its stored `key_layout`, or, for a store written by 0.57.1, keys at 0 / 4 that carry links.
+- The link scan reads each plate's layout from the key indices its records use: only 0 / 2 moves it to the right pair (kept as `key_layout: "0_4"` for the next inventory), only 1 / 3 to the generic layout. Records of both families leave it as it is. The keys move before any record is resolved, so every record lands on its key.
+- The 4\*-082 (0x10) keeps its fixed right-pair layout; interfaces and the RF push button are unchanged.
+- The `.nkb` path no longer assumes the right pair for these plates.
+- New helpers: `has_per_plate_key_layout(entry)` and `two_button_bus_addresses(physical, layout)` in `discovery.fileio`; constants `PER_PLATE_LAYOUT_TYPES`, `TWO_BUTTON_LAYOUTS`.
+
 ## 0.57.1
 
 **Two-button wall plates send their keys at nibbles 0 / 4 (#184).**

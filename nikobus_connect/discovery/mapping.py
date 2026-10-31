@@ -560,15 +560,16 @@ PC_LOGIC_KEY_MAPPING = {
 # wrong addresses (8/C) and its link records (decoded at key indices
 # 0/2) never matched.
 #
-# 0x04 (05-060 / 4*-072): the same, on 14 plates of another install
-# (nikobus-connect #184): physical 1772B8 sends 0753BA / 4753BA, and the
-# output module's link record for its upper key (``FF06F0E0CA5D``)
-# holds key index 0. The 8/C the generic table gives had never been
-# seen on a two-button plate; a two-button plate uses the four-button's
-# right-hand pair. 0x05 (05-061) and 0x3F (05-060-02) are the same plate
-# with feedback LEDs and get the same layout. The interfaces (05-056
-# 0x21, 05-057 0x22) and the RF push button (05-302 0x1F) keep 8/C — the
-# motion detector's interface shows that layout on the bus.
+# 0x04 (05-060 / 4*-072) has no fixed layout: it exists in both. On one
+# install (nikobus-connect #184, 14 plates) plate 1772B8 sends 0753BA /
+# 4753BA and its module's link record ``FF06F0E0CA5D`` holds key index
+# 0 (layout 0 / 4); on another (fdebrus, 0.57.1 regression) switch
+# module C9A5's record ``FF16F0583160`` for plate 180C56 holds key index
+# 1 and the plate sends 9A8C06 / DA8C06 (layout 8 / C). Both report the
+# same type byte and model, so the layout is read per plate from the
+# key indices its links use (``PER_PLATE_LAYOUT_TYPES``). 0x05 (05-061)
+# and 0x3F (05-060-02), the same plate with feedback LEDs, are treated
+# the same way.
 #
 # Keyed by the on-bus device-type byte; ``merge_discovered_buttons``
 # consults this before falling back to ``KEY_MAPPING[num_channels]``.
@@ -588,14 +589,28 @@ MOTION_DETECTOR_KEY_ROLES: dict[str, str] = {
     "1D": "dark",
 }
 
-#: Key layout of the two-button wall plates (the four-button's 1C / 1D).
-TWO_BUTTON_PLATE_KEYS: dict[str, str] = {"1A": "0", "1B": "4"}
+#: The two key layouts a two-button plate is found in: the generic one
+#: (key indices 1 / 3, nibbles 8 / C) and the four-button's right-hand
+#: pair (key indices 0 / 2, nibbles 0 / 4).
+TWO_BUTTON_LAYOUT_GENERIC = "8_C"
+TWO_BUTTON_LAYOUT_RIGHT_PAIR = "0_4"
+TWO_BUTTON_LAYOUTS: dict[str, dict[str, str]] = {
+    TWO_BUTTON_LAYOUT_GENERIC: {"1A": "8", "1B": "C"},
+    TWO_BUTTON_LAYOUT_RIGHT_PAIR: {"1A": "0", "1B": "4"},
+}
+#: The key indices a link record carries in each layout.
+TWO_BUTTON_LAYOUT_KEY_INDICES: dict[str, frozenset[int]] = {
+    TWO_BUTTON_LAYOUT_GENERIC: frozenset({1, 3}),
+    TWO_BUTTON_LAYOUT_RIGHT_PAIR: frozenset({0, 2}),
+}
+#: Key layout of the two-button wall plates that always use the right pair.
+TWO_BUTTON_PLATE_KEYS: dict[str, str] = TWO_BUTTON_LAYOUTS[TWO_BUTTON_LAYOUT_RIGHT_PAIR]
+#: Two-button plates found in either layout: the layout is read per plate
+#: from its link records and kept on its entry as ``key_layout``.
+PER_PLATE_LAYOUT_TYPES: frozenset[str] = frozenset({"04", "05", "3F"})
 
 DEVICE_TYPE_KEY_MAPPING = {
-    "04": TWO_BUTTON_PLATE_KEYS,  # 05-060 / 4*-072
-    "05": TWO_BUTTON_PLATE_KEYS,  # 05-061, with feedback LEDs
     "10": TWO_BUTTON_PLATE_KEYS,  # 4*-082
-    "3F": TWO_BUTTON_PLATE_KEYS,  # 05-060-02, graphite with feedback LEDs
     # 0x28 motion detector (05-7*5 / 430-00500): its output pair at the
     # usual 2-channel nibbles 8 / C, its light-level pair at E / A (the
     # 8-key layout's 1B / 1A). Unit 0986BC sends 8F5864 / CF5864 /

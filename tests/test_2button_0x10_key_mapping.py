@@ -11,8 +11,9 @@ op-points were generated at the wrong addresses (8/C) and its decoded
 link records (at key indices 0/2) never resolved, so all 10 two-buttons
 showed zero linked_modules.
 
-The 05-060 (0x04) turned out to use the same layout (#184); the 05-056
-interface keeps keys 1/3 → nibbles 8/C.
+The 05-060 (0x04) is found in both layouts and is settled per plate
+(``test_two_button_plates``); the 05-056 interface keeps keys 1/3 →
+nibbles 8/C.
 """
 
 from __future__ import annotations
@@ -64,12 +65,13 @@ def test_0x10_op_points_use_nibble_0_and_4() -> None:
     assert ops["1B"]["bus_address"] == "478032"  # nibble 4
 
 
-def test_0x04_2button_uses_nibble_0_and_4_too() -> None:
-    """The 05-060 (0x04) uses the same 0/4 layout (nikobus-connect #184):
-    plate 1772B8 sends 0753BA / 4753BA on 14 units of one install."""
+def test_0x04_2button_starts_in_the_generic_layout() -> None:
+    """The 05-060 (0x04) is found in both layouts; an inventory starts it
+    at the generic 8/C and its link records settle it per plate
+    (see ``test_two_button_plates``)."""
     button_data = {"nikobus_button": {}}
     discovered = {
-        "1772B8": {
+        "180C56": {
             "category": "Button",
             "device_type": "04",
             "model": "05-060",
@@ -80,9 +82,9 @@ def test_0x04_2button_uses_nibble_0_and_4_too() -> None:
     merge_discovered_buttons(
         button_data, discovered, KEY_MAPPING, convert_nikobus_address
     )
-    ops = button_data["nikobus_button"]["1772B8"]["operation_points"]
-    assert ops["1A"]["bus_address"] == "0753BA"
-    assert ops["1B"]["bus_address"] == "4753BA"
+    ops = button_data["nikobus_button"]["180C56"]["operation_points"]
+    assert ops["1A"]["bus_address"] == "9A8C06"
+    assert ops["1B"]["bus_address"] == "DA8C06"
 
 def test_0x10_link_keys_0_and_2_resolve() -> None:
     """Decoded 0x10 link records arrive at key indices 0 and 2; they
