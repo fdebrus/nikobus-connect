@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.57.0
+
+**The motion detector with Nikobus interface (05-7\*5 / 430-00500, type 0x28) has four keys.**
+
+A user logged two units for three days. Each sends four frames: its output switching on (motion below the light threshold, or the sensor's own button) and off (run time elapsed) at key nibbles 8 / C, and the light level at the sensor crossing its threshold upwards / downwards at E / A. Discovery knew it as a two-key button, so the light pair was a press from an unknown button and a link on it could not resolve.
+
+- The type now has four keys: 1A on, 1B off, 1C light, 1D dark (`MOTION_DETECTOR_KEY_ROLES`). A PC-Link inventory adds 1C / 1D to an existing entry and keeps its names. The entry records its type byte as `device_type`.
+- `motion_detector_bus_addresses(physical)` gives the four frames by role from the address alone, so a host can use them with a store written before; `is_motion_detector(entry)` recognises an entry by type byte, model or name.
+- Link records resolve by the frame they listen for first. For every button that follows the channel-count table this is the same answer as before; for a button with a layout of its own (the detector, the 4\*-082) the table is no longer consulted, so a key index the unit never sends is not filed on one of its other keys.
+
 ## 0.56.3
 
 Fixes from a second audit of 0.56.2; most were reproduced with probes first.

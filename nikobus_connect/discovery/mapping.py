@@ -382,10 +382,17 @@ DEVICE_TYPES: dict[str, dict[str, Any]] = {
         # capability that exposes a Nikobus interface. NikoRefNr is
         # ``05-7*5`` (a series prefix, not a single SKU); the legacy
         # part number ``430-00500`` is recorded as the alt.
+        #
+        # Four bus events, not two (Nikobus-HA forum report, 2026-10,
+        # two units logged for three days): output on (motion below the
+        # lux threshold, or the sensor's own button) and output off
+        # (after the run time) at key nibbles 8 / C, and the light level
+        # crossing the threshold upwards / downwards at E / A. See
+        # ``MOTION_DETECTOR_KEY_ROLES``.
         "Category": "Button",
         "Model": "05-7*5",
         "ModelAltLegacy": "430-00500",
-        "Channels": 2,
+        "Channels": 4,
         "Name": "Motion detector with Nikobus interface",
         "VendorRef": "S_DB_ACTOR_SENSOR",
     },
@@ -555,8 +562,29 @@ PC_LOGIC_KEY_MAPPING = {
 #
 # Keyed by the on-bus device-type byte; ``merge_discovered_buttons``
 # consults this before falling back to ``KEY_MAPPING[num_channels]``.
+#: Device-type byte of the motion detector with Nikobus interface.
+MOTION_DETECTOR_DEVICE_TYPE = "28"
+#: Its model as the PC-Link reports it.
+MOTION_DETECTOR_MODEL = "05-7*5"
+#: What each of its four keys reports. ``on`` / ``off``: the detector's
+#: output switched on (motion while below the light threshold, or its
+#: own button) / off (run time elapsed, or a second press). ``light`` /
+#: ``dark``: the light level at the sensor went above / below the
+#: threshold set on its potentiometer. The bus carries no lux value.
+MOTION_DETECTOR_KEY_ROLES: dict[str, str] = {
+    "1A": "on",
+    "1B": "off",
+    "1C": "light",
+    "1D": "dark",
+}
+
 DEVICE_TYPE_KEY_MAPPING = {
     "10": {"1A": "0", "1B": "4"},
+    # 0x28 motion detector (05-7*5 / 430-00500): its output pair at the
+    # usual 2-channel nibbles 8 / C, its light-level pair at E / A (the
+    # 8-key layout's 1B / 1A). Unit 0986BC sends 8F5864 / CF5864 /
+    # EF5864 / AF5864.
+    MOTION_DETECTOR_DEVICE_TYPE: {"1A": "8", "1B": "C", "1C": "E", "1D": "A"},
 }
 
 
