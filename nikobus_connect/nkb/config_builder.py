@@ -145,7 +145,7 @@ def build_config(
                 # link records to the right face.
                 for label in faces:
                     buttons.append({
-                        "address": _per_key_bus_address(addr, channels, label),
+                        "address": _per_key_bus_address(addr, channels, label, str(model)),
                         "description": f"{name} ({label})",
                         "linked_button": [{
                             "address": addr,

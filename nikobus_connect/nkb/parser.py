@@ -22,6 +22,7 @@ needed at runtime (the Access reader is vendored under ``_access_parser``).
 
 from __future__ import annotations
 
+import fnmatch
 import logging
 import re
 import struct
@@ -32,7 +33,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, NamedTuple
 
-from ..discovery.mapping import KEY_MAPPING
+from ..discovery.mapping import DEVICE_TYPE_KEY_MAPPING, DEVICE_TYPES, KEY_MAPPING
 from ..discovery.protocol import convert_nikobus_address
 
 _LOGGER = logging.getLogger(__name__)
@@ -141,21 +142,48 @@ def channels_for(labels: list[str]) -> int:
     return 1
 
 
-def per_key_bus_address(physical_hex: str, channels: int, label: str) -> str:
+def key_layout_for_model(model: str | None) -> dict[str, str] | None:
+    """The per-type key layout (``DEVICE_TYPE_KEY_MAPPING``) of a product reference.
+
+    A project file names a plate by its product reference (``05-060``,
+    ``41-082``), not by the type byte the PC-Link reports, so the
+    layout is found through the references ``DEVICE_TYPES`` lists for
+    each type; a series reference such as ``4*-072`` matches any digit
+    in place of ``*``. ``None`` for a product with the generic layout.
+    """
+    ref = str(model or "").strip().upper()
+    if not ref:
+        return None
+    for device_type, layout in DEVICE_TYPE_KEY_MAPPING.items():
+        entry = DEVICE_TYPES.get(device_type) or {}
+        for field in ("Model", "ModelAlt", "ModelAltLegacy"):
+            pattern = str(entry.get(field) or "").strip().upper()
+            if pattern and fnmatch.fnmatchcase(ref, pattern):
+                return layout
+    return None
+
+
+def per_key_bus_address(
+    physical_hex: str, channels: int, label: str, model: str | None = None
+) -> str:
     """Bus address the plate emits when key ``label`` is pressed.
 
     Reproduces the library's own inventory derivation
     (:func:`merge_discovered_buttons`): bit-reverse the physical address
     with :func:`convert_nikobus_address`, then **add** the key face's
-    first-nibble offset (``KEY_MAPPING[channels][label]``) to the first
-    nibble (wrapping mod 16). This is what a PC-Link inventory would store,
-    so the router matches real presses on it. Falls back to the converted /
-    physical address when the channel/label pair isn't known.
+    first-nibble offset to the first nibble (wrapping mod 16). The
+    offset is the product's own layout when it has one
+    (:func:`key_layout_for_model` — the two-button plates use 0 / 4),
+    else ``KEY_MAPPING[channels][label]``. This is what a PC-Link
+    inventory would store, so the router matches real presses on it.
+    Falls back to the converted / physical address when the
+    channel/label pair isn't known.
     """
     converted = convert_nikobus_address(physical_hex)
     if converted.startswith("["):  # convert_nikobus_address failure marker
         return physical_hex
-    hexchar = KEY_MAPPING.get(channels, {}).get(label)
+    layout = key_layout_for_model(model)
+    hexchar = (layout or {}).get(label) or KEY_MAPPING.get(channels, {}).get(label)
     if hexchar is None:
         return converted
     new_nibble = (int(converted[0], 16) + int(hexchar, 16)) & 0xF
@@ -406,13 +434,14 @@ def _extract_rgb_links(
             continue
         seen.add((module_addr, f"{plate_addr}:{key}"))
         channels = channels_for(key_labels(faces_by_component.get(plate["KeyComponent"], set())))
+        plate_model = ref_by_kpb.get(plate.get("KeyProductBase"))
         mode_text = linkmodes.get(cn.get("KeyLinkMode"))
         links.append(
             RgbLink(
                 module_address=module_addr,
                 button_address=plate_addr,
                 key=key,
-                bus_address=per_key_bus_address(plate_addr, channels, key),
+                bus_address=per_key_bus_address(plate_addr, channels, key, plate_model),
                 mode=mode_number(mode_text),
                 mode_text=str(mode_text or ""),
             )

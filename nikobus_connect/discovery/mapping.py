@@ -553,12 +553,22 @@ PC_LOGIC_KEY_MAPPING = {
 #
 # 0x10 (4*-082, 2 control buttons): hardware capture (fdebrus install,
 # 10 units) shows its two faces fire at first-nibble offsets +0 / +4 —
-# the same layout as keys 1C/1D of the 4-button — NOT the +8 / +C used
-# by the other 2-channel devices (05-060 0x04, 05-056 0x21 interface).
-# Confirmed against the user's own legacy descriptions: physical 130078
-# → faces 078032 (nibble 0) and 478032 (nibble 4). Without this override
-# 0x10 op-points were generated at the wrong addresses (8/C) and its
-# link records (decoded at key indices 0/2) never matched.
+# the same layout as keys 1C/1D of the 4-button — NOT the +8 / +C of the
+# generic 2-channel table. Confirmed against the user's own legacy
+# descriptions: physical 130078 → faces 078032 (nibble 0) and 478032
+# (nibble 4). Without this override 0x10 op-points were generated at the
+# wrong addresses (8/C) and its link records (decoded at key indices
+# 0/2) never matched.
+#
+# 0x04 (05-060 / 4*-072): the same, on 14 plates of another install
+# (nikobus-connect #184): physical 1772B8 sends 0753BA / 4753BA, and the
+# output module's link record for its upper key (``FF06F0E0CA5D``)
+# holds key index 0. The 8/C the generic table gives had never been
+# seen on a two-button plate; a two-button plate uses the four-button's
+# right-hand pair. 0x05 (05-061) and 0x3F (05-060-02) are the same plate
+# with feedback LEDs and get the same layout. The interfaces (05-056
+# 0x21, 05-057 0x22) and the RF push button (05-302 0x1F) keep 8/C — the
+# motion detector's interface shows that layout on the bus.
 #
 # Keyed by the on-bus device-type byte; ``merge_discovered_buttons``
 # consults this before falling back to ``KEY_MAPPING[num_channels]``.
@@ -578,8 +588,14 @@ MOTION_DETECTOR_KEY_ROLES: dict[str, str] = {
     "1D": "dark",
 }
 
+#: Key layout of the two-button wall plates (the four-button's 1C / 1D).
+TWO_BUTTON_PLATE_KEYS: dict[str, str] = {"1A": "0", "1B": "4"}
+
 DEVICE_TYPE_KEY_MAPPING = {
-    "10": {"1A": "0", "1B": "4"},
+    "04": TWO_BUTTON_PLATE_KEYS,  # 05-060 / 4*-072
+    "05": TWO_BUTTON_PLATE_KEYS,  # 05-061, with feedback LEDs
+    "10": TWO_BUTTON_PLATE_KEYS,  # 4*-082
+    "3F": TWO_BUTTON_PLATE_KEYS,  # 05-060-02, graphite with feedback LEDs
     # 0x28 motion detector (05-7*5 / 430-00500): its output pair at the
     # usual 2-channel nibbles 8 / C, its light-level pair at E / A (the
     # 8-key layout's 1B / 1A). Unit 0986BC sends 8F5864 / CF5864 /
@@ -662,10 +678,10 @@ KEY_MAPPING_FIRST_BYTE: dict[int, dict[str, str]] = {
 KEY_MAPPING_MODULE: dict[int, dict[int, str]] = {
     1: {1: "8"},
     # 2-channel devices come in two key-index families that the link
-    # resolver must both handle: the 05-060 (0x04) / 05-056 (0x21)
-    # interface emit keys 1/3 (nibbles 8/C), while the 4*-082 (0x10)
-    # 2-button emits keys 0/2 (nibbles 0/4 — same slots as a 4-button's
-    # 1C/1D). The resolver only sees the channel count, not the device
+    # resolver must both handle: the interfaces (05-056 0x21, 05-057
+    # 0x22) emit keys 1/3 (nibbles 8/C), while the two-button wall plates
+    # (05-060 0x04, 05-061 0x05, 4*-082 0x10, 05-060-02 0x3F) emit keys
+    # 0/2 (nibbles 0/4 — same slots as a 4-button's 1C/1D). The resolver only sees the channel count, not the device
     # type, so this table carries ALL FOUR indices. That is safe because
     # a physical device only ever emits its own two key indices; the
     # extra entries are never hit for a device that doesn't use them.
