@@ -7,7 +7,14 @@ from dataclasses import dataclass
 from typing import Any, Callable
 
 from ..coordinator_protocol import CoordinatorProtocol
-from .mapping import CHANNEL_MAPPING, KEY_MAPPING_MODULE
+from .mapping import (
+    CHANNEL_MAPPING,
+    DEVICE_TYPE_KEY_MAPPING,
+    KEY_MAPPING_MODULE,
+    MOTION_DETECTOR_DEVICE_TYPE,
+    MOTION_DETECTOR_KEY_ROLES,
+    MOTION_DETECTOR_MODEL,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -257,6 +264,39 @@ def record_bus_address(physical: str, key_raw: Any) -> str | None:
     except (KeyError, TypeError, ValueError, IndexError):
         return None
     return f"{(nibble + int(add, 16)) & 0xF:X}{converted[1:]}"
+
+
+def motion_detector_bus_addresses(physical: str) -> dict[str, str]:
+    """The four frames a motion detector sends, by role.
+
+    ``{"on": ..., "off": ..., "light": ..., "dark": ...}`` for the
+    detector at ``physical`` (see ``MOTION_DETECTOR_KEY_ROLES``):
+    ``0986BC`` gives ``8F5864`` / ``CF5864`` / ``EF5864`` / ``AF5864``.
+    Works from the address alone, so a store written before the light
+    pair was known still yields all four.
+    """
+    converted = convert_nikobus_address(physical)
+    nibble = int(converted[0], 16)
+    layout = DEVICE_TYPE_KEY_MAPPING[MOTION_DETECTOR_DEVICE_TYPE]
+    return {
+        role: f"{(nibble + int(layout[key], 16)) & 0xF:X}{converted[1:]}"
+        for key, role in MOTION_DETECTOR_KEY_ROLES.items()
+    }
+
+
+def is_motion_detector(entry: Any) -> bool:
+    """Whether a button-store entry is a motion detector with Nikobus interface.
+
+    By its stored device type (0.57.0 on), or by the model / type the
+    PC-Link inventory gave it, for stores written before.
+    """
+    if not isinstance(entry, dict):
+        return False
+    if str(entry.get("device_type") or "").upper() == MOTION_DETECTOR_DEVICE_TYPE:
+        return True
+    if str(entry.get("model") or "").strip() == MOTION_DETECTOR_MODEL:
+        return True
+    return "motion detector" in str(entry.get("type") or "").lower()
 
 
 #: The name 0.53.0 introduced it under, for virtual buttons.

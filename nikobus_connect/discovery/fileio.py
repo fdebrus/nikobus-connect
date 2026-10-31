@@ -8,7 +8,7 @@ import tempfile
 from collections.abc import Callable, Collection
 from typing import Any
 
-from .mapping import KEY_MAPPING, KEY_MAPPING_MODULE
+from .mapping import DEVICE_TYPE_KEY_MAPPING, KEY_MAPPING, KEY_MAPPING_MODULE
 from .protocol import record_bus_address, virtual_button_class, virtual_record_bus_address
 
 _LOGGER = logging.getLogger(__name__)
@@ -663,6 +663,7 @@ def merge_discovered_buttons(
             continue
 
         mapping = key_mapping.get(num_channels, {})
+        keyed_by_device_type: str | None = None
         # PC-Logic logical inputs don't follow the standard 2-channel
         # nibble layout (+8 / +C). Hardware-captured presses on a
         # 940C install show offsets +0 (primary) and +4 (alias) —
@@ -679,11 +680,11 @@ def merge_discovered_buttons(
             # channel count with others but emit their keys at different
             # first-nibble offsets (e.g. 0x10 / 4*-082 uses +0 / +4, not
             # the +8 / +C of the 05-060 / 05-056 2-channel devices).
-            from .mapping import DEVICE_TYPE_KEY_MAPPING
             device_type = str(device.get("device_type") or "").upper()
             dt_mapping = DEVICE_TYPE_KEY_MAPPING.get(device_type)
             if dt_mapping is not None:
                 mapping = dt_mapping
+                keyed_by_device_type = device_type
         converted_address = convert_nikobus_address(physical_addr)
         try:
             original_nibble = int(converted_address[0], 16)
@@ -719,6 +720,11 @@ def merge_discovered_buttons(
         # renumbered project propagates; absent on header-less units.
         if device.get("component_number"):
             phys_entry["component_number"] = device["component_number"]
+        # A device whose keys follow its own layout keeps its type byte,
+        # so the store says how to read its keys (and a host can tell a
+        # motion detector from a push button).
+        if keyed_by_device_type is not None:
+            phys_entry["device_type"] = keyed_by_device_type
         # Carry through PC-Logic provenance fields when present —
         # synthesized PC-Logic logical-input entries set
         # ``pc_logic_parent_address`` + ``pc_logic_slot_index`` so the
@@ -1015,8 +1021,20 @@ def _resolve_operation_point(
     # 1) Direct physical-address match.
     physical = buttons.get(normalized)
     if isinstance(physical, dict):
+        # The key whose frame the record listens for. The same answer as
+        # the channel-count table below for every button that follows it;
+        # the right one for a button with a layout of its own (the motion
+        # detector's light / dark keys sit where the table has none).
+        frame = record_bus_address(normalized, key_raw)
+        if frame is not None:
+            for label, op in (physical.get("operation_points") or {}).items():
+                if isinstance(op, dict) and str(op.get("bus_address") or "").upper() == frame:
+                    return normalized, label, op
         channels = physical.get("channels")
-        key_label = _key_raw_to_label(channels, key_raw)
+        # Not for a button with a layout of its own: the table would
+        # put a key index it never sends on one of its other keys.
+        own_layout = str(physical.get("device_type") or "").upper() in DEVICE_TYPE_KEY_MAPPING
+        key_label = None if own_layout else _key_raw_to_label(channels, key_raw)
         if key_label:
             op_point = (physical.get("operation_points") or {}).get(key_label)
             if isinstance(op_point, dict):
