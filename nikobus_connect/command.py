@@ -65,7 +65,11 @@ class NikobusCommandHandler:
         self.bus_lock: asyncio.Lock = asyncio.Lock()
         # Every caller waiting on a module group's state, by ``ADDR_group``.
         self._pending_get_futures: dict[str, list[asyncio.Future[str]]] = {}
-        self._queued_get_keys: set[str] = set()
+        # GET dedup: key -> the queued item that owns it. Only the owner
+        # releases the key, so a stale item popped later cannot free a
+        # key a newer request holds (which let a third caller queue a
+        # duplicate exchange).
+        self._queued_get_keys: dict[str, dict[str, Any]] = {}
         # Set-output requests waiting in the queue, by ``ADDR_group``: a
         # second request for the same group joins the pending item
         # instead of queueing a frame of its own (see ``set_output_state``).
@@ -127,12 +131,26 @@ class NikobusCommandHandler:
                 # handler has already cleared the dedup key, so a
                 # retry that re-queued is now in the queue and
                 # will be processed in due course.
-                if future is not None and future.cancelled():
-                    gid_skip = command[3:5] if len(command) >= 5 else ""
-                    if gid_skip in ("12", "17") and address:
-                        self._queued_get_keys.discard(
-                            f"{address.upper()}_{'1' if gid_skip == '12' else '2'}"
+                gid_skip = command[3:5] if len(command) >= 5 else ""
+                get_key_skip = (
+                    f"{address.upper()}_{'1' if gid_skip == '12' else '2'}"
+                    if gid_skip in ("12", "17") and address
+                    else None
+                )
+                if future is not None and future.done() and (
+                    future.cancelled()
+                    or (
+                        # Answered already (feedback fast path, a read
+                        # before a write) and nobody else waits on it.
+                        get_key_skip is not None
+                        and all(
+                            waiter.done()
+                            for waiter in self._pending_get_futures.get(get_key_skip, [])
                         )
+                    )
+                ):
+                    if get_key_skip is not None:
+                        self._release_get_key(get_key_skip, command_item)
                     skipped_group = command_item.get("set_group")
                     if skipped_group is not None:
                         # A later request for this group must queue anew.
@@ -140,44 +158,48 @@ class NikobusCommandHandler:
                         if self._pending_set_groups.get(skipped_key) is command_item:
                             del self._pending_set_groups[skipped_key]
                     _LOGGER.debug(
-                        "Skipping stale command %s — caller future cancelled",
+                        "Skipping stale command %s — caller future %s",
                         command,
+                        "cancelled" if future.cancelled() else "already answered",
                     )
                     self._command_queue.task_done()
                     continue
 
                 set_group = command_item.get("set_group")
-                if set_group is not None:
-                    # Let requests for the same group that are arriving
-                    # right now join this one, then build the frame from
-                    # the buffer and stop accepting joiners: anything
-                    # later is a later change and gets its own frame.
-                    await asyncio.sleep(SET_COALESCE_WINDOW)
-                    set_addr, group = set_group
-                    if self._pending_set_groups.get(f"{set_addr}_{group}") is command_item:
-                        del self._pending_set_groups[f"{set_addr}_{group}"]
-                    # The buffer is shared with the host, which writes a
-                    # module's answer into it whenever a state read
-                    # completes. A read that landed while this request
-                    # waited would have undone the channel writes it
-                    # carries, so they are applied again now, right
-                    # before the frame is taken from the buffer.
-                    self._writing_sets[(set_addr, group)] = dict(command_item.get("channels", {}))
-                    await self._refresh_stale_group(set_addr, group)
-                    for channel, value in command_item.get("channels", {}).items():
-                        self.set_bytearray_state(set_addr, channel, value)
-                    command = self._build_set_group_command(set_addr, group)
-                    command_item["command"] = command
-
-                _LOGGER.debug("Processing command %s with address %s", command, address)
-
-                gid = command[3:5] if len(command) >= 5 else ""
-                if gid in ("12", "17") and address:
-                    self._queued_get_keys.discard(
-                        f"{address.upper()}_{'1' if gid == '12' else '2'}"
-                    )
-
+                gid = gid_skip
                 try:
+                    if set_group is not None:
+                        # Let requests for the same group that are arriving
+                        # right now join this one, then build the frame from
+                        # the buffer and stop accepting joiners: anything
+                        # later is a later change and gets its own frame.
+                        # Inside the try: a stop() during this wait or the
+                        # read below must release the caller's future too.
+                        await asyncio.sleep(SET_COALESCE_WINDOW)
+                        set_addr, group = set_group
+                        if self._pending_set_groups.get(f"{set_addr}_{group}") is command_item:
+                            del self._pending_set_groups[f"{set_addr}_{group}"]
+                        # The buffer is shared with the host, which writes a
+                        # module's answer into it whenever a state read
+                        # completes. A read that landed while this request
+                        # waited would have undone the channel writes it
+                        # carries, so they are applied again now, right
+                        # before the frame is taken from the buffer.
+                        self._writing_sets[(set_addr, group)] = dict(command_item.get("channels", {}))
+                        await self._refresh_stale_group(set_addr, group)
+                        for channel, value in command_item.get("channels", {}).items():
+                            self.set_bytearray_state(set_addr, channel, value)
+                        command = self._build_set_group_command(set_addr, group)
+                        command_item["command"] = command
+
+                    _LOGGER.debug("Processing command %s with address %s", command, address)
+
+                    gid = command[3:5] if len(command) >= 5 else ""
+                    if gid in ("12", "17") and address:
+                        self._release_get_key(
+                            f"{address.upper()}_{'1' if gid == '12' else '2'}", command_item
+                        )
+
                     if not address:
                         async with self.bus_lock:
                             await self._send_command(command)
@@ -364,7 +386,9 @@ class NikobusCommandHandler:
             # re-queue. Any stale command still in the queue gets
             # discarded by ``_process_commands`` on pop via the
             # ``future.cancelled()`` check.
-            self._queued_get_keys.discard(dedup_key)
+            owner = self._queued_get_keys.get(dedup_key)
+            if owner is not None and owner.get("future") is future:
+                del self._queued_get_keys[dedup_key]
             raise
         finally:
             remaining = self._pending_get_futures.get(key)
@@ -567,6 +591,12 @@ class NikobusCommandHandler:
         """Queue a command for processing."""
         _LOGGER.debug("Queueing command %s", command)
 
+        command_item = {
+            "command": command,
+            "address": address,
+            "future": future,
+            "completion_handler": completion_handler,
+        }
         gid = command[3:5] if len(command) >= 5 else ""
         if gid in ("12", "17") and address:
             dedup_key = f"{address.upper()}_{'1' if gid == '12' else '2'}"
@@ -575,14 +605,8 @@ class NikobusCommandHandler:
                     "Suppressing duplicate GET for %s (already queued)", dedup_key
                 )
                 return
-            self._queued_get_keys.add(dedup_key)
+            self._queued_get_keys[dedup_key] = command_item
 
-        command_item = {
-            "command": command,
-            "address": address,
-            "future": future,
-            "completion_handler": completion_handler,
-        }
         await self._command_queue.put(command_item)
         _LOGGER.debug("Command queued %s", command)
 
@@ -623,11 +647,25 @@ class NikobusCommandHandler:
                 key = f"{set_group[0]}_{set_group[1]}"
                 if self._pending_set_groups.get(key) is item:
                     del self._pending_set_groups[key]
+            for key in [k for k, owner in self._queued_get_keys.items() if owner is item]:
+                del self._queued_get_keys[key]
             self._command_queue.task_done()
             count += 1
         for item in keep:
             self._command_queue.put_nowait(item)
         return count
+
+    def pending_count(self, prefix: str | None = None) -> int:
+        """Number of queued commands, optionally only those starting with ``prefix``."""
+        items = list(getattr(self._command_queue, "_queue", ()))
+        if prefix is None:
+            return len(items)
+        return sum(1 for item in items if str(item.get("command") or "").startswith(prefix))
+
+    def _release_get_key(self, key: str, item: dict[str, Any]) -> None:
+        """Free a GET dedup key, but only for the item that owns it."""
+        if self._queued_get_keys.get(key) is item:
+            del self._queued_get_keys[key]
 
     def reset(self) -> None:
         """Clear per-connection state after a transport reconnect.
@@ -669,16 +707,14 @@ class NikobusCommandHandler:
         wait_ack, wait_answer = self._prepare_ack_and_answer_signals(command, address)
 
         gid = command[3:5] if len(command) >= 5 else ""
-        if gid in ("12", "17"):
-            self._listener.set_pending_query_group(
-                address.upper(), 1 if gid == "12" else 2
-            )
+        query_group = (1 if gid == "12" else 2) if gid in ("12", "17") else None
         state = await self._wait_for_ack_and_answer(
             command,
             wait_ack,
             wait_answer,
             raw=gid in _RAW_REPLY_FUNCS,
             attempts=attempts,
+            query=(address.upper(), query_group) if query_group else None,
         )
         if state is None:
             raise NikobusTimeoutError(
@@ -753,16 +789,23 @@ class NikobusCommandHandler:
         wait_answer: str,
         raw: bool = False,
         attempts: int = MAX_ATTEMPTS,
+        query: tuple[str, int] | None = None,
     ) -> str | None:
         """Wait for an acknowledgment and answer with retries.
 
         ``raw`` returns the answer frame's full data payload (hex)
-        instead of the 6-byte output-state slice.
+        instead of the 6-byte output-state slice. ``query`` names the
+        module group a state read is for; it is re-announced to the
+        listener before every attempt, so a Feedback Module query for
+        the other group seen between two attempts does not make the
+        next attempt discard its own answer.
         """
         self._listener._awaiting_response = True
         self._listener._awaited_answer = wait_answer
         try:
             for attempt in range(1, attempts + 1):
+                if query is not None:
+                    self._listener.set_pending_query_group(*query)
                 while not self._listener.response_queue.empty():
                     try:
                         self._listener.response_queue.get_nowait()
@@ -776,7 +819,7 @@ class NikobusCommandHandler:
                         attempt, attempts, wait_ack, wait_answer,
                     )
                     state = await self._wait_for_ack_and_answer_state(
-                        wait_ack, wait_answer, raw=raw, use_held=attempts > 1
+                        wait_ack, wait_answer, raw=raw
                     )
                     if state is not None:
                         _LOGGER.debug("Received valid state from device")
@@ -795,6 +838,7 @@ class NikobusCommandHandler:
         finally:
             self._listener._awaiting_response = False
             self._listener._awaited_answer = None
+            self._listener._awaited_query = None
 
     def _pushed_for_other_group(self, wait_ack: str, wait_answer: str) -> bool:
         """Whether a ``$1C`` frame seen now belongs to the module's other group.
@@ -819,8 +863,10 @@ class NikobusCommandHandler:
         """Wait for both acknowledgment and answer signals, then extract the state.
 
         ``use_held`` allows a state frame that arrived before our ack to
-        stand in for a missing answer (see ``held_early_answer``); a
-        best-effort read passes ``False`` and gives up instead.
+        stand in for a missing answer (see ``held_early_answer``). It is
+        on for every read, the single-attempt read before a write
+        included: on a gateway that sends the answer before the ack that
+        held frame is the only answer there is.
         """
         ack_received = False
         answer_received = False

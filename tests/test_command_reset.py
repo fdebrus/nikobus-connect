@@ -23,14 +23,14 @@ async def test_reset_drains_queue_and_cancels_futures() -> None:
     handler._command_queue.put_nowait({"command": "$10120000", "future": fut})
     handler._command_queue.put_nowait({"command": "$1012FFFF", "future": done_fut})
     handler._command_queue.put_nowait({"command": "#N123456"})  # no future
-    handler._queued_get_keys.add("0000_1")
+    handler._queued_get_keys["0000_1"] = {"command": "$10120000"}
 
     handler.reset()
 
     assert handler._command_queue.empty()
     assert fut.cancelled()
     assert done_fut.result() == "already-done"  # untouched
-    assert handler._queued_get_keys == set()
+    assert handler._queued_get_keys == {}
 
 
 async def test_drain_queue_returns_discard_count() -> None:
