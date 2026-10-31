@@ -14,10 +14,11 @@ Asynchronous Python library for communicating with the **Nikobus** home-automati
 - Framing and both checksums verified: the PC-Link's CRC-8 over the serial hop **and** the module's CRC-16 over the payload, so a byte flipped on the bus is dropped instead of decoded
 - Command queue with retries and ACK tracking; every bus exchange takes a shared lock, so a queued command can never be sent on top of a discovery read
 - Real-time listener for button presses and Feedback Module pushes, and a press tracker that turns a key's frame stream into tap / hold / release with wire-time duration and burst-tolerant release detection
-- High-level API: switches, dimmers, covers (open / close / stop)
-- Discovery: PC-Link inventory, then a per-module register scan bounded by the record count the module itself reports
+- High-level API: switches, dimmers, covers (open / close / stop), and outputs driven through a wall key with a feedback LED
+- Group writes that never undo a change made at the wall: a module group whose state is not recent is read before its six outputs are written, and an answer that arrives meanwhile keeps the writes still on their way
+- Discovery: PC-Link inventory, then a per-module register scan bounded by the record count the module itself reports; key layouts per device type, and per plate where one model exists in two (the two-button plates)
 - Decoders for switch, roller, dimmer and Audio Distribution link records, PC-Link and PC-Logic registry records, with mode and timer tables taken from the vendor's own parameter tables — and the RGB controller's mode table from its programming leaflet
-- Read-only maintenance: module status, the module's memory checksum, full memory images (for backups), and the PC-Link clock
+- Read-only maintenance: module status, the module's memory checksum, full memory images (for backups), the PC-Link clock, and a checksum prediction that tells a dimmer's power-loss memory from a reprogramming
 - `.nkb` project reader: modules, buttons, names, rooms, scenes and the keys linked to a colour controller, parsed locally with a vendored pure-Python Access reader
 
 ## Installation
@@ -58,10 +59,10 @@ async def main():
 
     api = NikobusAPI(handler, module_data={})
 
-    # Turn on channel 1 on switch module A1B2C3
-    await api.turn_on_switch("A1B2C3", 1)
+    # Turn on channel 1 on switch module C9A5
+    await api.turn_on_switch("C9A5", 1)
     await asyncio.sleep(1)
-    await api.turn_off_switch("A1B2C3", 1)
+    await api.turn_off_switch("C9A5", 1)
 
     await handler.stop()
     await listener.stop()
@@ -71,7 +72,7 @@ async def main():
 asyncio.run(main())
 ```
 
-Addresses are the 6-hex-digit module addresses printed on Nikobus modules (e.g. `A1B2C3`). Channels are 1-indexed.
+Output modules have 4-hex-digit addresses, as printed on the module and shown in the Nikobus software (e.g. `C9A5`); buttons and their keys have 6-hex-digit ones (e.g. `295682`). Channels are 1-indexed.
 
 `connect()` runs the PC-Link handshake and then a presence probe: the `#A` identity broadcast, which the PC-Link (and a PC-Logic) answers with its own status frame, with any Nikobus frame relayed meanwhile counting as proof of life. Silence is not fatal — it is logged, and the verdict is left in `conn.device_answered` (`True` / `False`, `None` before connecting) so a caller can surface it. A silent verdict is not final either: the first well-formed frame the listener receives afterwards flips it to `True` and calls `conn.on_device_answered` (sync or async), so a probe missed while the PC-Link was still resetting on a cold start corrects itself within seconds.
 
@@ -82,11 +83,15 @@ The gateway usually answers the probe with its own status frame as well; when it
 ### Switch on/off
 
 ```python
-await api.turn_on_switch("A1B2C3", 1)
-await api.turn_off_switch("A1B2C3", 1)
+await api.turn_on_switch("C9A5", 1)
+await api.turn_off_switch("C9A5", 1)
 ```
 
 Set-output commands for one module group are merged: several `turn_on` / `turn_off` calls on channels of the same group made within a few tens of milliseconds go out as one frame carrying all six bytes, one acknowledgement, one relay click.
+
+That frame carries all six outputs, taken from the state the handler last knew. An output switched at the wall since then would be switched back, so a group whose state is more than a few seconds old, or unknown, is read first (the command handler's `group_state_age(address, group)` tells how old it is). A host that stores answers or pushed frames should do it with the handler's `apply_group_state(address, group, state_hex)`: it lays the writes still waiting for their frame back on top, so an answer that arrives just before a write cannot undo it.
+
+A channel whose module entry names a feedback key (`led_on` / `led_off`) is switched by pressing that key, so the key's LED follows the output: the module is read, the key pressed, and the module read again to check the press took. `api.has_feedback_key("switch_module", "C9A5", 1)` tells which channels work that way, and `api.toggle_switch("C9A5", 1)` switches a channel to the opposite of what the module reports rather than of what the host thinks.
 
 ### Dimmer brightness
 
@@ -94,13 +99,13 @@ Brightness is 0-255. Pass the current brightness so the API can decide whether t
 
 ```python
 # Ramp to 50%
-await api.turn_on_light("D1E2F3", 2, brightness=128, current_brightness=0)
+await api.turn_on_light("0E6C", 2, brightness=128, current_brightness=0)
 
 # Change level without re-triggering "on"
-await api.turn_on_light("D1E2F3", 2, brightness=200, current_brightness=128)
+await api.turn_on_light("0E6C", 2, brightness=200, current_brightness=128)
 
 # Off
-await api.turn_off_light("D1E2F3", 2)
+await api.turn_off_light("0E6C", 2)
 ```
 
 ### Cover / roller shutter
@@ -109,11 +114,11 @@ A roller module reports direction, not position; `nikobus_connect.travel.TravelC
 
 
 ```python
-await api.open_cover("C0FFEE", 1)
+await api.open_cover("9105", 1)
 await asyncio.sleep(5)
-await api.stop_cover("C0FFEE", 1, direction="opening")
+await api.stop_cover("9105", 1, direction="opening")
 
-await api.close_cover("C0FFEE", 1)
+await api.close_cover("9105", 1)
 ```
 
 ### Pressing a key from the host
@@ -208,6 +213,20 @@ matches, reported, computed = await api.verify_module_memory(
 
 A module's checksum is also a cheap way to notice that it was reprogrammed with the Nikobus PC software: record it after reading the module's links, and compare later with a single frame.
 
+A dimmer also keeps the levels it restores after a power cut in its memory, so its checksum moves after a power cut without any reprogramming. Record those bytes with the checksum, and the checksum they explain can be computed later:
+
+```python
+from nikobus_connect.api import predict_module_crc
+
+before = await api.read_module_volatile("0E6C", "dimmer_module")  # with the baseline checksum
+...
+now = await api.read_module_volatile("0E6C", "dimmer_module")
+if predict_module_crc("dimmer_module", baseline_crc, before, now) == await api.get_module_crc("0E6C"):
+    ...  # only the power-loss memory changed: not reprogrammed
+```
+
+`MODULE_VOLATILE_RANGES` lists those bytes per module type (none for switch and roller modules).
+
 ### PC-Link clock
 
 The PC-Link keeps a naive local-time clock for the calendar functions of the Nikobus software; it does not follow daylight-saving changes on its own.
@@ -226,6 +245,19 @@ Discovery runs in two stages. The first reads the PC-Link's own registry — the
 ```python
 from nikobus_connect.discovery import NikobusDiscovery
 ```
+
+### Key layouts
+
+A key's bus address is the plate's address with its first digit shifted by an offset per key. Which offsets a plate uses depends on the product, not only on its number of keys:
+
+| Device | Keys | Offsets |
+|---|---|---|
+| Four- and eight-button plates, interfaces, RF transmitters | by key count | the generic table (`KEY_MAPPING`) |
+| 4\*-082 two-button plate | 1A / 1B | 0 / 4 (the four-button's right pair) |
+| 05-060 / 4\*-072, 05-061, 05-060-02 | 1A / 1B | 8 / C **or** 0 / 4, per plate |
+| Motion detector with Nikobus interface (05-7\*5) | on / off / light / dark | 8 / C / E / A |
+
+The two-button plates of the third row exist in both layouts under the same type byte and model. A module's link record names the key index the plate sends, 1 / 3 for one layout and 0 / 2 for the other, so the link merge reads each plate's layout from its own records before resolving them, and keeps it on the entry as `key_layout` for the next inventory. A plate whose keys have no link starts in the generic layout. `has_per_plate_key_layout(entry)` and `two_button_bus_addresses(physical, layout)` in `discovery.fileio` give a host the same answers, and `discovery.protocol.motion_detector_bus_addresses(physical)` the detector's four frames by role.
 
 While a run is going, `nikobus_connect.discovery.progress` turns its stage and counters into the one percentage every host shows, partial runs rescaled to span the bar. Once the stores are filled, `nikobus_connect.discovery.store` settles them after a scan (`reconcile_inventory`: evict what the residue probe found silent, file every button under its status) and reads them back for a host: the `controlled_by` index (which keys drive an output), a button's status after a scan (active, residue of a previous owner, or an input that never writes a link table), whether a central function is a shutter group or a light scene, and the full trigger-to-outputs routing graph. Pure functions, stores in and plain data out.
 
@@ -285,9 +317,13 @@ nikobus_connect/
     coordinator_protocol.py # Protocol a driving coordinator must satisfy
     exceptions.py           # Exception hierarchy
     listener.py             # Bus event listener, CRC validation, dispatch
+    press.py                # Press tracker: tap / hold / release from #N frames
     protocol.py             # CRCs, framing, command builders, reply decoding
+    rgb.py                  # RGB controller state decoding
+    travel.py               # Shutter position from travel time
     discovery/
         __init__.py         # Discovery public API
+        audio_decoder.py    # Audio Distribution module link records
         base.py             # Data classes and enums
         chunk_decoder.py    # Base chunked-response decoder
         dimmer_decoder.py
@@ -297,8 +333,10 @@ nikobus_connect/
         pc_link_decoder.py  # PC-Link registry records
         pc_logic_decoder.py # PC-Logic registry records
         pc_record_parser.py # Registry record parsing
+        progress.py         # One progress percentage from a run's counters
         protocol.py         # Discovery-specific protocol helpers
         shutter_decoder.py
+        store.py            # Reading the stores back: routing, statuses
         switch_decoder.py
     nkb/
         __init__.py         # .nkb public API
