@@ -124,7 +124,7 @@ async def test_a_deduplicated_get_is_answered_by_the_first_exchange(handler) -> 
     assert results == ["00" * 6, "00" * 6]
     assert len([f for f in handler._test_connection.sent if f[3:5] == "12"]) == 1
     assert handler._pending_get_futures == {}
-    assert handler._queued_get_keys == set()
+    assert handler._queued_get_keys == {}
 
 
 @pytest.mark.asyncio

@@ -63,7 +63,7 @@ async def test_get_output_state_clears_dedup_on_cancellation():
 
     cmd = NikobusCommandHandler.__new__(NikobusCommandHandler)
     cmd._command_queue = asyncio.Queue()
-    cmd._queued_get_keys = set()
+    cmd._queued_get_keys = {}
     cmd._pending_get_futures = {}
     cmd._connection = _StubConnection()
     cmd._listener = _StubListener()
@@ -102,7 +102,6 @@ async def test_process_commands_skips_cancelled_future():
 
     cmd = NikobusCommandHandler.__new__(NikobusCommandHandler)
     cmd._command_queue = asyncio.Queue()
-    cmd._queued_get_keys = {"8110_1"}
     cmd._pending_get_futures = {}
     cmd._connection = _StubConnection()
     cmd._listener = _StubListener()
@@ -113,14 +112,14 @@ async def test_process_commands_skips_cancelled_future():
     cancelled_future = loop.create_future()
     cancelled_future.cancel()
 
-    await cmd._command_queue.put(
-        {
-            "command": "$1012108100AABB",
-            "address": "8110",
-            "future": cancelled_future,
-            "completion_handler": None,
-        }
-    )
+    item = {
+        "command": "$1012108100AABB",
+        "address": "8110",
+        "future": cancelled_future,
+        "completion_handler": None,
+    }
+    cmd._queued_get_keys = {"8110_1": item}
+    await cmd._command_queue.put(item)
 
     processor = asyncio.create_task(cmd._process_commands())
     await cmd._command_queue.join()

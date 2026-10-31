@@ -57,6 +57,12 @@ class NikobusEventListener:
         self.on_connection_lost: Callable[[], Any] | None = None
         self._frame_buffer = ""
         self._last_query_group: dict[str, int] = {}
+        #: The state query the command layer is waiting on, as
+        #: ``(address, group)``, and whether its ack has been seen. A
+        #: ``$1C`` answer that follows the ack is that query's answer
+        #: whatever the Feedback Module asked the module in between.
+        self._awaited_query: tuple[str, int] | None = None
+        self._awaited_ack_seen = False
         # Traffic of a Feedback Module as seen through the gateway: state
         # queries it sends (``$1012`` / ``$1017`` echoes, relayed by a
         # PC-Link, never by the Feedback Module's own port) and pushed
@@ -99,6 +105,8 @@ class NikobusEventListener:
         correct group.
         """
         self._last_query_group[addr] = group
+        self._awaited_query = (addr, group)
+        self._awaited_ack_seen = False
 
     def _enqueue_response(self, message: str) -> None:
         """Add a message to the response queue, dropping the oldest if full."""
@@ -203,6 +211,7 @@ class NikobusEventListener:
         # real polling responses via the "queue was full" path.
         if any(message.startswith(cmd) for cmd in COMMAND_PROCESSED):
             if self._awaiting_response:
+                self._awaited_ack_seen = True
                 self._enqueue_response(message)
             await self._invoke(self._event_callback, message)
             return
@@ -229,7 +238,7 @@ class NikobusEventListener:
                 if self._has_feedback_module and self._feedback_callback:
                     if len(message) >= 7:
                         addr = (message[5:7] + message[3:5]).upper()
-                        group = self._last_query_group.get(addr, 1)
+                        group = self._attribute_state_answer(addr, message)
                         await self._invoke(self._feedback_callback, group, message)
                 if self._awaiting_response:
                     self._enqueue_response(message)
@@ -238,6 +247,9 @@ class NikobusEventListener:
         # Manual refresh commands ($0512/$0517)
         if any(message.startswith(r) for r in MANUAL_REFRESH_COMMAND):
             if self.validate_crc(message):
+                if self._awaiting_response:
+                    # The ack of a state query: what follows is its answer.
+                    self._awaited_ack_seen = True
                 self._enqueue_response(message)
             return
 
@@ -269,6 +281,8 @@ class NikobusEventListener:
             if self._awaiting_response and (
                 message.startswith("$05") or self.validate_crc(message)
             ):
+                if message.startswith("$05"):
+                    self._awaited_ack_seen = True
                 self._enqueue_response(message)
             return
 
@@ -282,6 +296,29 @@ class NikobusEventListener:
         if message.startswith("$05"):
             return len(message) >= 5
         return message.startswith("$") and self.validate_crc(message)
+
+    def _attribute_state_answer(self, addr: str, message: str) -> int:
+        """Output group a ``$1C`` state answer for ``addr`` belongs to.
+
+        Normally the group of the last state query seen for the module,
+        the Feedback Module's own included. Once our own query has been
+        acknowledged, the answer that matches it is ours: a Feedback
+        Module query for the other group that slipped in between must
+        not file it under that group.
+        """
+        awaited = self._awaited_query
+        answer = self._awaited_answer
+        if (
+            self._awaiting_response
+            and self._awaited_ack_seen
+            and awaited is not None
+            and awaited[0] == addr
+            and answer
+            and message.startswith(answer)
+        ):
+            self._last_query_group[addr] = awaited[1]
+            return awaited[1]
+        return self._last_query_group.get(addr, 1)
 
     def _is_awaited_query_reply(self, message: str) -> bool:
         """Whether ``message`` is the ``FF``-prefixed reply a query waits for."""

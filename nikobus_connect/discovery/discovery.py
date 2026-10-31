@@ -1073,11 +1073,13 @@ class NikobusDiscovery:
         if self._inventory_timeout_task:
             self._inventory_timeout_task.cancel()
             self._inventory_timeout_task = None
-        self._payload_buffer: str = ""
-        self._module_address: str | None = None
-        self._module_type: str | None = None
-        self._module_channels: int | None = None
-        self._scan_response_index = 0
+        # The per-module context and every decoder's stream buffers:
+        # a run aborted mid-module (host cancel, exception) must not
+        # leave a decoder misaligned for the next run's first module.
+        self._reset_module_context()
+        self._scan_expected_records = None
+        self._scan_decoded_records = 0
+        self._scan_missed_acks = 0
         self._register_scan_queue = []
         self._inventory_addresses = set()
         self._inventory_identity_queued: set[str] = set()
@@ -1089,8 +1091,6 @@ class NikobusDiscovery:
         #: Restore the full inactivity window — an early-stop on a
         #: previous scan shortened it (``_early_stop_registry_sweep``).
         self._inventory_timeout_seconds = _INVENTORY_TIMEOUT_SECONDS
-        self._module_found_data = False
-        self._module_consecutive_empties = 0
         self.discovery_stage = None
         self._decoded_buffer: dict[str, Any] | None = None
         self._accumulated_unmatched = set()
@@ -1706,12 +1706,12 @@ class NikobusDiscovery:
 
     def _reset_module_context(self) -> None:
         self._payload_buffer = ""
-        self._module_address = None
-        self._module_type = None
-        self._module_channels = None
+        self._module_address: str | None = None
+        self._module_type: str | None = None
+        self._module_channels: int | None = None
         self._module_found_data = False
         self._module_consecutive_empties = 0
-        self._scan_response_index = 0
+        self._scan_response_index: int = 0
         # Re-arm the alt-alignment skip-pending counter on every
         # decoder so the next per-module scan that picks one up
         # starts from a clean slate (no carry from a prior module).
@@ -2431,14 +2431,30 @@ class NikobusDiscovery:
         self._cancel_inventory_timeout()
         _LOGGER.debug("Entering inventory-phase finalize — stage %s", self.discovery_stage)
 
+        # The silence that fired the timer may be the command queue
+        # busy with a user's command to an absent module (15 s), not
+        # the end of the identity reads: while reads are still queued
+        # the phase is not over. Re-arm and come back.
+        if self.discovery_stage == "inventory_identity":
+            queued = self._queued_identity_reads()
+            if queued:
+                _LOGGER.debug(
+                    "Inventory window elapsed with %d identity read(s) still queued — waiting",
+                    queued,
+                )
+                self._schedule_inventory_timeout()
+                return
+
         # Stage 1: we have inventory addresses but haven't queued identity/register queries yet
         if self.discovery_stage == "inventory_addresses" and self._inventory_addresses:
             pending_addresses = self._inventory_addresses - self._inventory_identity_queued
             if pending_addresses:
                 _LOGGER.debug("Found pending inventory addresses — queuing identity queries")
-                await self._run_inventory_identity_queries(pending_addresses)
+                # Marked before the queueing awaits: a timer firing while
+                # the queue is full must not re-queue the same reads.
                 self._inventory_identity_queued.update(pending_addresses)
                 self.discovery_stage = "inventory_identity"
+                await self._run_inventory_identity_queries(pending_addresses)
                 self._schedule_inventory_timeout()
                 return
             else:
@@ -2569,7 +2585,9 @@ class NikobusDiscovery:
                         "PC-Link inventory requires the coordinator's command "
                         "pipeline (nikobus_command is None — not connected?)"
                     )
-                await nikobus_command.queue_command(pc_link_command)
+                await nikobus_command.queue_command(
+                    pc_link_command, completion_handler=self._identity_read_sent
+                )
                 self._progress_module_registers_sent += 1
                 await self._emit_progress(
                     PHASE_IDENTITY,
@@ -2590,6 +2608,16 @@ class NikobusDiscovery:
         self._progress_module_register_total = 0
         self._progress_register_total = 0
         self._progress_module_registers_sent = 0
+
+    async def _identity_read_sent(self) -> None:
+        """Re-arm the inventory window each time an identity read goes out.
+
+        The window measures silence after the *last read sent*, not
+        wall-clock time since the last answer: reads queued behind a
+        slow user command still count as the phase being busy.
+        """
+        if self.discovery_stage in ("inventory_addresses", "inventory_identity"):
+            self._schedule_inventory_timeout()
 
     async def _start_next_register_scan(self) -> None:
         if not self._register_scan_queue:
@@ -3104,8 +3132,23 @@ class NikobusDiscovery:
     async def _queue_inventory_identity_queries_for_address(self, address: str) -> None:
         if address in self._inventory_identity_queued:
             return
-        await self._run_inventory_identity_queries({address})
+        # Marked before the awaits: the inactivity timer can fire while
+        # this task is still blocked on a full queue, and must not queue
+        # the same 96 reads a second time.
         self._inventory_identity_queued.add(address)
+        await self._run_inventory_identity_queries({address})
+
+    def _queued_identity_reads(self) -> int:
+        """Identity reads (``$1410…``) still waiting in the command queue."""
+        nikobus_command = self._coordinator.nikobus_command
+        counter = getattr(nikobus_command, "pending_count", None)
+        if counter is None:
+            return 0
+        try:
+            queued = counter("$1410")
+        except Exception:  # noqa: BLE001 - a host stub without a queue
+            return 0
+        return queued if isinstance(queued, int) else 0
 
     def _ensure_pc_link_address(self, address: str, *, source: str) -> None:
         if not address:
@@ -3900,8 +3943,9 @@ class NikobusDiscovery:
                 )
             return result
         except Exception:
+            # One bad frame is dropped; the run goes on (a reset here
+            # left the scan loop running against a cleared state).
             _LOGGER.exception("Failed to parse Nikobus payload")
-            self.reset_state()
             return None
 
     async def parse_module_inventory_response(self, message: str) -> None:
@@ -4079,8 +4123,8 @@ class NikobusDiscovery:
                 self._schedule_timeout()
 
         except Exception:
+            # One bad frame is dropped; the scan loop owns the run.
             _LOGGER.exception("Failed to parse module inventory response")
-            self.reset_state()
 
     async def _handle_decoded_commands(
         self, module_address: str | None, decoded_commands: list[DecodedCommand]
@@ -4092,7 +4136,8 @@ class NikobusDiscovery:
         if isinstance(decoded_commands, list):
             decoded_now = sum(1 for c in decoded_commands if isinstance(c, DecodedCommand))
             self._progress_decoded_records += decoded_now
-            if module_address and module_address.upper() == (self._module_address or "").upper():
+            scanned = self._coordinator.discovery_module_address or self._module_address or ""
+            if module_address and module_address.upper() == scanned.upper():
                 self._scan_decoded_records += decoded_now
         # Build IR receiver lookup from the current in-memory button store
         # so that split_ir_button_address and decode_ir_channel work for

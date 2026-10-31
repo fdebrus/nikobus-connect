@@ -219,7 +219,7 @@ async def test_inventory_loop_queues_full_register_range(tmp_path):
 
     queued_regs: list[int] = []
 
-    async def fake_queue_command(cmd):
+    async def fake_queue_command(cmd, **_kwargs):
         try:
             reg = int(cmd[9:11], 16)
         except ValueError:

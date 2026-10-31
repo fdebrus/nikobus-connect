@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.56.3
+
+Fixes from a second audit of 0.56.2; most were reproduced with probes first.
+
+- **A cancelled scan no longer poisons the next one.** `reset_state()` cleared the run's flags but not the decoders: after a host cancel or an aborted run, a decoder that had flagged a module misaligned, or a PC-Logic / audio stream half read, carried into the next run's first module. That module then decoded nothing and was reported as a corrupt link table, so the host told the user to reprogram the wrong module. `reset_state()` now resets the module context, every decoder's stream buffers and the per-module record counters.
+- **The inventory does not finish while identity reads are still queued.** The 10 s inactivity window counted from the last answer. A user command to an absent module during the inventory holds the queue for 15–20 s, so the window elapsed, the inventory reported finished, and the remaining `$1410` reads still went out afterwards. The window is now re-armed each time an identity read is sent, and when it elapses with reads still queued the phase waits instead of closing.
+- **Identity reads are not queued twice.** An address was marked as queued only after its 96 reads had all been queued; the window firing while the queue was full queued the same reads again. It is now marked first.
+- **Our own state answer keeps its group.** With a Feedback Module, the answer to our acknowledged query was handed to the feedback callback under whatever group the Feedback Module had asked the same module for in between, so the host applied group 1's state to group 2. Once our query's ack has been seen, the matching answer is filed under our group. The group is also re-announced before every retry, so a Feedback Module query seen between two attempts no longer makes the next attempt discard its own answer.
+- **`stop()` during the coalesce window or the read before a write releases the caller.** Both waits sat outside the exchange's cancellation handling; a set-output future then never resolved. They now run inside it.
+- **One unparseable frame no longer resets the scan.** A parse error called `reset_state()` mid-run: the running flag dropped with no finished callback while the scan loop carried on against a cleared state. The frame is now logged and dropped.
+- **GET deduplication is owned by the queued request.** A stale, cancelled read popped by the worker freed the key a newer read held, letting a third caller queue a duplicate exchange. Only the owning request releases its key now, a drained read releases it too, and a read already answered by the feedback fast path is not sent again when nobody else waits on it.
+- **The read before a write accepts an answer that came before its ack**, like every other read: on a gateway that orders them that way it is the only answer there is.
+- Decoded records are counted against the module being scanned, not whichever module a late frame named.
+- New `pending_count(prefix)` on the command handler.
+
 ## 0.56.2
 
 Fixes from an audit of 0.56.1; two of them were reproduced with probes.
