@@ -2435,7 +2435,9 @@ class NikobusDiscovery:
         # busy with a user's command to an absent module (15 s), not
         # the end of the identity reads: while reads are still queued
         # the phase is not over. Re-arm and come back.
-        if self.discovery_stage == "inventory_identity":
+        if self.discovery_stage in ("inventory_addresses", "inventory_identity"):
+            # Both stages: the reads are queued per address as the
+            # inventory frames arrive, before the stage ever advances.
             queued = self._queued_identity_reads()
             if queued:
                 _LOGGER.debug(

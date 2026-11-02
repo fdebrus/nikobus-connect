@@ -269,16 +269,17 @@ class NikobusAPI:
     ) -> bool:
         """Bring a switch channel to ``want_on`` by pressing its feedback key.
 
-        A feedback key keeps the plate's LED in step, which a set-output
-        does not; but it is usually a toggle, so pressing it blindly can
-        switch the wrong way and a lost press goes unnoticed. The channel
-        is read first (unless ``current`` is given) and the key is left
-        alone when the output is already where it should be; after the
-        press the channel is read again, and an output that did not move
-        is set directly — the output is then right, the LED may lag until
-        the next real press. When the channel cannot be read, the output
-        is set directly. Returns ``True`` once the module has been read,
-        so the host can show the state from the buffer.
+        The Feedback Module toggles a key's LED on every key telegram it
+        sees and keeps that state itself; a set-output never reaches it.
+        A press that was not needed therefore inverts the LED, so the
+        channel is read first (unless ``current`` is given) and the key
+        is left alone when the output is already where it should be.
+        After the press the channel is read again; an output that did
+        not move is set directly, which rights the output but may leave
+        the LED inverted (whether the Feedback Module saw the press
+        cannot be known). When the channel cannot be read, the output is
+        set directly. Returns ``True`` once the module has been read, so
+        the host can show the state from the buffer.
         """
         target = STATE_ON if want_on else STATE_OFF
         if current is None:
@@ -327,8 +328,10 @@ class NikobusAPI:
                 await completion_handler()
             return True
         _LOGGER.warning(
-            "Feedback key %s did not switch %s channel %d %s — setting it directly; "
-            "the key's LED may lag until the next press",
+            "Feedback key %s did not switch %s channel %d %s — setting it directly. "
+            "If the Feedback Module saw the press, the key's LED is now inverted and "
+            "stays so through presses: set the output to what the LED shows, then "
+            "press the key once",
             key, address, channel, "on" if want_on else "off",
         )
         await self._command_handler.set_output_state(
@@ -431,8 +434,15 @@ class NikobusAPI:
         chan_info = self._get_channel_info("dimmer_module", address, channel)
 
         try:
-            if current_brightness == 0 and (led_on := chan_info.get("led_on")):
-                await self._send_bus_command(led_on)
+            if led_on := chan_info.get("led_on"):
+                # The module's own state decides, as for a switch: the
+                # host's last brightness may be stale, and a press that
+                # was not needed inverts the key's LED. The host's value
+                # is the fallback when the module does not answer.
+                current = await self._read_channel(address, channel)
+                is_on = current if current is not None else current_brightness > 0
+                if not is_on:
+                    await self._send_bus_command(led_on)
 
             await self._command_handler.set_output_state(
                 address, channel, brightness,
@@ -463,8 +473,11 @@ class NikobusAPI:
         chan_info = self._get_channel_info("dimmer_module", address, channel)
 
         try:
-            if current_brightness > 0 and (led_off := chan_info.get("led_off")):
-                await self._send_bus_command(led_off)
+            if led_off := chan_info.get("led_off"):
+                current = await self._read_channel(address, channel)
+                is_on = current if current is not None else current_brightness > 0
+                if is_on:
+                    await self._send_bus_command(led_off)
 
             await self._command_handler.set_output_state(
                 address, channel, STATE_OFF,

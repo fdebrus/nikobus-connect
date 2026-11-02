@@ -316,6 +316,9 @@ class NikobusEventListener:
             and answer
             and message.startswith(answer)
         ):
+            # One answer per query: a later $1C in the same burst is the
+            # Feedback Module's, for whatever group it asked.
+            self._awaited_query = None
             self._last_query_group[addr] = awaited[1]
             return awaited[1]
         return self._last_query_group.get(addr, 1)

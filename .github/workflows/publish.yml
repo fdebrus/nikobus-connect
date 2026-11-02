@@ -5,7 +5,25 @@ on:
     types: [published]
 
 jobs:
+  test:
+    # Nothing is published that does not pass the tests and mypy.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -e ".[test]" mypy
+      - run: python -m pytest -q
+      - run: mypy
+      - name: Tag matches the package version
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          version="$(python -c 'import tomllib;print(tomllib.load(open("pyproject.toml","rb"))["project"]["version"])')"
+          test "$tag" = "$version" || { echo "tag $GITHUB_REF_NAME is not pyproject version $version"; exit 1; }
+
   build:
+    needs: test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

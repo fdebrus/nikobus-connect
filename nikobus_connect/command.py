@@ -137,16 +137,15 @@ class NikobusCommandHandler:
                     if gid_skip in ("12", "17") and address
                     else None
                 )
+                # Cancelled or answered already (feedback fast path, a read
+                # before a write): skipped unless another caller joined
+                # this read and still waits on it — the exchange is then
+                # made for them (their futures are answered from it).
                 if future is not None and future.done() and (
-                    future.cancelled()
-                    or (
-                        # Answered already (feedback fast path, a read
-                        # before a write) and nobody else waits on it.
-                        get_key_skip is not None
-                        and all(
-                            waiter.done()
-                            for waiter in self._pending_get_futures.get(get_key_skip, [])
-                        )
+                    get_key_skip is None
+                    or all(
+                        waiter.done()
+                        for waiter in self._pending_get_futures.get(get_key_skip, [])
                     )
                 ):
                     if get_key_skip is not None:

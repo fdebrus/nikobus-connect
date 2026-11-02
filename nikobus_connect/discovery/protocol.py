@@ -276,7 +276,10 @@ def motion_detector_bus_addresses(physical: str) -> dict[str, str]:
     pair was known still yields all four.
     """
     converted = convert_nikobus_address(physical)
-    nibble = int(converted[0], 16)
+    try:
+        nibble = int(converted[0], 16)
+    except (TypeError, ValueError, IndexError):
+        return {}  # not a 6-hex-digit address: nothing a host can listen for
     layout = DEVICE_TYPE_KEY_MAPPING[MOTION_DETECTOR_DEVICE_TYPE]
     return {
         role: f"{(nibble + int(layout[key], 16)) & 0xF:X}{converted[1:]}"
@@ -690,6 +693,8 @@ __all__ = [
     "virtual_plate_address",
     "record_bus_address",
     "virtual_record_bus_address",
+    "motion_detector_bus_addresses",
+    "is_motion_detector",
     "VIRTUAL_CLASS_PC_LOGIC",
     "VIRTUAL_CLASS_BANK",
     "pc_logic_address_for_input",

@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.57.3
+
+Fixes from a third audit, reproduced with probes before and after; and what a Feedback Module's LEDs taught us.
+
+- **Two-button plates: the layout detection now runs on a real install.** 0.57.2 looked each link record's plate up under the record's mapping key, which on a real install is the key's *bus frame* once the host knows the plate, not the plate's address — so no plate was ever moved and #184's install stayed broken. The plate is now taken from the record's own `button_address`. Only records read from an output module decide; a controller's copy of a record does not.
+- **No layout inferred from carried-over links.** 0.57.2 took links sitting on keys at 0 / 4 as proof of the right pair, but 0.57.1 had moved every such plate there with its links, so generic plates were stamped `key_layout: "0_4"` and could not be repaired. Only a stored `key_layout` or the link scan decides now; a wrongly stamped store goes back to 8 / C at the next scan, with its links.
+- **The inventory window guard runs in both inventory stages.** 0.56.3's check ran only in a stage the normal flow never reaches, so a user command to an absent module during the inventory still ended it with identity reads queued.
+- **A read whose first caller gave up is still made for a second caller** who had joined it: the queued item was skipped with the second caller left to time out.
+- **Only the first state answer after our ack is ours.** A Feedback Module answer for the other group arriving in the same burst was filed under our group.
+- **Dimmer LED keys are pressed from the module's state, not the host's.** The Feedback Module toggles a key's LED on every telegram it sees and keeps that state itself, so a press that was not needed inverts the LED. `turn_on_light` / `turn_off_light` now read the channel first, as the switch path does; the host's brightness is the fallback when the module does not answer.
+- **Honest warning when a feedback key press did not switch the output:** the LED may now be inverted and stays so through presses; the log says how to realign it (set the output to what the LED shows, press once). The docstring describes what the Feedback Module actually does.
+- `motion_detector_bus_addresses` returns `{}` for an address that is not one, instead of raising.
+- Everything a host uses is exported from `nikobus_connect.discovery` (`has_per_plate_key_layout`, `two_button_bus_addresses`, `motion_detector_bus_addresses`, `is_motion_detector`, the layout tables, `NON_OUTPUT_MODULE_TYPES`) and `nikobus_connect.nkb` (`key_layout_for_model`).
+- Tests for the two-button plates go through the real switch decoder and `add_to_command_mapping`. CI runs the tests on 3.11–3.13 and mypy on every push and pull request; a release is published only when they pass and the tag matches the version.
+
 ## 0.57.2
 
 **The 05-060 two-button plate is found in two key layouts; each plate now takes the one its links show.** Fixes a regression in 0.57.1.
