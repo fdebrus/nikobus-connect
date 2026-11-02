@@ -87,3 +87,10 @@ without hardware.
 - The library is released and published to PyPI first; Nikobus-HA then
   raises `nikobus-connect>=` in its `manifest.json`. HACS only upgrades the
   library when that pin requires it.
+
+## Code review
+
+Pull requests are reviewed by Claude (`.github/workflows/claude-review.yml`)
+against the rules above. Comment only on code the pull request adds or
+changes, not on style (ruff covers it), and start each comment with a
+one-sentence summary of the fix.
