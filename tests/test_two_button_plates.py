@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import pytest
 
+from nikobus_connect.discovery.discovery import add_to_command_mapping
 from nikobus_connect.discovery.fileio import (
     has_per_plate_key_layout,
     merge_discovered_buttons,
@@ -27,6 +28,7 @@ from nikobus_connect.discovery.fileio import (
 from nikobus_connect.discovery.mapping import DEVICE_TYPES, KEY_MAPPING
 from nikobus_connect.discovery.protocol import (
     convert_nikobus_address,
+    decode_command_payload,
     get_button_address,
 )
 from nikobus_connect.nkb.config_builder import build_config
@@ -48,12 +50,50 @@ def _inventory(physical: str, device_type: str = "04", button_data: dict | None 
     return button_data
 
 
-def _records(*records: tuple[str, int, str, int]) -> dict:
-    return {
-        (plate, key, None): [{"module_address": module, "channel": channel, "mode": "M01 (On / off)",
-                              "button_address": plate, "record_source": "output_module_table"}]
-        for plate, key, module, channel in records
-    }
+class _Coord:
+    """What the decoders ask a host: a plate's channel count, a module's."""
+
+    def __init__(self, data: dict) -> None:
+        self._data = data
+
+    def get_button_channels(self, address: str) -> int | None:
+        entry = self._data["nikobus_button"].get(address.upper())
+        return entry.get("channels") if entry else None
+
+    def get_module_channel_count(self, _address: str) -> int:
+        return 12
+
+
+def _stored_plate_address(physical: str) -> str:
+    """The three bytes a switch record holds for a plate (inverse of
+    ``get_button_address``, as the simulator's ``encode_button_address``)."""
+    bits = format(int(physical, 16), "024b")
+    return format(int(bits[18:24] + "00" + bits[10:18] + bits[2:10], 2), "06X")
+
+
+def _switch_record(plate: str, key: int, channel: int, mode: int = 4) -> str:
+    """A switch module link record in read order: ``FF`` chain, key index
+    and channel nibble, T1 and mode nibble, the stored plate bytes.
+    #184's ``FF06F0E0CA5D`` is key 0, channel 7, mode 0, plate 1772B8."""
+    return f"FF{key:X}{channel - 1:X}F{mode:X}{_stored_plate_address(plate)}"
+
+
+def _records(data: dict, *records: tuple[str, int, str, int], source: str | None = None) -> dict:
+    """Decode records with the real switch decoder (the host knowing the
+    plates in ``data``) and file them as the scan does; the mapping keys
+    then carry the keys' bus frames, as on a real install."""
+    mapping: dict = {}
+    coord = _Coord(data)
+    for plate, key, module, channel in records:
+        decoded = decode_command_payload(
+            _switch_record(plate, key, channel), "switch_module", coord,
+            module_address=module, module_channel_count=12,
+        )
+        assert decoded is not None, (plate, key, channel)
+        if source is not None:
+            decoded["record_source"] = source
+        add_to_command_mapping(mapping, decoded, module, None)
+    return mapping
 
 
 def _keys(button_data: dict, physical: str) -> tuple[str, str]:
@@ -69,6 +109,17 @@ def _links(button_data: dict, physical: str, label: str) -> set[tuple[str, int]]
 def test_both_reporters_records_decode_to_their_plates() -> None:
     assert (get_button_address("E0CA5D"), int("FF06F0E0CA5D"[2], 16)) == (REPORTER, 0)
     assert (get_button_address("583160"), int("FF16F0583160"[2], 16)) == (FDEBRUS, 1)
+    assert _switch_record(REPORTER, 0, 7, mode=0) == "FF06F0E0CA5D"
+    assert _switch_record(FDEBRUS, 1, 7, mode=0) == "FF16F0583160"
+
+
+def test_the_mapping_keys_carry_the_keys_bus_frames_not_the_plate() -> None:
+    """What the real decoder produces once the host knows the plate: the
+    0.57.2 settle looked the plate up under this key and never found it."""
+    data = _inventory(REPORTER)
+    mapping = _records(data, (REPORTER, 0, "7D5F", 7))
+    assert list(mapping) == [("0753BA", 0, None)]
+    assert mapping[("0753BA", 0, None)][0]["button_address"] == REPORTER
 
 
 @pytest.mark.parametrize("device_type", ["04", "05", "3F"])
@@ -81,7 +132,7 @@ def test_an_inventory_starts_a_plate_in_the_generic_layout(device_type: str) -> 
 
 def test_records_at_key_indices_1_and_3_keep_the_generic_layout() -> None:
     data = _inventory(FDEBRUS)
-    merge_linked_modules(data, _records((FDEBRUS, 1, "C9A5", 7), (FDEBRUS, 3, "C9A5", 8)))
+    merge_linked_modules(data, _records(data, (FDEBRUS, 1, "C9A5", 7), (FDEBRUS, 3, "C9A5", 8)))
     assert _keys(data, FDEBRUS) == ("9A8C06", "DA8C06")
     assert ("C9A5", 7) in _links(data, FDEBRUS, "1A")
     assert ("C9A5", 8) in _links(data, FDEBRUS, "1B")
@@ -90,7 +141,7 @@ def test_records_at_key_indices_1_and_3_keep_the_generic_layout() -> None:
 def test_records_at_key_indices_0_and_2_move_the_plate_to_the_right_pair() -> None:
     data = _inventory(REPORTER)
     assert _keys(data, REPORTER) == ("8753BA", "C753BA")
-    merge_linked_modules(data, _records((REPORTER, 0, "7D5F", 7), (REPORTER, 2, "7D5F", 8)))
+    merge_linked_modules(data, _records(data, (REPORTER, 0, "7D5F", 7), (REPORTER, 2, "7D5F", 8)))
     entry = data["nikobus_button"][REPORTER]
     assert _keys(data, REPORTER) == ("0753BA", "4753BA")
     assert entry["key_layout"] == "0_4"
@@ -101,13 +152,13 @@ def test_records_at_key_indices_0_and_2_move_the_plate_to_the_right_pair() -> No
 
 def test_one_record_is_enough() -> None:
     data = _inventory(REPORTER)
-    merge_linked_modules(data, _records((REPORTER, 0, "7D5F", 7)))
+    merge_linked_modules(data, _records(data, (REPORTER, 0, "7D5F", 7)))
     assert _keys(data, REPORTER) == ("0753BA", "4753BA")
 
 
 def test_the_next_inventory_keeps_a_detected_layout() -> None:
     data = _inventory(REPORTER)
-    merge_linked_modules(data, _records((REPORTER, 0, "7D5F", 7)))
+    merge_linked_modules(data, _records(data, (REPORTER, 0, "7D5F", 7)))
     _inventory(REPORTER, button_data=data)
     assert _keys(data, REPORTER) == ("0753BA", "4753BA")
     assert data["nikobus_button"][REPORTER]["key_layout"] == "0_4"
@@ -115,14 +166,14 @@ def test_the_next_inventory_keeps_a_detected_layout() -> None:
 
 def test_records_of_both_families_leave_the_plate_alone() -> None:
     data = _inventory(REPORTER)
-    merge_linked_modules(data, _records((REPORTER, 0, "7D5F", 7), (REPORTER, 1, "7D5F", 8)))
+    merge_linked_modules(data, _records(data, (REPORTER, 0, "7D5F", 7), (REPORTER, 1, "7D5F", 8)))
     assert _keys(data, REPORTER) == ("8753BA", "C753BA")
 
 
 def test_a_user_named_key_keeps_its_name_when_it_moves() -> None:
     data = _inventory(REPORTER)
     data["nikobus_button"][REPORTER]["operation_points"]["1B"]["description"] = "Hall lights"
-    merge_linked_modules(data, _records((REPORTER, 2, "7D5F", 8)))
+    merge_linked_modules(data, _records(data, (REPORTER, 2, "7D5F", 8)))
     assert data["nikobus_button"][REPORTER]["operation_points"]["1B"]["description"] == "Hall lights"
 
 
@@ -135,10 +186,38 @@ def _store_written_by_0571(physical: str, with_links: bool) -> dict:
                                           "device_type": "04", "channels": 2, "operation_points": ops}}}
 
 
-def test_a_0571_store_whose_right_pair_keys_have_links_stays_there() -> None:
-    data = _inventory(REPORTER, button_data=_store_written_by_0571(REPORTER, with_links=True))
+def test_links_on_0_4_keys_are_no_evidence_for_the_right_pair() -> None:
+    """0.57.1 carried a generic plate's links to 0 / 4 and 0.57.2 took them
+    as proof of the right pair (fdebrus install): only ``key_layout`` or
+    the link scan decides now, so such a store goes back to 8 / C."""
+    data = _inventory(FDEBRUS, button_data=_store_written_by_0571(FDEBRUS, with_links=True))
+    assert _keys(data, FDEBRUS) == ("9A8C06", "DA8C06")
+    assert "key_layout" not in data["nikobus_button"][FDEBRUS]
+
+
+def test_a_stored_key_layout_survives_the_inventory() -> None:
+    store = _store_written_by_0571(REPORTER, with_links=True)
+    store["nikobus_button"][REPORTER]["key_layout"] = "0_4"
+    data = _inventory(REPORTER, button_data=store)
     assert _keys(data, REPORTER) == ("0753BA", "4753BA")
-    assert data["nikobus_button"][REPORTER]["key_layout"] == "0_4"
+
+
+def test_a_wrongly_stamped_0572_store_is_repaired_by_the_scan() -> None:
+    """The fdebrus plate after 0.57.2's inventory: keys at 0 / 4 with
+    ``key_layout`` 0_4, records at key indices 1 / 3."""
+    store = _store_written_by_0571(FDEBRUS, with_links=True)
+    store["nikobus_button"][FDEBRUS]["key_layout"] = "0_4"
+    merge_linked_modules(store, _records(store, (FDEBRUS, 1, "C9A5", 7), (FDEBRUS, 3, "C9A5", 8)))
+    assert _keys(store, FDEBRUS) == ("9A8C06", "DA8C06")
+    assert "key_layout" not in store["nikobus_button"][FDEBRUS]
+    assert ("C9A5", 7) in _links(store, FDEBRUS, "1A")
+
+
+def test_a_controllers_copy_of_a_record_does_not_decide_the_layout() -> None:
+    data = _inventory(REPORTER)
+    merge_linked_modules(data, _records(data, (REPORTER, 0, "7D5F", 7), source="pc_link_registry"))
+    assert _keys(data, REPORTER) == ("8753BA", "C753BA")
+    assert "key_layout" not in data["nikobus_button"][REPORTER]
 
 
 def test_a_0571_store_without_links_goes_back_to_the_generic_layout() -> None:
@@ -149,7 +228,7 @@ def test_a_0571_store_without_links_goes_back_to_the_generic_layout() -> None:
 
 def test_the_link_scan_alone_repairs_a_0571_store() -> None:
     data = _store_written_by_0571(FDEBRUS, with_links=False)
-    merge_linked_modules(data, _records((FDEBRUS, 1, "C9A5", 7)))
+    merge_linked_modules(data, _records(data, (FDEBRUS, 1, "C9A5", 7)))
     assert _keys(data, FDEBRUS) == ("9A8C06", "DA8C06")
     assert ("C9A5", 7) in _links(data, FDEBRUS, "1A")
 
@@ -157,7 +236,7 @@ def test_the_link_scan_alone_repairs_a_0571_store() -> None:
 def test_the_4x082_is_always_the_right_pair() -> None:
     data = _inventory("130078", "10")
     assert _keys(data, "130078") == ("078032", "478032")
-    merge_linked_modules(data, _records(("130078", 1, "C9A5", 1)))  # never moved by records
+    merge_linked_modules(data, _records(data, ("130078", 1, "C9A5", 1)))  # never moved by records
     assert _keys(data, "130078") == ("078032", "478032")
 
 
@@ -165,7 +244,7 @@ def test_the_4x082_is_always_the_right_pair() -> None:
 def test_interfaces_and_the_rf_push_button_are_not_per_plate(device_type: str, model: str) -> None:
     data = _inventory(REPORTER, device_type)
     assert not has_per_plate_key_layout(data["nikobus_button"][REPORTER])
-    merge_linked_modules(data, _records((REPORTER, 0, "7D5F", 7)))
+    merge_linked_modules(data, _records(data, (REPORTER, 0, "7D5F", 7)))
     assert _keys(data, REPORTER) == ("8753BA", "C753BA")
 
 

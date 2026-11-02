@@ -1604,31 +1604,16 @@ def two_button_bus_addresses(physical: str, layout: str) -> dict[str, str]:
 def _known_two_button_layout(physical: str, entry: Any) -> str | None:
     """The layout a stored two-button plate is known to be in, or ``None``.
 
-    Its ``key_layout`` when set. Else, for an entry written by 0.57.1
-    (which put every such plate at 0 / 4), the right pair only when its
-    keys there carry links — the evidence the plate is one; without
-    links nothing is known.
+    Only its ``key_layout``, which the link scan sets. Links sitting on
+    keys at 0 / 4 are no evidence: 0.57.1 moved every such plate there
+    and carried the links along, so 0.57.2's inference from them kept
+    generic plates at the wrong addresses.
     """
     if not isinstance(entry, dict):
         return None
     stored = entry.get("key_layout")
     if stored in TWO_BUTTON_LAYOUTS:
         return str(stored)
-    try:
-        right_pair = two_button_bus_addresses(physical, TWO_BUTTON_LAYOUT_RIGHT_PAIR)
-    except (ValueError, IndexError):
-        return None
-    ops = entry.get("operation_points") or {}
-    at_right_pair = all(
-        isinstance(ops.get(label), dict)
-        and str(ops[label].get("bus_address") or "").upper() == bus
-        for label, bus in right_pair.items()
-    )
-    if at_right_pair and any(
-        isinstance(ops.get(label), dict) and ops[label].get("linked_modules")
-        for label in right_pair
-    ):
-        return TWO_BUTTON_LAYOUT_RIGHT_PAIR
     return None
 
 
@@ -1666,18 +1651,32 @@ def _settle_two_button_layouts(buttons: dict[str, Any], command_mapping: dict[An
     inventory); records of both families leave it as it is.
     """
     indices_by_plate: dict[str, set[int]] = {}
-    for mapping_key in command_mapping:
+    for mapping_key, outputs in command_mapping.items():
         if not isinstance(mapping_key, tuple) or len(mapping_key) < 2:
             continue
         if len(mapping_key) >= 3 and mapping_key[2] is not None:
             continue  # an IR code, not a wall key
-        plate = _normalize_address(mapping_key[0])
         try:
             key_raw = int(mapping_key[1])
         except (TypeError, ValueError):
             continue
-        if plate:
-            indices_by_plate.setdefault(plate, set()).add(key_raw)
+        if not isinstance(outputs, list):
+            continue
+        for output in outputs:
+            if not isinstance(output, dict):
+                continue
+            # A controller's copy of a record may carry stale indices:
+            # only what an output module holds says how the plate sends.
+            if output.get("record_source") in REGISTRY_RECORD_SOURCES:
+                continue
+            # The key's first element is the key's bus frame once the
+            # plate's channel count is known, not the plate; the plate is
+            # in the record's ``button_address``.
+            plate = _normalize_address(output.get("button_address")) or _normalize_address(
+                mapping_key[0]
+            )
+            if plate:
+                indices_by_plate.setdefault(plate, set()).add(key_raw)
     for plate, indices in indices_by_plate.items():
         entry = buttons.get(plate)
         if not isinstance(entry, dict) or not has_per_plate_key_layout(entry):

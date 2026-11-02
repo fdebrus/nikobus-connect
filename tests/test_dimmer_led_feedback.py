@@ -1,113 +1,102 @@
-"""Regression tests for dimmer LED-feedback trigger gating.
+"""A dimmer's LED key is pressed from the module's own state.
 
-Nikobus ``led_on`` / ``led_off`` are bus-address broadcasts that
-simulate a wall-button press. The receiving button toggles its LED on
-press, so firing the trigger when nothing transitioned (e.g. brightness
-change while already on) flips the LED into the wrong state.
-
-These tests pin the corrected logic: triggers fire only on real
-off ↔ on transitions, never on brightness-only changes.
+``led_on`` / ``led_off`` press a wall key, and the Feedback Module toggles
+that key's LED on every telegram it sees (it keeps the LED state itself;
+a set-output never reaches it). A press that was not needed therefore
+inverts the LED. Until 0.57.3 the press was gated on the brightness the
+host last knew, which may be stale; the channel is now read first, as
+for a switch, and the host's value is only the fallback when the module
+does not answer.
 """
 
 from __future__ import annotations
 
-import asyncio
 import unittest
 from unittest.mock import AsyncMock, MagicMock
 
 from nikobus_connect.api import NikobusAPI
+from nikobus_connect.exceptions import NikobusTimeoutError
+
+ON = "80" + "00" * 5  # channel 1 at level 0x80, the rest off
+OFF = "00" * 6
 
 
-def _make_api(led_on: str | None = "1A2B3C", led_off: str | None = "1A2B3D"):
-    """Build an API instance backed by mocks so we can assert which bus
-    commands were queued."""
+def _make_api(led_on: str | None = "1A2B3C", led_off: str | None = "1A2B3D", module_state: str | None = OFF):
+    """An API over mocks; ``module_state`` is what the module answers a
+    state read with (``None``: it does not answer)."""
     command_handler = MagicMock()
     command_handler.queue_command = AsyncMock()
     command_handler.set_output_state = AsyncMock()
-
+    command_handler.get_output_state = AsyncMock(
+        return_value=module_state,
+        side_effect=None if module_state is not None else NikobusTimeoutError("silent"),
+    )
     channel_meta: dict = {}
     if led_on is not None:
         channel_meta["led_on"] = led_on
     if led_off is not None:
         channel_meta["led_off"] = led_off
-
-    module_data = {
-        "dimmer_module": {
-            "ADDR1": {"channels": [channel_meta]}
-        }
-    }
+    module_data = {"dimmer_module": {"ADDR1": {"channels": [channel_meta]}}}
     return NikobusAPI(command_handler, module_data), command_handler
 
 
 def _led_commands(handler) -> list[str]:
-    """Return the LED-trigger broadcasts queued during the call.
-
-    Since 0.38.2 a trigger is one queued command carrying the ``#N``
-    frame ``press_repeat`` times (3), joined with CR; collapse it back to
-    the single frame the assertions name, checking the repeat on the way.
-    """
+    """The key presses queued: one command carrying the ``#N`` frame
+    ``press_repeat`` times (3), collapsed to the frame."""
     out = []
     for call in handler.queue_command.call_args_list:
         cmd = call.args[0]
         if isinstance(cmd, str) and cmd.startswith("#N"):
             frames = cmd.split("\r#N")
             assert len(frames) == 3, cmd
-            out.append("#N" + frames[-1] if not frames[0].startswith("#N") else frames[0])
+            out.append(frames[0])
     return out
 
 
 class TestDimmerLedFeedback(unittest.IsolatedAsyncioTestCase):
-    async def test_turn_on_from_off_fires_led_on(self):
-        api, handler = _make_api()
+    async def test_turn_on_presses_when_the_module_says_off(self):
+        api, handler = _make_api(module_state=OFF)
         await api.turn_on_light("ADDR1", 1, 80, current_brightness=0)
         self.assertEqual(_led_commands(handler), ["#N1A2B3C\r#E1"])
+        handler.get_output_state.assert_awaited_once_with("ADDR1", 1)
         handler.set_output_state.assert_awaited_once()
 
-    async def test_turn_on_brightness_change_does_NOT_fire_led_on(self):
-        """80 → 40 while already on must not toggle the LED."""
-        api, handler = _make_api()
+    async def test_turn_on_does_not_press_when_the_module_says_on(self):
+        """The host thinks the light is off (stale); the module knows better."""
+        api, handler = _make_api(module_state=ON)
+        await api.turn_on_light("ADDR1", 1, 80, current_brightness=0)
+        self.assertEqual(_led_commands(handler), [])
+        handler.set_output_state.assert_awaited_once()
+
+    async def test_brightness_change_while_on_does_not_press(self):
+        api, handler = _make_api(module_state=ON)
         await api.turn_on_light("ADDR1", 1, 40, current_brightness=80)
         self.assertEqual(_led_commands(handler), [])
+
+    async def test_turn_off_presses_when_the_module_says_on(self):
+        api, handler = _make_api(module_state=ON)
+        await api.turn_off_light("ADDR1", 1, current_brightness=0)  # host stale: it thinks off
+        self.assertEqual(_led_commands(handler), ["#N1A2B3D\r#E1"])
         handler.set_output_state.assert_awaited_once()
 
-    async def test_turn_on_brightness_increase_does_NOT_fire_led_on(self):
-        """40 → 80 while already on must not toggle the LED."""
-        api, handler = _make_api()
-        await api.turn_on_light("ADDR1", 1, 80, current_brightness=40)
-        self.assertEqual(_led_commands(handler), [])
-
-    async def test_turn_off_from_on_fires_led_off(self):
-        api, handler = _make_api()
+    async def test_turn_off_does_not_press_when_the_module_says_off(self):
+        api, handler = _make_api(module_state=OFF)
         await api.turn_off_light("ADDR1", 1, current_brightness=80)
-        self.assertEqual(_led_commands(handler), ["#N1A2B3D\r#E1"])
-        handler.set_output_state.assert_awaited_once()
-
-    async def test_turn_off_when_already_off_does_NOT_fire_led_off(self):
-        """Calling off on a light that's already off must not toggle the LED."""
-        api, handler = _make_api()
-        await api.turn_off_light("ADDR1", 1, current_brightness=0)
         self.assertEqual(_led_commands(handler), [])
         handler.set_output_state.assert_awaited_once()
 
-    async def test_turn_off_legacy_default_still_fires(self):
-        """Backward-compat: callers that don't pass current_brightness
-        get the legacy ``always fire`` behaviour (default kwarg = 1)."""
-        api, handler = _make_api()
-        await api.turn_off_light("ADDR1", 1)
-        self.assertEqual(_led_commands(handler), ["#N1A2B3D\r#E1"])
+    async def test_unanswered_module_falls_back_to_the_hosts_brightness(self):
+        api, handler = _make_api(module_state=None)
+        await api.turn_on_light("ADDR1", 1, 80, current_brightness=0)
+        await api.turn_off_light("ADDR1", 1, current_brightness=0)
+        self.assertEqual(_led_commands(handler), ["#N1A2B3C\r#E1"])  # on pressed, off not
 
-    async def test_turn_on_legacy_default_still_fires(self):
-        """Backward-compat: legacy callers (no current_brightness)
-        keep the existing "fire-on-every-call" behaviour."""
-        api, handler = _make_api()
-        await api.turn_on_light("ADDR1", 1, 80)
-        self.assertEqual(_led_commands(handler), ["#N1A2B3C\r#E1"])
-
-    async def test_no_led_configured_is_a_clean_noop(self):
+    async def test_no_led_configured_reads_nothing_and_presses_nothing(self):
         api, handler = _make_api(led_on=None, led_off=None)
         await api.turn_on_light("ADDR1", 1, 80, current_brightness=0)
         await api.turn_off_light("ADDR1", 1, current_brightness=80)
         self.assertEqual(_led_commands(handler), [])
+        handler.get_output_state.assert_not_awaited()
         self.assertEqual(handler.set_output_state.await_count, 2)
 
 

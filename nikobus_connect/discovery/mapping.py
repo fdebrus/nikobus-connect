@@ -693,13 +693,15 @@ KEY_MAPPING_FIRST_BYTE: dict[int, dict[str, str]] = {
 KEY_MAPPING_MODULE: dict[int, dict[int, str]] = {
     1: {1: "8"},
     # 2-channel devices come in two key-index families that the link
-    # resolver must both handle: the interfaces (05-056 0x21, 05-057
-    # 0x22) emit keys 1/3 (nibbles 8/C), while the two-button wall plates
-    # (05-060 0x04, 05-061 0x05, 4*-082 0x10, 05-060-02 0x3F) emit keys
-    # 0/2 (nibbles 0/4 — same slots as a 4-button's 1C/1D). The resolver only sees the channel count, not the device
-    # type, so this table carries ALL FOUR indices. That is safe because
-    # a physical device only ever emits its own two key indices; the
-    # extra entries are never hit for a device that doesn't use them.
+    # resolver must both handle: keys 1/3 (nibbles 8/C) for the
+    # interfaces (05-056 0x21, 05-057 0x22) and for the two-button
+    # plates in the generic layout (fdebrus install, 05-060 180C56:
+    # record FF16F0583160 holds key 1); keys 0/2 (nibbles 0/4, a
+    # 4-button's 1C/1D slots) for the 4*-082 (0x10) and for the
+    # two-button plates in the right-pair layout (#184, 05-060 1772B8:
+    # record FF06F0E0CA5D holds key 0). The resolver only sees the
+    # channel count, so this table carries all four indices; a device
+    # only ever emits its own two, so the extra entries are never hit.
     2: {0: "0", 1: "8", 2: "4", 3: "C"},
     4: {0: "0", 1: "8", 2: "4", 3: "C"},
     8: {0: "0", 1: "8", 2: "4", 3: "C", 4: "2", 5: "A", 6: "6", 7: "E"},
