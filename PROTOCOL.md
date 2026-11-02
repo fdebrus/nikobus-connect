@@ -388,6 +388,27 @@ count-driven, from byte 0 up to `0x4000`), then fixed blocks at
 mode, and this library does not read it (0.37.0). The layout is
 recorded for reading a capture of the vendor software.
 
+What the module does on the bus, observed on one installation (05-207,
+ten output modules, thirty LED keys, debug log of 2026-11-01/02; not
+from any vendor material):
+
+- It sends one output-state query (`0x12` / `0x17`) about every 33 s
+  and walks a list of its own: some groups came up every fourth query
+  (every 2 min), the groups that LED keys drive every 20 to 50 queries
+  (12 to 30 min), the latter often as two queries 1.4 s apart. The
+  project file holds no record of that list; the LED entries in it are
+  all "LED follows its own key" (mode `M02`, self-connections).
+- A key telegram (`#N`) toggles the LED of every key linked to the same
+  output, on every plate, at once; a set-output (`0x15`/`0x16`) is not
+  seen by it. A read answering *on* for an output lit the LED by the
+  next observation; three reads answering *off* over 40 min left the
+  LED on, and an inverted LED went off at an unknown moment overnight.
+- A two-frame press 220 ms after a motion detector's seven-frame burst
+  was applied by the module and missed by the feedback module, which
+  left the LED inverted; later presses toggled it along, still
+  inverted. Two frames 9 ms apart in the log are a relay artefact (seen
+  inside ordinary seven-frame bursts too), not a bus timing.
+
 ### Colour controller (340-00112, 340-00111, 340-00113) ‡
 
 An image of 7968 bytes in four blocks: an LED calibration profile at
