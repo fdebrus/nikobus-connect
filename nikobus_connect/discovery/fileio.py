@@ -1826,7 +1826,7 @@ def merge_linked_modules(
         elif calendar_label := _calendar_label(outputs):
             # PC-Link calendar channel: no wall button will ever match,
             # file the link under a synthesized entry for the channel.
-            physical_addr, op_point = _ensure_calendar_op_point(
+            _physical_addr, op_point = _ensure_calendar_op_point(
                 buttons, push_button_address, calendar_label
             )
             matched_addresses.add(_normalize_address(push_button_address))
