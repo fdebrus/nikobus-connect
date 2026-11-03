@@ -258,7 +258,7 @@ class NikobusConnect:
             result = callback()
             if inspect.isawaitable(result):
                 asyncio.ensure_future(result)
-        except Exception as err:  # pragma: no cover - caller's problem, keep listening
+        except Exception as err:  # noqa: BLE001 - a host callback must not stop the reader
             _LOGGER.error("on_device_answered callback failed: %s", err)
 
     async def reconnect_with_backoff(
@@ -292,7 +292,7 @@ class NikobusConnect:
                 await self.connect()
             except asyncio.CancelledError:
                 raise
-            except Exception as err:
+            except Exception as err:  # noqa: BLE001 - whatever connect() raises, retry
                 _LOGGER.warning(
                     "Reconnect attempt %d failed: %s — retrying in %.0fs",
                     attempt,
@@ -311,7 +311,7 @@ class NikobusConnect:
             try:
                 self._writer.close()
                 await self._writer.wait_closed()
-            except Exception as err:
+            except OSError as err:
                 _LOGGER.debug("Failed to close connection: %s", err)
 
         self._reader = None

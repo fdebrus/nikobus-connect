@@ -11,12 +11,10 @@ protocol parsing and bus state machines belong here, not in the integration.
 pip install -e ".[test]" mypy ruff
 python -m pytest tests -q          # ~1000 tests, no hardware needed
 mypy                               # strict, must stay clean (config in pyproject.toml)
-ruff check nikobus_connect tests   # compare with main: there are pre-existing findings
+ruff check nikobus_connect tests   # must be clean; CI fails on a finding
 ```
 
-Ruff has findings on `main` already. Do not run `ruff check --fix` across the
-package; it rewrites unrelated code. Check that a change adds no new finding
-(compare against `git stash` or `main`). `simulator/` is a separate package
+`simulator/` is a separate package
 (`nikobus-simulator`) that speaks the PC-Link protocol over TCP for testing
 without hardware.
 

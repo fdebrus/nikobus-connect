@@ -59,7 +59,7 @@ def _inline_channels(json_text: str) -> str:
             return False
 
         closing = block_lines[-1].lstrip()
-        if not (closing.startswith("}") or closing.startswith("},")):
+        if not (closing.startswith(("}", "},"))):
             return False
 
         inner = block_lines[1:-1]
@@ -1195,7 +1195,7 @@ def _resolve_operation_point(
 
         try:
             converted = _normalize_address(convert_nikobus_address(normalized))
-        except Exception:  # pragma: no cover - defensive
+        except ValueError:
             converted = ""
         if converted and converted != normalized:
             physical = buttons.get(converted)
@@ -1217,7 +1217,7 @@ def _resolve_operation_point(
                 sib_converted = _normalize_address(
                     convert_nikobus_address(sib_raw)
                 )
-            except Exception:  # pragma: no cover - defensive
+            except ValueError:
                 sib_converted = ""
             if sib_converted:
                 candidate = buttons.get(sib_converted)
@@ -1845,7 +1845,7 @@ def merge_linked_modules(
                     unmatched_addresses.add(normalized)
                 continue
 
-            physical_addr, _key_label, op_point = resolved
+            _physical_addr, _key_label, op_point = resolved
             matched_addresses.add(_normalize_address(push_button_address))
 
         linked_modules = op_point.setdefault("linked_modules", [])
@@ -2141,7 +2141,7 @@ def _mirror_paired_button_links(buttons: dict[str, Any]) -> int:
 
     added = 0
 
-    for physical_addr, entry in buttons.items():
+    for entry in buttons.values():
         if not isinstance(entry, dict):
             continue
         op_points = entry.get("operation_points")

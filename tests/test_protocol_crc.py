@@ -1,6 +1,7 @@
 """Tests for custom_components.nikobus.nkbprotocol — pure protocol utilities."""
 
 import unittest
+from typing import ClassVar
 
 from nikobus_connect.protocol import (
     _reverse_bits,
@@ -60,7 +61,7 @@ class TestCalcCrc1(unittest.TestCase):
         self.assertNotEqual(calc_crc1("1500C1C7"), calc_crc1("1700C1C7"))
 
     def test_invalid_hex_raises(self):
-        with self.assertRaises(Exception):
+        with self.assertRaises(ValueError):
             calc_crc1("GGGG")
 
 
@@ -252,8 +253,8 @@ class TestButtonAddressRoundtrip(unittest.TestCase):
     plate ``124A36``, key 1C presses ``#N1B1492``, key 1D ``#N5B1492``.
     """
 
-    FOUR = ["1A", "1B", "1C", "1D"]
-    EIGHT = ["1A", "1B", "1C", "1D", "2A", "2B", "2C", "2D"]
+    FOUR: ClassVar[list[str]] = ["1A", "1B", "1C", "1D"]
+    EIGHT: ClassVar[list[str]] = ["1A", "1B", "1C", "1D", "2A", "2B", "2C", "2D"]
 
     def test_validated_install(self):
         self.assertEqual(nikobus_to_button_address("124A36", "1C", 4), "#N1B1492")

@@ -590,7 +590,7 @@ def test_add_to_command_mapping_keys_ir_record_on_receiver_address():
     # Exactly one entry; key's first element MUST be the receiver
     # ('0D1C80'), not the encoded wire address ('D44E2C').
     assert len(mapping) == 1
-    (mapping_addr, key_raw, ir_code), outputs = next(iter(mapping.items()))
+    (mapping_addr, key_raw, ir_code), _outputs = next(iter(mapping.items()))
     assert mapping_addr == "0D1C80"
     assert ir_code == "10B"
     assert key_raw == 3

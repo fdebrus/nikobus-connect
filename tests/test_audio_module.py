@@ -63,7 +63,7 @@ def _decode_all() -> list[dict]:
 
 def test_the_header_gives_the_record_count() -> None:
     records = split_link_table(STREAM)
-    assert len(records) == 0x23 == 35
+    assert len(records) == 0x23  # 35
     assert records[0] == "0083CF0A0001"
     assert records[-1] == "F883CF010301"
 
@@ -144,7 +144,7 @@ def test_the_address_is_stored_verbatim_not_transformed() -> None:
     """The three bytes are the #N payload. Passing them through the
     wall-button transform yields a different, wrong address — the bug
     this decoder exists to avoid."""
-    record = [d for d in _decode_all() if d["description"] == "Zone 1 On"][0]
+    record = next(d for d in _decode_all() if d["description"] == "Zone 1 On")
     assert record["bus_address"] == "8083CF"
     assert record["push_button_address"] == "8083CF"
     assert get_button_address("8083CF") != "8083CF"

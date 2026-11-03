@@ -71,7 +71,7 @@ def test_decoder_uses_regular_t2_for_other_modes() -> None:
     """M01/M02/M03/M05 still use ROLLER_TIMER_MAPPING (single value)."""
     for mode_raw in (0x00, 0x01, 0x02, 0x04):
         for nibble in (0, 1, 2, 5, 10, 15):
-            t1, t2 = _timer_value(nibble, mode_raw)
+            t1, _t2 = _timer_value(nibble, mode_raw)
             expected = ROLLER_TIMER_MAPPING.get(nibble, [None])[0]
             assert t1 == expected, (
                 f"mode 0x{mode_raw:02X} nibble {nibble}: "

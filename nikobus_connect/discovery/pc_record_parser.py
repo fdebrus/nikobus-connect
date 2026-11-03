@@ -38,7 +38,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Any, Union
+from typing import Any
 
 from ..coordinator_protocol import CoordinatorProtocol
 from .mapping import (
@@ -148,7 +148,7 @@ class LinkRecord:
     slot: int
 
 
-PcRecord = Union[ModuleRegistryRecord, LinkRecord]
+PcRecord = ModuleRegistryRecord | LinkRecord
 
 
 def is_empty_record(chunk_hex: str) -> bool:
@@ -464,7 +464,7 @@ def build_flat_channel_map(
             continue
         try:
             count: int | None = coordinator.get_module_channel_count(record.address)
-        except Exception:  # pragma: no cover - defensive
+        except Exception:  # noqa: BLE001 - a host lookup must not abort the scan
             count = None
         if not isinstance(count, int) or count <= 0:
             # A module the host cannot size yet (not in its config, or
@@ -640,7 +640,7 @@ def link_record_to_decoded_metadata(
     if coordinator is not None:
         try:
             lookup = coordinator.get_button_channels(button_address)
-        except Exception:  # pragma: no cover - defensive
+        except Exception:  # noqa: BLE001 - a host lookup must not abort the scan
             lookup = None
         if isinstance(lookup, int) and lookup > 0:
             num_channels = lookup

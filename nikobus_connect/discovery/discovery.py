@@ -1363,7 +1363,7 @@ class NikobusDiscovery:
                             listener,
                             connection,
                         )
-                    registers_sent += 1
+                    registers_sent += 1  # noqa: SIM113 - counts sent reads, the loop can stop early
                     self._progress_module_registers_sent += 1
                     await self._emit_progress(
                         PHASE_REGISTER_SCAN,
@@ -2982,7 +2982,7 @@ class NikobusDiscovery:
                     await nikobus_command.get_output_state(addr, group=1)
                 except asyncio.CancelledError:
                     raise
-                except Exception as exc:
+                except Exception as exc:  # noqa: BLE001 - any failure counts as absent, by type
                     absent_last_reason[addr] = type(exc).__name__
                 else:
                     _LOGGER.debug(
@@ -3482,11 +3482,11 @@ class NikobusDiscovery:
         self._progress_pass_total = len(scan_passes)
         self._progress_pass_index = 0
 
-        for pass_index, (sub_byte, register_list) in enumerate(
+        for pass_index, (pass_sub_byte, register_list) in enumerate(
             scan_passes, start=1
         ):
             function_code = base_command[:2]
-            wire_sub = _wire_sub_byte(sub_byte)
+            wire_sub = _wire_sub_byte(pass_sub_byte)
             self._progress_pass_index = pass_index
             self._progress_current_sub_byte = wire_sub
             _LOGGER.debug(
@@ -3494,7 +3494,7 @@ class NikobusDiscovery:
                 "sub %s, wire sub %s, registers %d, pass %d/%d",
                 normalized_address,
                 function_code,
-                sub_byte,
+                pass_sub_byte,
                 wire_sub,
                 len(register_list),
                 pass_index,
