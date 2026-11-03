@@ -1816,7 +1816,6 @@ def merge_linked_modules(
                 and isinstance(wall_points, dict)
                 and isinstance(wall_points.get(wall[1]), dict)
             ):
-                physical_addr = wall[0]
                 op_point = wall_points[wall[1]]
             else:
                 _physical_addr, op_point = _ensure_audio_op_point(

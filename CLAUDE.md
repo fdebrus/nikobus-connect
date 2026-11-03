@@ -14,9 +14,8 @@ mypy                               # strict, must stay clean (config in pyprojec
 ruff check nikobus_connect tests   # must be clean; CI fails on a finding
 ```
 
-`simulator/` is a separate package
-(`nikobus-simulator`) that speaks the PC-Link protocol over TCP for testing
-without hardware.
+`simulator/` is a separate package (`nikobus-simulator`) that speaks the
+PC-Link protocol over TCP for testing without hardware.
 
 ## Layout
 
