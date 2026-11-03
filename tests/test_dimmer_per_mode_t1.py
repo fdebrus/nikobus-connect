@@ -20,8 +20,8 @@ from __future__ import annotations
 from nikobus_connect.discovery.dimmer_decoder import _timer_value
 from nikobus_connect.discovery.mapping import (
     DIMMER_AMOUNT_PERCENT,
-    DIMMER_PRESET_LEVEL,
     DIMMER_MODE_T1_LOOKUP,
+    DIMMER_PRESET_LEVEL,
     DIMMER_T1_1,
     DIMMER_T1_2,
     DIMMER_T1_3,

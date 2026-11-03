@@ -38,13 +38,11 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
-import pytest
-
-from nikobus_connect.discovery import switch_decoder, dimmer_decoder, shutter_decoder
+from nikobus_connect.discovery import dimmer_decoder, shutter_decoder, switch_decoder
 from nikobus_connect.discovery.pc_record_parser import (
     LinkRecord,
-    RegistryBuffer,
     ModuleRegistryRecord,
+    RegistryBuffer,
     link_record_to_decoded_metadata,
 )
 

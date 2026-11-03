@@ -438,8 +438,8 @@ def test_compute_ir_bus_address_never_collides_with_wall_keys_same_receiver():
 
     # Wall-key addresses for this 4-channel IR receiver come from
     # convert_nikobus_address(receiver) + KEY_MAPPING[4] shifts.
-    from nikobus_connect.discovery.protocol import convert_nikobus_address
     from nikobus_connect.discovery.mapping import KEY_MAPPING
+    from nikobus_connect.discovery.protocol import convert_nikobus_address
 
     converted = convert_nikobus_address(receiver)
     orig_nib = int(converted[0], 16)
@@ -590,7 +590,7 @@ def test_add_to_command_mapping_keys_ir_record_on_receiver_address():
     # Exactly one entry; key's first element MUST be the receiver
     # ('0D1C80'), not the encoded wire address ('D44E2C').
     assert len(mapping) == 1
-    (mapping_addr, key_raw, ir_code), outputs = next(iter(mapping.items()))
+    (mapping_addr, key_raw, ir_code), _outputs = next(iter(mapping.items()))
     assert mapping_addr == "0D1C80"
     assert ir_code == "10B"
     assert key_raw == 3

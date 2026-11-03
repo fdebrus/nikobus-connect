@@ -198,7 +198,7 @@ class BaseChunkingDecoder:
                     continue
                 try:
                     channels = coordinator.get_button_channels(addr)
-                except Exception:  # pragma: no cover - defensive
+                except Exception:  # noqa: BLE001 - a host lookup must not abort the scan
                     channels = None
                 if isinstance(channels, int) and channels > 0:
                     count += 1

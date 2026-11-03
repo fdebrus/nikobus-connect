@@ -96,7 +96,7 @@ async def test_detect_stale_inventory_classifies_present_and_absent(tmp_path):
 
     async def get_output_state(addr, group):
         if addr == "3D28":
-            raise asyncio.TimeoutError()
+            raise TimeoutError()
         return "OK"
 
     coord = _make_coordinator(get_output_state=get_output_state)
@@ -156,7 +156,7 @@ async def test_detect_stale_inventory_flags_orphaned_buttons(tmp_path):
 
     async def get_output_state(addr, group):
         if addr == "3D28":
-            raise asyncio.TimeoutError()
+            raise TimeoutError()
         return "OK"
 
     coord = _make_coordinator(get_output_state=get_output_state)
@@ -223,7 +223,7 @@ async def test_detect_stale_inventory_orphaned_address_uppercased(tmp_path):
     discovery payload."""
 
     async def get_output_state(addr, group):
-        raise asyncio.TimeoutError()
+        raise TimeoutError()
 
     coord = _make_coordinator(get_output_state=get_output_state)
     coord.dict_module_data = {"switch_module": {"3d28": {}}}
@@ -307,7 +307,7 @@ async def test_detect_stale_inventory_no_starvation_on_slow_first_module(tmp_pat
         if addr == "3D28":
             # Residue — simulates the command pipeline exhausting
             # its 3 inner attempts.
-            raise asyncio.TimeoutError()
+            raise TimeoutError()
         return "OK"
 
     coord = _make_coordinator(get_output_state=get_output_state)
@@ -340,7 +340,7 @@ async def test_detect_stale_inventory_real_world_secondhand_install(tmp_path):
 
     async def get_output_state(addr, group):
         if addr == "3D28":
-            raise asyncio.TimeoutError()
+            raise TimeoutError()
         return "OK"
 
     coord = _make_coordinator(get_output_state=get_output_state)
@@ -399,12 +399,12 @@ async def test_detect_stale_inventory_outer_loop_recovers_after_quiesce(tmp_path
         if addr == "1CEC":
             return "OK"
         if addr == "3D28":
-            raise asyncio.TimeoutError()
+            raise TimeoutError()
         if addr == "8110":
             # Real but slow under load — fails on pass 1, ACKs on
             # pass 2 (after the bus quiesces during outer_delay).
             if pass_seen["n"] == 0:
-                raise asyncio.TimeoutError()
+                raise TimeoutError()
             return "OK"
         return "OK"
 
@@ -427,7 +427,7 @@ async def test_detect_stale_inventory_outer_loop_recovers_after_quiesce(tmp_path
             pass_seen["n"] = 1
         await real_sleep(0)
 
-    import unittest.mock as mock
+    from unittest import mock
 
     with mock.patch("asyncio.sleep", new=fake_sleep):
         manifest = await discovery.detect_stale_inventory(
@@ -455,7 +455,7 @@ async def test_detect_stale_inventory_outer_default_is_single_pass(tmp_path):
 
     async def get_output_state(addr, group):
         call_counts[addr] = call_counts.get(addr, 0) + 1
-        raise asyncio.TimeoutError()
+        raise TimeoutError()
 
     coord = _make_coordinator(get_output_state=get_output_state)
     coord.dict_module_data = {

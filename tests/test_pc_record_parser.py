@@ -22,13 +22,12 @@ from __future__ import annotations
 import pytest
 
 from nikobus_connect.discovery.pc_record_parser import (
+    RECORD_HEX_LEN,
     LinkRecord,
     ModuleRegistryRecord,
-    RECORD_HEX_LEN,
     is_empty_record,
     parse_pc_record,
 )
-
 
 # Real bodies from the captured trace. (register_hex, body_hex).
 TRACE_REGISTRY = [

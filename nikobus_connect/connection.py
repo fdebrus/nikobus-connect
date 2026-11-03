@@ -19,7 +19,7 @@ from .const import (
     PRESENCE_PROBE_SETTLE,
     PRESENCE_PROBE_TIMEOUT,
 )
-from .exceptions import NikobusConnectionError, NikobusSendError, NikobusReadError
+from .exceptions import NikobusConnectionError, NikobusReadError, NikobusSendError
 from .protocol import family_name, parse_module_status, reply_payload
 
 _LOGGER = logging.getLogger(__name__)
@@ -106,7 +106,7 @@ class NikobusConnect:
                 await self.disconnect()
                 raise
 
-        except (OSError, asyncio.TimeoutError) as err:
+        except (TimeoutError, OSError) as err:
             self._is_connected = False
             _LOGGER.error("Failed to connect to %s: %s", self._connection_string, err)
             raise NikobusConnectionError(f"Connection failed: {err}") from err
@@ -258,7 +258,7 @@ class NikobusConnect:
             result = callback()
             if inspect.isawaitable(result):
                 asyncio.ensure_future(result)
-        except Exception as err:  # pragma: no cover - caller's problem, keep listening
+        except Exception as err:  # noqa: BLE001 - a host callback must not stop the reader
             _LOGGER.error("on_device_answered callback failed: %s", err)
 
     async def reconnect_with_backoff(
@@ -292,7 +292,7 @@ class NikobusConnect:
                 await self.connect()
             except asyncio.CancelledError:
                 raise
-            except Exception as err:
+            except Exception as err:  # noqa: BLE001 - whatever connect() raises, retry
                 _LOGGER.warning(
                     "Reconnect attempt %d failed: %s — retrying in %.0fs",
                     attempt,
@@ -311,7 +311,7 @@ class NikobusConnect:
             try:
                 self._writer.close()
                 await self._writer.wait_closed()
-            except Exception as err:
+            except OSError as err:
                 _LOGGER.debug("Failed to close connection: %s", err)
 
         self._reader = None
@@ -343,7 +343,7 @@ class NikobusConnect:
                 data = payload.encode("ascii")
                 self._writer.write(data)
                 await self._writer.drain()
-            except (OSError, asyncio.TimeoutError) as err:
+            except (TimeoutError, OSError) as err:
                 _LOGGER.error("Write failed: %s", err)
                 await self.disconnect()
                 raise NikobusSendError(f"Write error: {err}") from err

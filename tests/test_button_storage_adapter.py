@@ -71,7 +71,7 @@ def test_merge_discovered_buttons_produces_physical_keyed_shape():
     assert entry["model"] == "05-346"
     assert entry["channels"] == 4
     assert set(entry["operation_points"].keys()) == {"1A", "1B", "1C", "1D"}
-    for key_label, op_point in entry["operation_points"].items():
+    for op_point in entry["operation_points"].values():
         assert "bus_address" in op_point
         assert len(op_point["bus_address"]) == 6
     # Bus addresses are distinct per operation point.
@@ -112,7 +112,7 @@ def test_merge_discovered_buttons_generates_unique_descriptions():
     assert buttons["17C554"]["description"] == "Bus push button, 4 control buttons #N17C554"
 
     # Op-point descriptions follow "Push button {key} #N{bus_addr}".
-    for physical_addr, entry in buttons.items():
+    for entry in buttons.values():
         for key_label, op_point in entry["operation_points"].items():
             bus_addr = op_point["bus_address"]
             assert (

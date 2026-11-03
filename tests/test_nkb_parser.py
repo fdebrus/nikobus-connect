@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import zipfile
+from typing import Any, ClassVar
 from unittest.mock import patch
 
 import pytest
@@ -66,7 +67,7 @@ class _FakeParser:
     install: a dimmer (0E6C/Centrale), a button (1843B4/Living), and a
     'Scene - Test' group whose trigger drives dimmer ch1 in M12."""
 
-    _TABLES = {
+    _TABLES: ClassVar[dict[str, dict[str, list[Any]]]] = {
         "Component": {
             "KeyComponent": [1, 2, 3, 4],
             "KeyLocation": [10, 11, 99, 10],
@@ -239,9 +240,8 @@ def test_parse_nkb_traversal_member_name_stays_in_tmp(tmp_path):
 
     with patch(
         "nikobus_connect.nkb._access_parser.AccessParser", _fake_parser
-    ):
-        with pytest.raises(_Sentinel):
-            parse_nkb(str(evil))
+    ), pytest.raises(_Sentinel):
+        parse_nkb(str(evil))
 
     p = captured["path"]
     assert p.endswith("project.mdb")
@@ -256,7 +256,7 @@ class _FakeRgbParser(_FakeParser):
     keys) whose key ``C`` drives the 340-00112 at ``801D`` in mode 19,
     plus the ordinary dimmer link of the base fixture."""
 
-    _TABLES = {
+    _TABLES: ClassVar[dict[str, dict[str, list[Any]]]] = {
         **_FakeParser._TABLES,
         "Component": {
             "KeyComponent": [1, 2, 3, 4, 5, 6],

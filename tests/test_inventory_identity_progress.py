@@ -16,15 +16,15 @@ target per address with per-register increments.
 
 from __future__ import annotations
 
-import asyncio
+import itertools
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from nikobus_connect.discovery.base import (
-    DiscoveryProgress,
     PHASE_IDENTITY,
     PHASE_INVENTORY,
+    DiscoveryProgress,
 )
 from nikobus_connect.discovery.discovery import NikobusDiscovery
 
@@ -95,7 +95,7 @@ async def test_identity_phase_increments_registers_sent_per_register(tmp_path) -
     assert counts[0] == 1
     assert counts[-1] == 96
     # Strictly monotonic per address.
-    for prev, cur in zip(counts, counts[1:]):
+    for prev, cur in itertools.pairwise(counts):
         assert cur == prev + 1
 
 

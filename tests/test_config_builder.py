@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import zipfile
+from typing import Any, ClassVar
 from unittest.mock import patch
 
 from nikobus_connect.nkb import build_config, build_config_from_nkb
@@ -173,7 +174,7 @@ def test_build_config_skips_unknown_module_model():
 # build_config_from_nkb — end-to-end through the zip/mdb reader
 # --------------------------------------------------------------------------- #
 class _FakeParser:
-    _TABLES = {
+    _TABLES: ClassVar[dict[str, dict[str, list[Any]]]] = {
         "Component": {
             "KeyComponent": [1, 4],
             "KeyProductBase": [1, 4],

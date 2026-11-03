@@ -13,7 +13,6 @@ from __future__ import annotations
 
 from nikobus_connect.discovery.mapping import ROLLER_TIMER_MAPPING
 
-
 # The canonical T1-nibble → operating-time mapping per Niko's
 # product database. Pinning the full 16-entry table here so any
 # future edit that re-introduces the off-by-one shift fails loudly.

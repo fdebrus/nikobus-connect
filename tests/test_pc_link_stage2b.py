@@ -18,14 +18,11 @@ from unittest.mock import MagicMock
 from nikobus_connect.discovery.pc_link_decoder import PcLinkDecoder
 from nikobus_connect.discovery.pc_record_parser import (
     OUTPUT_BEARING_DEVICE_TYPES,
-    LinkRecord,
     ModuleRegistryRecord,
     RegistryBuffer,
     build_flat_channel_map,
-    parse_pc_record,
     resolve_link_target,
 )
-
 
 # fdebrus install — registry order from TRACE_REGISTRY in
 # tests/test_pc_record_parser.py, with channel counts confirmed
@@ -62,12 +59,7 @@ def _make_fdebrus_coordinator() -> MagicMock:
 
 def _record(address: str, device_type: int, type_slot: int = 1) -> ModuleRegistryRecord:
     return ModuleRegistryRecord(
-        raw_hex="03000000{:02X}000000{:02X}{:02X}0000{:02X}000000".format(
-            device_type,
-            int(address[2:4], 16),
-            int(address[0:2], 16),
-            type_slot,
-        ).upper(),
+        raw_hex=f"03000000{device_type:02X}000000{int(address[2:4], 16):02X}{int(address[0:2], 16):02X}0000{type_slot:02X}000000".upper(),
         device_type=device_type,
         address=address.upper(),
         type_slot=type_slot,

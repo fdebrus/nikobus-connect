@@ -30,8 +30,8 @@ from .protocol import (
 )
 
 __all__ = [
-    "NikobusAPI",
     "CoordinatorProtocol",
+    "NikobusAPI",
     "NikobusCommandHandler",
     "NikobusConnect",
     "NikobusConnectionError",

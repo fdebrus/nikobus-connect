@@ -140,7 +140,7 @@ def test_reset_forgets_the_table() -> None:
 def test_blocks_to_sections_splits_at_sub_byte_boundaries() -> None:
     assert blocks_to_sections(0x1F0, 0x205) == (
         ("01", tuple(range(0xF0, 0x100))),
-        ("02", tuple(range(0x00, 0x06))),
+        ("02", tuple(range(0x06))),
     )
     assert blocks_to_sections(0x160, 0x160) == (("01", (0x60,)),)
     assert blocks_to_sections(0x10, 0x0F) == ()

@@ -39,12 +39,11 @@ from nikobus_connect.discovery.fileio import (
     _build_ir_base_lookup,
     _resolve_easywave_52,
     _resolve_operation_point,
+    merge_discovered_buttons,
     merge_linked_modules,
 )
-from nikobus_connect.discovery.fileio import merge_discovered_buttons
 from nikobus_connect.discovery.mapping import KEY_MAPPING
 from nikobus_connect.discovery.protocol import convert_nikobus_address
-
 
 # ---------------------------------------------------------------------------
 # Fixture: materialise the 05-312 at physical 0E31C0 (the diagnostic install)
@@ -259,7 +258,7 @@ def test_merge_linked_modules_routes_05_312_bp_cells_to_op_points():
     button_data: dict = {"nikobus_button": _materialise_05_312("0E31C0")}
     command_mapping = _command_mapping_from_ground_truth()
 
-    updated, links_added, outputs_added, unmatched = merge_linked_modules(
+    _updated, _links_added, _outputs_added, unmatched = merge_linked_modules(
         button_data, command_mapping
     )
 

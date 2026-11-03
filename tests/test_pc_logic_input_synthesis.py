@@ -34,7 +34,6 @@ from nikobus_connect.discovery.protocol import (
     pc_logic_input_slot_index,
 )
 
-
 # ---------------------------------------------------------------------------
 # Address-derivation unit tests
 # ---------------------------------------------------------------------------

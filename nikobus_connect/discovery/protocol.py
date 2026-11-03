@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any
 
 from ..coordinator_protocol import CoordinatorProtocol
 from .mapping import (
@@ -93,10 +94,7 @@ def _is_garbage_chunk(payload_hex: str) -> bool:
 
     # Rule 2: filler bytes (0x00 and 0xFF) cover >= 70% of the chunk
     filler = counts.get(0x00, 0) + counts.get(0xFF, 0)
-    if filler * 10 >= n * 7:
-        return True
-
-    return False
+    return filler * 10 >= n * 7
 
 
 def _safe_int(hex_byte: str | None) -> int | None:
@@ -544,7 +542,7 @@ def get_button_address(payload_hex: str) -> str | None:
 
     try:
         bin_str = format(int(payload_hex, 16), "024b")
-    except Exception as err:  # pragma: no cover - defensive
+    except (TypeError, ValueError) as err:
         _LOGGER.error("Failed to convert button address to binary: %s", err)
         return None
 
@@ -555,7 +553,7 @@ def get_button_address(payload_hex: str) -> str | None:
     new_bin = group3 + group2 + group1
     try:
         result_int = int(new_bin, 2)
-    except Exception as err:  # pragma: no cover - defensive
+    except ValueError as err:
         _LOGGER.error("Failed to convert binary to int: %s", err)
         return None
     return format(result_int, "06X")
@@ -628,7 +626,7 @@ def decode_command_payload(
     if coordinator and module_address and resolved_channel_count is None:
         try:
             resolved_channel_count = coordinator.get_module_channel_count(module_address)
-        except Exception as err:  # pragma: no cover - defensive
+        except Exception as err:  # noqa: BLE001 - a host lookup must not abort the decode
             _LOGGER.debug(
                 "Module channel lookup failed for module %s — %s", module_address, err
             )
@@ -682,29 +680,29 @@ def decode_command_payload(
 
 
 __all__ = [
-    "DecoderContext",
-    "blocks_to_sections",
-    "decode_command_payload",
-    "normalize_payload",
-    "reverse_hex",
-    "convert_nikobus_address",
-    "derive_pc_logic_input_physicals",
-    "virtual_button_class",
-    "virtual_plate_address",
-    "record_bus_address",
-    "virtual_record_bus_address",
-    "motion_detector_bus_addresses",
-    "is_motion_detector",
-    "VIRTUAL_CLASS_PC_LOGIC",
     "VIRTUAL_CLASS_BANK",
-    "pc_logic_address_for_input",
-    "pc_logic_input_slot_index",
-    "classify_device_type",
-    "get_button_address",
-    "get_push_button_address",
-    "is_known_button_canonical",
+    "VIRTUAL_CLASS_PC_LOGIC",
+    "DecoderContext",
     "_format_channel",
     "_is_all_ff",
     "_is_garbage_chunk",
     "_safe_int",
+    "blocks_to_sections",
+    "classify_device_type",
+    "convert_nikobus_address",
+    "decode_command_payload",
+    "derive_pc_logic_input_physicals",
+    "get_button_address",
+    "get_push_button_address",
+    "is_known_button_canonical",
+    "is_motion_detector",
+    "motion_detector_bus_addresses",
+    "normalize_payload",
+    "pc_logic_address_for_input",
+    "pc_logic_input_slot_index",
+    "record_bus_address",
+    "reverse_hex",
+    "virtual_button_class",
+    "virtual_plate_address",
+    "virtual_record_bus_address",
 ]

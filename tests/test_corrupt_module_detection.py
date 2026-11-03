@@ -26,8 +26,8 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
-from nikobus_connect.discovery.switch_decoder import SwitchDecoder
 from nikobus_connect.discovery.shutter_decoder import ShutterDecoder
+from nikobus_connect.discovery.switch_decoder import SwitchDecoder
 
 # ``payload_and_crc`` exactly as received for the misaligned module 4707.
 FRAMES_4707 = [

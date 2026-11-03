@@ -21,7 +21,11 @@ from .mapping import (
     TWO_BUTTON_LAYOUTS,
 )
 from .protocol import convert_nikobus_address as _convert_nikobus_address
-from .protocol import record_bus_address, virtual_button_class, virtual_record_bus_address
+from .protocol import (
+    record_bus_address,
+    virtual_button_class,
+    virtual_record_bus_address,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -55,7 +59,7 @@ def _inline_channels(json_text: str) -> str:
             return False
 
         closing = block_lines[-1].lstrip()
-        if not (closing.startswith("}") or closing.startswith("},")):
+        if not (closing.startswith(("}", "},"))):
             return False
 
         inner = block_lines[1:-1]
@@ -1191,7 +1195,7 @@ def _resolve_operation_point(
 
         try:
             converted = _normalize_address(convert_nikobus_address(normalized))
-        except Exception:  # pragma: no cover - defensive
+        except ValueError:
             converted = ""
         if converted and converted != normalized:
             physical = buttons.get(converted)
@@ -1213,7 +1217,7 @@ def _resolve_operation_point(
                 sib_converted = _normalize_address(
                     convert_nikobus_address(sib_raw)
                 )
-            except Exception:  # pragma: no cover - defensive
+            except ValueError:
                 sib_converted = ""
             if sib_converted:
                 candidate = buttons.get(sib_converted)
@@ -1304,8 +1308,8 @@ def _compute_ir_bus_address(receiver_address: str, ir_code: str) -> str | None:
     captured trace: code ``10B`` on receiver ``0D1C80`` -> ``D44E2C``.
     """
 
-    from .protocol import convert_nikobus_address  # local import: avoid cycle
     from .mapping import KEY_MAPPING_MODULE
+    from .protocol import convert_nikobus_address  # local import: avoid cycle
 
     if not receiver_address or not ir_code or len(ir_code) < 2:
         return None
@@ -1795,7 +1799,6 @@ def merge_linked_modules(
             op_point = _ensure_ir_op_point(
                 physical_entry, receiver_addr, ir_code_from_key
             )
-            physical_addr = receiver_addr
             matched_addresses.add(_normalize_address(push_button_address))
         elif (audio_output := _audio_link(outputs)) is not None:
             # An audio record stores the ``#N`` frame that drives the
@@ -1812,17 +1815,16 @@ def merge_linked_modules(
                 and isinstance(wall_points, dict)
                 and isinstance(wall_points.get(wall[1]), dict)
             ):
-                physical_addr = wall[0]
                 op_point = wall_points[wall[1]]
             else:
-                physical_addr, op_point = _ensure_audio_op_point(
+                _physical_addr, op_point = _ensure_audio_op_point(
                     buttons, push_button_address, audio_output
                 )
             matched_addresses.add(_normalize_address(push_button_address))
         elif calendar_label := _calendar_label(outputs):
             # PC-Link calendar channel: no wall button will ever match,
             # file the link under a synthesized entry for the channel.
-            physical_addr, op_point = _ensure_calendar_op_point(
+            _physical_addr, op_point = _ensure_calendar_op_point(
                 buttons, push_button_address, calendar_label
             )
             matched_addresses.add(_normalize_address(push_button_address))
@@ -1841,7 +1843,7 @@ def merge_linked_modules(
                     unmatched_addresses.add(normalized)
                 continue
 
-            physical_addr, _key_label, op_point = resolved
+            _physical_addr, _key_label, op_point = resolved
             matched_addresses.add(_normalize_address(push_button_address))
 
         linked_modules = op_point.setdefault("linked_modules", [])
@@ -2072,7 +2074,7 @@ _FOUR_BUTTON_GROUPS: dict[str, tuple[str, ...]] = {
 
 # Exact mode-text matchers. Pulled from ``mapping`` so rename drift on
 # either side stays in sync automatically.
-from .mapping import (  # noqa: E402
+from .mapping import (
     DIMMER_MODE_MAPPING,
     ROLLER_MODE_MAPPING,
     SWITCH_MODE_MAPPING,
@@ -2137,7 +2139,7 @@ def _mirror_paired_button_links(buttons: dict[str, Any]) -> int:
 
     added = 0
 
-    for physical_addr, entry in buttons.items():
+    for entry in buttons.values():
         if not isinstance(entry, dict):
             continue
         op_points = entry.get("operation_points")

@@ -31,7 +31,7 @@ async def test_press_is_one_command_with_three_frames() -> None:
 
 
 async def test_press_repeat_is_honoured_with_a_floor_of_one() -> None:
-    api, handler = _api()
+    api, _handler = _api()
     api.press_repeat = 2
     assert api.press_command("295682").count("#N") == 2
     api.press_repeat = 0

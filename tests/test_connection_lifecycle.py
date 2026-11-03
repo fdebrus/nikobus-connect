@@ -17,12 +17,12 @@ import pytest
 
 from nikobus_connect.connection import NikobusConnect
 from nikobus_connect.const import COMMANDS_HANDSHAKE
-from nikobus_connect.protocol import append_crc1, append_crc2
 from nikobus_connect.exceptions import (
     NikobusConnectionError,
     NikobusReadError,
     NikobusSendError,
 )
+from nikobus_connect.protocol import append_crc1, append_crc2
 
 
 def _stream_pair(probe_reply: bytes | None = b"$0511\r") -> tuple[MagicMock, MagicMock]:

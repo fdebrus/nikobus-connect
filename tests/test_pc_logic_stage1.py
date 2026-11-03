@@ -16,8 +16,8 @@ import pytest
 
 from nikobus_connect.discovery.chunk_decoder import _CHUNK_LENGTHS
 from nikobus_connect.discovery.discovery import (
-    NikobusDiscovery,
     _MODULE_SCAN_PROFILES,
+    NikobusDiscovery,
     _scan_passes_for_module_type,
 )
 from nikobus_connect.discovery.mapping import (

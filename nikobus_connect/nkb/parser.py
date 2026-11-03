@@ -235,13 +235,13 @@ class NkbData(NamedTuple):
     #: ``{(MODULE_ADDR_UPPER, channel): name}`` — per-output channel names
     #: (the light / cover / switch the user actually toggles). Read-only, so
     #: the empty-dict default is safe.
-    outputs: dict[tuple[str, int], str] = {}
+    outputs: dict[tuple[str, int], str] = {}  # noqa: RUF012 - NamedTuple field, never mutated
     #: ``{ADDRESS_HEX_UPPER: number}`` — the per-product index the Niko
     #: PC software prefixes onto each component's label (``BP7``, ``S1``
     #: … the ``BP``/``S`` part is locale UI decoration; ``Number`` is the
     #: stable data). Lets a consumer render the same index the user sees
     #: in the Nikobus application. Read-only default, safe to share.
-    numbers: dict[str, int] = {}
+    numbers: dict[str, int] = {}  # noqa: RUF012 - NamedTuple field, never mutated
     #: Keys linked to colour controllers (340-00112 and family), which
     #: no bus read can recover. Read-only default, safe to share.
     rgb_links: tuple[RgbLink, ...] = ()

@@ -163,7 +163,7 @@ class NikobusEventListener:
                     await self._dispatch_message(frame)
             except TimeoutError:
                 continue
-            except Exception as err:
+            except Exception as err:  # noqa: BLE001 - keep listening whatever one frame does
                 _LOGGER.error("Listener loop failed: %s", err)
                 if not self._connection.is_connected:
                     _LOGGER.warning("Connection lost — listener loop exiting")
@@ -235,11 +235,10 @@ class NikobusEventListener:
                     return
                 if not self._awaiting_response:
                     self.feedback_answers_seen += 1
-                if self._has_feedback_module and self._feedback_callback:
-                    if len(message) >= 7:
-                        addr = (message[5:7] + message[3:5]).upper()
-                        group = self._attribute_state_answer(addr, message)
-                        await self._invoke(self._feedback_callback, group, message)
+                if self._has_feedback_module and self._feedback_callback and len(message) >= 7:
+                    addr = (message[5:7] + message[3:5]).upper()
+                    group = self._attribute_state_answer(addr, message)
+                    await self._invoke(self._feedback_callback, group, message)
                 if self._awaiting_response:
                     self._enqueue_response(message)
             return

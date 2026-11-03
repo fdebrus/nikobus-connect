@@ -25,7 +25,6 @@ from nikobus_connect.discovery.discovery import (
     _scan_passes_for_module_type,
 )
 
-
 # ---------------------------------------------------------------------------
 # DiscoveryProgress shape
 # ---------------------------------------------------------------------------

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import pytest
 
+from nikobus_connect.discovery.mapping import RGB_MODE_KEYS, RGB_MODE_NAMES
 from nikobus_connect.rgb import (
     RGB_MODE_KEY_ROLES,
     RGB_OFF_ROLES,
@@ -19,7 +20,6 @@ from nikobus_connect.rgb import (
     rgb_key_role,
     rgb_mode_label,
 )
-from nikobus_connect.discovery.mapping import RGB_MODE_KEYS, RGB_MODE_NAMES
 
 
 @pytest.mark.parametrize(

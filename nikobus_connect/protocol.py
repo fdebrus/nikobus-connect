@@ -277,7 +277,7 @@ def parse_pc_link_time(payload: bytes) -> datetime:
     if len(payload) < 9:
         raise ValueError(f"PC-Link time reply too short: {payload.hex()}")
     yy, mo, dd, hh, mi, ss = payload[3:9]
-    return datetime(2000 + yy, mo, dd, hh, mi, ss)  # noqa: DTZ001 - controller keeps naive local time
+    return datetime(2000 + yy, mo, dd, hh, mi, ss)
 
 
 def make_set_time_args(moment: datetime) -> bytes:

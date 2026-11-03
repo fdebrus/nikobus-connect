@@ -17,18 +17,17 @@ downstream tracker can't abort the scan.
 from __future__ import annotations
 
 import asyncio
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 import pytest
 
 from nikobus_connect import const
 from nikobus_connect.discovery import (
-    DiscoveryProgress,
     PHASE_FINALIZING,
     PHASE_REGISTER_SCAN,
+    DiscoveryProgress,
 )
 from nikobus_connect.discovery.discovery import NikobusDiscovery
-
 
 # --- fakes (parallel to test_sequential_register_scan) ---
 
