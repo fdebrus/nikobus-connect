@@ -1799,7 +1799,6 @@ def merge_linked_modules(
             op_point = _ensure_ir_op_point(
                 physical_entry, receiver_addr, ir_code_from_key
             )
-            physical_addr = receiver_addr
             matched_addresses.add(_normalize_address(push_button_address))
         elif (audio_output := _audio_link(outputs)) is not None:
             # An audio record stores the ``#N`` frame that drives the
