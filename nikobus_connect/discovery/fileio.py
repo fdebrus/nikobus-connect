@@ -1819,7 +1819,7 @@ def merge_linked_modules(
                 physical_addr = wall[0]
                 op_point = wall_points[wall[1]]
             else:
-                physical_addr, op_point = _ensure_audio_op_point(
+                _physical_addr, op_point = _ensure_audio_op_point(
                     buttons, push_button_address, audio_output
                 )
             matched_addresses.add(_normalize_address(push_button_address))
