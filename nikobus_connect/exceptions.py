@@ -1,9 +1,9 @@
 """Custom exceptions for the Nikobus library."""
 
 __all__ = [
+    "NikobusConnectionError",
     "NikobusDataError",
     "NikobusError",
-    "NikobusConnectionError",
     "NikobusReadError",
     "NikobusSendError",
     "NikobusTimeoutError",

@@ -29,7 +29,6 @@ from nikobus_connect.discovery.protocol import (
     get_push_button_address,
 )
 
-
 # --- mapping tables --------------------------------------------------------
 
 def test_device_type_override_table_has_0x10() -> None:

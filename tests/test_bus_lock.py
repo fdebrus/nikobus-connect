@@ -25,7 +25,6 @@ from nikobus_connect import const
 from nikobus_connect.command import NikobusCommandHandler
 from nikobus_connect.discovery.discovery import NikobusDiscovery
 
-
 # --- 1. queued command holds the lock while it waits for its answer ------
 
 

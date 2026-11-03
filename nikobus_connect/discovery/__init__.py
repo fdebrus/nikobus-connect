@@ -1,18 +1,18 @@
 """Nikobus Discovery - device-discovery subpackage of nikobus-connect."""
 
-from .discovery import NikobusDiscovery
+from ..const import DEVICE_ADDRESS_INVENTORY, DEVICE_INVENTORY_ANSWER
 from .base import (
+    PHASE_FINALIZING,
+    PHASE_IDENTITY,
+    PHASE_INVENTORY,
+    PHASE_REGISTER_SCAN,
     DecodedCommand,
     Decoder,
     DiscoveryProgress,
     InventoryQueryType,
     InventoryResult,
-    PHASE_FINALIZING,
-    PHASE_IDENTITY,
-    PHASE_INVENTORY,
-    PHASE_REGISTER_SCAN,
 )
-from .discovery import NON_OUTPUT_MODULE_TYPES
+from .discovery import NON_OUTPUT_MODULE_TYPES, NikobusDiscovery
 from .fileio import (
     IR_OP_POINT_PREFIX,
     find_ir_operation_point,
@@ -31,7 +31,6 @@ from .mapping import (
     TWO_BUTTON_PLATE_KEYS,
 )
 from .protocol import is_motion_detector, motion_detector_bus_addresses
-from ..const import DEVICE_ADDRESS_INVENTORY, DEVICE_INVENTORY_ANSWER
 
 __all__ = [
     "NikobusDiscovery",

@@ -21,7 +21,11 @@ from .mapping import (
     TWO_BUTTON_LAYOUTS,
 )
 from .protocol import convert_nikobus_address as _convert_nikobus_address
-from .protocol import record_bus_address, virtual_button_class, virtual_record_bus_address
+from .protocol import (
+    record_bus_address,
+    virtual_button_class,
+    virtual_record_bus_address,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -1304,8 +1308,8 @@ def _compute_ir_bus_address(receiver_address: str, ir_code: str) -> str | None:
     captured trace: code ``10B`` on receiver ``0D1C80`` -> ``D44E2C``.
     """
 
-    from .protocol import convert_nikobus_address  # local import: avoid cycle
     from .mapping import KEY_MAPPING_MODULE
+    from .protocol import convert_nikobus_address  # local import: avoid cycle
 
     if not receiver_address or not ir_code or len(ir_code) < 2:
         return None
@@ -2072,7 +2076,7 @@ _FOUR_BUTTON_GROUPS: dict[str, tuple[str, ...]] = {
 
 # Exact mode-text matchers. Pulled from ``mapping`` so rename drift on
 # either side stays in sync automatically.
-from .mapping import (  # noqa: E402
+from .mapping import (
     DIMMER_MODE_MAPPING,
     ROLLER_MODE_MAPPING,
     SWITCH_MODE_MAPPING,

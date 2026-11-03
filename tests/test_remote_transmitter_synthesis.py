@@ -23,7 +23,6 @@ from nikobus_connect.discovery.fileio import merge_discovered_buttons
 from nikobus_connect.discovery.mapping import KEY_MAPPING
 from nikobus_connect.discovery.protocol import convert_nikobus_address
 
-
 # The 52 bus addresses observed on the user's install — every
 # distinct code their multi-page Easywave remote emits. All share
 # the trailing 4 hex chars ``E31C``.

@@ -239,9 +239,8 @@ def test_parse_nkb_traversal_member_name_stays_in_tmp(tmp_path):
 
     with patch(
         "nikobus_connect.nkb._access_parser.AccessParser", _fake_parser
-    ):
-        with pytest.raises(_Sentinel):
-            parse_nkb(str(evil))
+    ), pytest.raises(_Sentinel):
+        parse_nkb(str(evil))
 
     p = captured["path"]
     assert p.endswith("project.mdb")

@@ -16,7 +16,6 @@ from nikobus_connect.protocol import (
     reverse_24bit_to_hex,
 )
 
-
 # ---------------------------------------------------------------------------
 # int_to_hex
 # ---------------------------------------------------------------------------
@@ -144,9 +143,9 @@ class TestMakePcLinkCommand(unittest.TestCase):
 
     def test_frame_passes_validate_crc(self):
         """The frame produced must pass the same CRC logic used by the listener."""
-        from nikobus_connect.listener import NikobusEventListener
         # validate_crc is a plain method; create a minimal listener
-        from unittest.mock import MagicMock
+
+        from nikobus_connect.listener import NikobusEventListener
         listener = NikobusEventListener.__new__(NikobusEventListener)
         listener._frame_buffer = ""
 

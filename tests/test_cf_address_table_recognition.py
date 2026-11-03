@@ -18,10 +18,8 @@ from __future__ import annotations
 
 from nikobus_connect.discovery.pc_record_parser import (
     is_cf_address_table_chunk,
-    parse_pc_record,
 )
 from nikobus_connect.discovery.protocol import convert_nikobus_address
-
 
 # Every distinct 940C sub=02 chunk captured from the real scan.
 _REAL_GRID_CHUNKS = [

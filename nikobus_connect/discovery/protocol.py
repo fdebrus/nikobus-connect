@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any
 
 from ..coordinator_protocol import CoordinatorProtocol
 from .mapping import (
@@ -682,29 +683,29 @@ def decode_command_payload(
 
 
 __all__ = [
-    "DecoderContext",
-    "blocks_to_sections",
-    "decode_command_payload",
-    "normalize_payload",
-    "reverse_hex",
-    "convert_nikobus_address",
-    "derive_pc_logic_input_physicals",
-    "virtual_button_class",
-    "virtual_plate_address",
-    "record_bus_address",
-    "virtual_record_bus_address",
-    "motion_detector_bus_addresses",
-    "is_motion_detector",
-    "VIRTUAL_CLASS_PC_LOGIC",
     "VIRTUAL_CLASS_BANK",
-    "pc_logic_address_for_input",
-    "pc_logic_input_slot_index",
-    "classify_device_type",
-    "get_button_address",
-    "get_push_button_address",
-    "is_known_button_canonical",
+    "VIRTUAL_CLASS_PC_LOGIC",
+    "DecoderContext",
     "_format_channel",
     "_is_all_ff",
     "_is_garbage_chunk",
     "_safe_int",
+    "blocks_to_sections",
+    "classify_device_type",
+    "convert_nikobus_address",
+    "decode_command_payload",
+    "derive_pc_logic_input_physicals",
+    "get_button_address",
+    "get_push_button_address",
+    "is_known_button_canonical",
+    "is_motion_detector",
+    "motion_detector_bus_addresses",
+    "normalize_payload",
+    "pc_logic_address_for_input",
+    "pc_logic_input_slot_index",
+    "record_bus_address",
+    "reverse_hex",
+    "virtual_button_class",
+    "virtual_plate_address",
+    "virtual_record_bus_address",
 ]

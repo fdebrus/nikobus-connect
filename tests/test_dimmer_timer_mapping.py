@@ -17,7 +17,6 @@ from __future__ import annotations
 
 from nikobus_connect.discovery.mapping import DIMMER_TIMER_MAPPING
 
-
 # Canonical T2 ramp-time table per Niko ParamBase ``S_DB_DIMMER_T2``.
 # This is the strict 16-entry monotonic sequence used by every dimmer
 # mode (M01-M14) for ramp / fade duration.

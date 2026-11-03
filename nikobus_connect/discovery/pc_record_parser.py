@@ -36,8 +36,9 @@ validate the byte-0 → ``(module, channel)`` mapping against.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Any, Iterable, Union
+from typing import Any, Union
 
 from ..coordinator_protocol import CoordinatorProtocol
 from .mapping import (
@@ -47,7 +48,6 @@ from .mapping import (
     ROLLER_MODE_MAPPING,
     SWITCH_MODE_MAPPING,
 )
-
 
 RECORD_HEX_LEN = 32
 """16 bytes per record × 2 hex chars per byte."""
@@ -666,11 +666,11 @@ def link_record_to_decoded_metadata(
 
 
 __all__ = [
+    "OUTPUT_BEARING_DEVICE_TYPES",
     "RECORD_HEX_LEN",
     "REGISTRY_MARKER",
-    "OUTPUT_BEARING_DEVICE_TYPES",
-    "ModuleRegistryRecord",
     "LinkRecord",
+    "ModuleRegistryRecord",
     "PcRecord",
     "RegistryBuffer",
     "build_flat_channel_map",

@@ -16,15 +16,14 @@ target per address with per-register increments.
 
 from __future__ import annotations
 
-import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from nikobus_connect.discovery.base import (
-    DiscoveryProgress,
     PHASE_IDENTITY,
     PHASE_INVENTORY,
+    DiscoveryProgress,
 )
 from nikobus_connect.discovery.discovery import NikobusDiscovery
 

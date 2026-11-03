@@ -8,11 +8,16 @@ from pathlib import Path
 
 import pytest
 
-from nikobus_connect.discovery.audio_decoder import AudioDecoder, decode as decode_audio, split_link_table
+from nikobus_connect.discovery.audio_decoder import AudioDecoder, split_link_table
+from nikobus_connect.discovery.audio_decoder import decode as decode_audio
 from nikobus_connect.discovery.discovery import add_to_command_mapping
 from nikobus_connect.discovery.fileio import merge_linked_modules
 from nikobus_connect.discovery.pc_logic_decoder import decode_input_link
-from nikobus_connect.discovery.protocol import get_button_address, normalize_payload, reverse_hex
+from nikobus_connect.discovery.protocol import (
+    get_button_address,
+    normalize_payload,
+    reverse_hex,
+)
 from nikobus_connect.nkb.parser import parse_nkb
 
 

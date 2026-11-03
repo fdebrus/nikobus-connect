@@ -42,7 +42,7 @@ from typing import Any
 from ..coordinator_protocol import CoordinatorProtocol
 from .base import DecodedCommand
 from .chunk_decoder import BaseChunkingDecoder
-from .pc_link_decoder import _ScanCounts, _decode_and_log, _emit_scan_summary
+from .pc_link_decoder import _decode_and_log, _emit_scan_summary, _ScanCounts
 from .pc_record_parser import RegistryBuffer
 from .protocol import _reverse_24, blocks_to_sections, get_button_address, reverse_hex
 

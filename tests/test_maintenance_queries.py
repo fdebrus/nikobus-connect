@@ -57,14 +57,14 @@ def test_module_crc_little_endian():
 
 
 def test_pc_link_time_round_trip():
-    moment = datetime(2026, 9, 3, 21, 10, 43)  # noqa: DTZ001
+    moment = datetime(2026, 9, 3, 21, 10, 43)
     args = make_set_time_args(moment)
     assert args.hex().upper() == "1A0903150A2BFF"
     assert parse_pc_link_time(b"\xff\x62\x9e" + args[:6]) == moment
     with pytest.raises(ValueError):
         parse_pc_link_time(bytes.fromhex("FF629E9BC1000000FF"))  # unset clock
     with pytest.raises(ValueError):
-        make_set_time_args(datetime(1999, 1, 1))  # noqa: DTZ001
+        make_set_time_args(datetime(1999, 1, 1))
 
 
 def test_block_index_args_little_endian():
@@ -130,7 +130,7 @@ def test_query_time_uses_ff_prefixed_answer():
     async def scenario():
         answer = _frame("FFF5861A0903150A2B")
         payload, _ = await _run_query(FUNC_GET_TIME, "86F5", ["$051D", answer])
-        assert parse_pc_link_time(payload) == datetime(2026, 9, 3, 21, 10, 43)  # noqa: DTZ001
+        assert parse_pc_link_time(payload) == datetime(2026, 9, 3, 21, 10, 43)
 
     asyncio.run(scenario())
 
@@ -138,7 +138,7 @@ def test_query_time_uses_ff_prefixed_answer():
 def test_query_set_time_is_ack_only():
     async def scenario():
         payload, sent = await _run_query(
-            FUNC_SET_TIME, "86F5", ["$051E", "$0EFFF586" + "0000" + "00"], make_set_time_args(datetime(2026, 1, 2, 3, 4, 5))  # noqa: DTZ001
+            FUNC_SET_TIME, "86F5", ["$051E", "$0EFFF586" + "0000" + "00"], make_set_time_args(datetime(2026, 1, 2, 3, 4, 5))
         )
         assert payload == b""
         assert sent[0].startswith("$1E1EF5861A01020304")

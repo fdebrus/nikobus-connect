@@ -19,7 +19,7 @@ from .const import (
     PRESENCE_PROBE_SETTLE,
     PRESENCE_PROBE_TIMEOUT,
 )
-from .exceptions import NikobusConnectionError, NikobusSendError, NikobusReadError
+from .exceptions import NikobusConnectionError, NikobusReadError, NikobusSendError
 from .protocol import family_name, parse_module_status, reply_payload
 
 _LOGGER = logging.getLogger(__name__)
@@ -106,7 +106,7 @@ class NikobusConnect:
                 await self.disconnect()
                 raise
 
-        except (OSError, asyncio.TimeoutError) as err:
+        except (TimeoutError, OSError) as err:
             self._is_connected = False
             _LOGGER.error("Failed to connect to %s: %s", self._connection_string, err)
             raise NikobusConnectionError(f"Connection failed: {err}") from err
@@ -343,7 +343,7 @@ class NikobusConnect:
                 data = payload.encode("ascii")
                 self._writer.write(data)
                 await self._writer.drain()
-            except (OSError, asyncio.TimeoutError) as err:
+            except (TimeoutError, OSError) as err:
                 _LOGGER.error("Write failed: %s", err)
                 await self.disconnect()
                 raise NikobusSendError(f"Write error: {err}") from err

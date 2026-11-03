@@ -15,11 +15,8 @@ and surfaces them on ``NikobusDiscovery.discovered_cf_broadcasts``.
 from __future__ import annotations
 
 import unittest
-from unittest.mock import MagicMock
 
 from nikobus_connect.discovery.discovery import (
-    CFBroadcast,
-    CFOutputMember,
     NikobusDiscovery,
     _classify_cf_pattern,
 )

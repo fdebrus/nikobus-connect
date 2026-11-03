@@ -22,7 +22,6 @@ from nikobus_connect.discovery.mapping import (
     SWITCH_MODE_VENDOR_REF,
 )
 
-
 # ---------------------------------------------------------------------------
 # Provenance: every DEVICE_TYPES entry carries a VendorRef
 # ---------------------------------------------------------------------------

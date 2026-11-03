@@ -22,7 +22,6 @@ from nikobus_connect.discovery.mapping import (
 )
 from nikobus_connect.discovery.shutter_decoder import _timer_value
 
-
 # Canonical T3 paired-time table per Niko ParamBase KP=6
 # (``S_DB_ROLLUIK_T3``). Format: ``<long-press-time> / <short-press-time>``.
 EXPECTED_T3 = {

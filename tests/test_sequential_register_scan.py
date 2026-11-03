@@ -21,7 +21,6 @@ import pytest
 from nikobus_connect import const
 from nikobus_connect.discovery.discovery import NikobusDiscovery
 
-
 # --- fakes ---------------------------------------------------------------
 
 
@@ -432,7 +431,7 @@ async def test_scan_aborts_after_consecutive_ack_give_ups(tmp_path, monkeypatch)
     discovery._coordinator.nikobus_command._connection.on_send = on_send
 
     await discovery._scan_module_registers(
-        "0E6C", "106C0E", range(0x00, 0x100), sub_byte="00"
+        "0E6C", "106C0E", range(0x100), sub_byte="00"
     )
 
     sent = discovery._coordinator.nikobus_command._connection.sent
@@ -481,7 +480,7 @@ async def test_scan_cancels_pending_inactivity_timeout(tmp_path, monkeypatch):
     discovery._coordinator.nikobus_command._connection.on_send = on_send
 
     await discovery._scan_module_registers(
-        "0E6C", "106C0E", range(0x00, 0x10), sub_byte="01"
+        "0E6C", "106C0E", range(0x10), sub_byte="01"
     )
 
     # The pre-existing timer got cancelled at scan start.

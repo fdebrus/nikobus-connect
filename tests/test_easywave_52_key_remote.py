@@ -33,7 +33,6 @@ from nikobus_connect.discovery.mapping import (
 )
 from nikobus_connect.discovery.protocol import convert_nikobus_address
 
-
 # Ground truth from the user's .migrated v1 file. Physical 0E31C0,
 # all 52 bus addresses keyed by their (human-readable) sub-code
 # labels. The label format matches the user's original naming so

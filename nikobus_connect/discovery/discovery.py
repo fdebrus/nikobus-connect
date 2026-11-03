@@ -8,40 +8,9 @@ import logging
 import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
-from .base import (
-    DecodedCommand,
-    DiscoveryProgress,
-    InventoryQueryType,
-    InventoryResult,
-    PHASE_FINALIZING,
-    PHASE_IDENTITY,
-    PHASE_INVENTORY,
-    PHASE_REGISTER_SCAN,
-)
-from .audio_decoder import AudioDecoder
-from .dimmer_decoder import DimmerDecoder
-from .pc_link_decoder import PcLinkDecoder
-from .pc_logic_decoder import PcLogicDecoder
-from .shutter_decoder import ShutterDecoder
-from .switch_decoder import SwitchDecoder
-from .mapping import (
-    DEVICE_TYPES,
-    KEY_MAPPING,
-    get_module_type_from_device_type,
-)
-from .protocol import (
-    VIRTUAL_CLASS_PC_LOGIC,
-    classify_device_type,
-    convert_nikobus_address,
-    derive_pc_logic_input_physicals,
-    reverse_hex,
-    virtual_button_class,
-    virtual_plate_address,
-)
-from ..coordinator_protocol import CoordinatorProtocol
 from ..const import (
     COMMAND_EXECUTION_DELAY,
     DEVICE_ADDRESS_INVENTORY,
@@ -55,6 +24,25 @@ from ..const import (
     MODULE_STATUS_TIMEOUT,
     PC_LINK_INVENTORY_SIGNATURE_BYTE,
 )
+from ..coordinator_protocol import CoordinatorProtocol
+from ..protocol import (
+    FUNC_MODULE_STATUS,
+    ModuleStatus,
+    make_pc_link_inventory_command,
+    parse_module_status,
+)
+from .audio_decoder import AudioDecoder
+from .base import (
+    PHASE_FINALIZING,
+    PHASE_IDENTITY,
+    PHASE_INVENTORY,
+    PHASE_REGISTER_SCAN,
+    DecodedCommand,
+    DiscoveryProgress,
+    InventoryQueryType,
+    InventoryResult,
+)
+from .dimmer_decoder import DimmerDecoder
 from .fileio import (
     REGISTRY_RECORD_SOURCES,
     VIRTUAL_BUTTON_MODEL,
@@ -64,12 +52,24 @@ from .fileio import (
     merge_linked_modules,
     strip_module_links,
 )
-from ..protocol import (
-    FUNC_MODULE_STATUS,
-    ModuleStatus,
-    make_pc_link_inventory_command,
-    parse_module_status,
+from .mapping import (
+    DEVICE_TYPES,
+    KEY_MAPPING,
+    get_module_type_from_device_type,
 )
+from .pc_link_decoder import PcLinkDecoder
+from .pc_logic_decoder import PcLogicDecoder
+from .protocol import (
+    VIRTUAL_CLASS_PC_LOGIC,
+    classify_device_type,
+    convert_nikobus_address,
+    derive_pc_logic_input_physicals,
+    reverse_hex,
+    virtual_button_class,
+    virtual_plate_address,
+)
+from .shutter_decoder import ShutterDecoder
+from .switch_decoder import SwitchDecoder
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -135,7 +135,7 @@ def _merge_passes(passes: tuple[ScanSection, ...]) -> tuple[ScanSection, ...]:
 def _full_sweep(sub_bytes: tuple[str, ...]) -> tuple[ScanSection, ...]:
     """Return a full 0x00..0xFF sweep for each given sub-byte."""
 
-    full = tuple(range(0x00, 0x100))
+    full = tuple(range(0x100))
     return tuple((s, full) for s in sub_bytes)
 
 
@@ -1048,7 +1048,7 @@ class NikobusDiscovery:
         # CF (Central Function) activation broadcasts classified from
         # unmatched link-record source addresses. Populated at end of
         # discovery by ``_classify_cf_broadcasts_from_unmatched``.
-        self.discovered_cf_broadcasts: dict[str, "CFBroadcast"] = {}
+        self.discovered_cf_broadcasts: dict[str, CFBroadcast] = {}
         self.reset_state()
 
     def _abort_discovery_run(self, context: str) -> None:
@@ -1482,7 +1482,7 @@ class NikobusDiscovery:
                         self._scan_event.wait(),
                         timeout=MODULE_SCAN_DATA_TIMEOUT,
                     )
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     pass
                 return True
             finally:
@@ -1525,7 +1525,7 @@ class NikobusDiscovery:
                 return False
             try:
                 msg = await asyncio.wait_for(queue.get(), timeout=remaining)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 return False
             try:
                 queue.task_done()
@@ -1984,7 +1984,7 @@ class NikobusDiscovery:
             len(self._accumulated_unmatched),
         )
 
-    def _extract_cf_outputs(self, addr: str) -> list["CFOutputMember"]:
+    def _extract_cf_outputs(self, addr: str) -> list[CFOutputMember]:
         """Pull (module, channel, mode) members for a CF broadcast
         address out of the accumulated command mapping.
 
@@ -3177,7 +3177,7 @@ class NikobusDiscovery:
         pc_link_info = DEVICE_TYPES.get("0A", {})
         name = pc_link_info.get("Name", "PC-Link")
         model = pc_link_info.get("Model", "05-200")
-        last_seen = datetime.now(timezone.utc).isoformat()
+        last_seen = datetime.now(UTC).isoformat()
         module_type = get_module_type_from_device_type("0A")
         base_device = {
             "description": name,
@@ -3580,7 +3580,7 @@ class NikobusDiscovery:
         if self._module_data is not None:
             entry = (self._module_data.get("nikobus_module") or {}).get(normalized)
             if isinstance(entry, dict):
-                entry["links_read_at"] = datetime.now(timezone.utc).isoformat()
+                entry["links_read_at"] = datetime.now(UTC).isoformat()
                 if self._on_module_save is not None:
                     await self._on_module_save()
         if self._button_data is None:
@@ -3880,7 +3880,7 @@ class NikobusDiscovery:
                 if 0 < number <= 0xFFFF:
                     component_number = number
 
-            last_seen = datetime.now(timezone.utc).isoformat()
+            last_seen = datetime.now(UTC).isoformat()
             device_entry = {
                 "description": name,
                 "discovered_name": name,
