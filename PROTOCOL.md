@@ -57,6 +57,36 @@ function `0x11` addressed to `0000` — a PC-Link presence check — whose
 acknowledgement is `$0511`. `#L0`/`#E0`/`#E1` control link/echo mode;
 after `#E1` the PC-Link relays bus events to the serial port.
 
+### The bus itself ‡
+
+This library never touches the bus wires: the PC-Link does. What one
+independent project shows of that layer is recorded here, read from the
+source of [rbierman/nikobus](https://github.com/rbierman/nikobus)
+(Ron Bierman, 2013–2019), a home-built bridge that sits on the two bus
+wires with a PIC16F690 and translates key telegrams to and from RS-232.
+Read on 2026-11-06; facts only, no code taken (the project has no
+licence), and none of it checked on a bus by this library.
+
+- **Levels.** The bridge pulls the bus down to about 8 V to claim it
+  and to about 4.5 V for each pulse.
+- **Bits.** A bit is one pulse of about 150 µs; the gap before the
+  pulse gives its value: about 0.6 ms for a 1, about 1.25 ms for a 0.
+  Its receiver takes 0.5 to 1.0 ms as a 1 and 1.0 to 1.7 ms as a 0,
+  and drops the telegram on anything else.
+- **A key telegram.** Bus claimed for about 10 ms, three 1 bits, a
+  pause of about 2.8 ms, a start pulse, 24 data bits **least
+  significant first**, about 6 ms, bus released.
+- **The 24 bits** are split as a 22-bit address and a 2-bit key code,
+  `(address << 2) | key`: the record form of §5. Sent least significant
+  bit first, the bits arrive in the reverse of the record's order,
+  which would explain why the `#N` address is the record bit-reversed
+  (an inference from the two sources, not observed on the wire). Four
+  key codes per address is also why an 8-key plate answers on its own
+  address and the next one up.
+- The bridge decodes these 24-bit key telegrams only: it reads no
+  module command or answer, so as a gateway it could press keys and
+  see presses but not read output states.
+
 ---
 
 ## 2. Frame families
@@ -95,6 +125,11 @@ frame    = "$" <10 + len(payload_hex) : 2 hex> <payload_hex> <CRC16:4 hex> <CRC8
   binary payload bytes, big-endian.
 - **CRC8** (poly `0x99`, init `0x00`) over the ASCII characters of the
   frame built so far (including `$` and the length).
+
+The CRC16 is also what the same independent project's checksum
+calculator computes (`nikobuscalc`, see §1): start `0xFFFF`, polynomial
+`0x1021`, over the function byte and the two address bytes in wire
+order.
 
 Both are confirmed against the vendor software: `nikobus.exe` computes
 the CRC16 over the binary payload, hands the frame to `serial.dll`,
