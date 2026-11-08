@@ -85,6 +85,8 @@ def test_vendor_refs_match_product_mdb() -> None:
         "S_DB_KNOP_1_RF868",
         "S_DB_KNOP_16_RF868_MINI",
         "S_DB_REMOTE4x5CH",
+        # 05-315 RF box, 4 channels (key 60), Nikobus-HA #575.
+        "S_DB_RFBOX4",
         # Sensors / actors
         "S_DB_ACTOR_SENSOR",
     }

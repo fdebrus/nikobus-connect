@@ -597,7 +597,8 @@ listed has a known byte, whether or not a module of it has been seen:
 | `0x2E` | 46 | SMS module 05-203 (output) | `S_DB_SMSOUT` | 16-bit | not catalogued |
 | `0x24` | 36 | RF plate, 16 keys 05-310 | `S_DB_KNOP_16_RF868` | 22-bit | not catalogued |
 | `0x36` | 54 | RF plate, 8 keys 05-305 (410-00003) | `S_DB_RF_WAND_8` | 22-bit | not catalogued |
-| `0x38`, `0x3C` | 56, 60 | RF box 05-315, 2 and 4 channels | `S_DB_RFBOX2`, `S_DB_RFBOX4` | 22-bit | not catalogued |
+| `0x38` | 56 | RF box 05-315, 2 channels | `S_DB_RFBOX2` | 22-bit | not catalogued (its two key codes are unknown) |
+| `0x3C` | 60 | RF box 05-315, 4 channels | `S_DB_RFBOX4` | 22-bit | catalogued 0.57.4 (first seen 2026-11-08, Nikobus-HA #575; keys 1C / 1D observed) |
 | `0x3E` | 62 | Remote 05-313 | `S_DB_REMOTE5x1CH` | 22-bit | not catalogued |
 | `0x27` | 39 | Remote 05-081 | `S_DB_REMOTE_CONTROL_2` | 22-bit | not catalogued |
 | `0x1A` | 26 | IR plate 05-09x, 4 keys | `S_DB_KNOP_4_IR_UNIQUE` | 22-bit | not catalogued |
