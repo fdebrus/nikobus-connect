@@ -361,6 +361,22 @@ DEVICE_TYPES: dict[str, dict[str, Any]] = {
         "Name": "RF868 mini transmitter, 4 channels",
         "VendorRef": "S_DB_KNOP_16_RF868_MINI",
     },
+    "3C": {
+        # 05-315 RF box, 4 channels: a receiver that puts the codes of
+        # paired RF transmitters on the bus as key telegrams. product.mdb
+        # KeyProductBase 60, ``S_DB_RFBOX4`` (PROTOCOL.md §11). First seen
+        # in a PC-Link inventory in Nikobus-HA #575 (2026-11-08), unit at
+        # 1EE2A9: its presses #N2551DE and #N6551DE are keys 1C and 1D of
+        # that address under the default 4-key layout. Keys 1A / 1B
+        # (A551DE / E551DE) follow from the same layout, unobserved.
+        # The 2-channel 05-315 (0x38, key 56) stays uncatalogued: which
+        # two key codes it uses is not known.
+        "Category": "Button",
+        "Model": "05-315",
+        "Channels": 4,
+        "Name": "RF box, 4 channels",
+        "VendorRef": "S_DB_RFBOX4",
+    },
     "3D": {
         # 05-312 Easywave hand-held remote control. Niko's product
         # page (https://www.niko.eu/en/article/05-312) describes it

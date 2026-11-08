@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.57.4
+
+- **The 05-315 RF box, 4 channels, is inventoried.** Its device-type byte `0x3C` was not catalogued, so the inventory dropped the unit as an unknown type and its presses arrived as unknown buttons. It is now a button with four keys under the default 4-key layout, named so that a host files it with RF transmitters. Evidence: product.mdb key 60 (`S_DB_RFBOX4`), and Nikobus-HA #575 (2026-11-08), a unit at `1EE2A9` whose presses `#N2551DE` and `#N6551DE` are its keys 1C and 1D; keys 1A and 1B follow from the same layout and have not been observed. The 2-channel version (`0x38`) stays uncatalogued until a capture shows which two key codes it uses.
+
 ## 0.57.3
 
 Fixes from a third audit, reproduced with probes before and after; and what a Feedback Module's LEDs taught us.
