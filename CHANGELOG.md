@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.57.5
+
+- **A group is no longer read before every write.** Since 0.56.1 a group whose state was more than three seconds old was read before it was written, so that an output switched at the wall was not switched back: about half a second before every relay click, on nearly every command. A host can now name the groups where that is not needed between two of its refreshes, `NikobusCommandHandler.set_steady_groups(groups, max_age)`, and report what may have changed outputs behind its buffer, `invalidate_group_state(address=None, group=None)`: one group, a module, or everything for a press it cannot attribute. A steady group is written at once while its state is younger than `max_age`; any other group is read first as before.
+- **`discovery.store.steady_groups(button_data, module_data)`** tells a host which groups qualify: those of a switch module whose own link table was read in full, with no link that leaves a timer running after the telegram and no PC-Link calendar channel driving it. "On / Off + operating time" counts as untimed only with a time of `0s`, how one install uses fifteen such links as plain on and off keys (2026-11-09). Dimmer and roller groups never qualify: a level may still be moving, a motor stops by its run time.
+- **`read_before_write_s`** on the handler, default three seconds as before; `None` never reads first, for a host whose interface does not answer state queries, where each read cost a timeout of up to five seconds before the write.
+- **A reconnect forgets every group's state.** Presses made while the line was down were not seen, so the first write to each group reads it.
+
 ## 0.57.4
 
 - **The 05-315 RF box, 4 channels, is inventoried.** Its device-type byte `0x3C` was not catalogued, so the inventory dropped the unit as an unknown type and its presses arrived as unknown buttons. It is now a button with four keys under the default 4-key layout, named so that a host files it with RF transmitters. Evidence: product.mdb key 60 (`S_DB_RFBOX4`), and Nikobus-HA #575 (2026-11-08), a unit at `1EE2A9` whose presses `#N2551DE` and `#N6551DE` are its keys 1C and 1D; keys 1A and 1B follow from the same layout and have not been observed. The 2-channel version (`0x38`) stays uncatalogued until a capture shows which two key codes it uses.

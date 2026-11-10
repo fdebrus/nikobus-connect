@@ -67,7 +67,9 @@ SET_COALESCE_WINDOW: Final[float] = 0.05
 # from the host's state buffer, so a group whose state is no longer
 # recent is read first: an output changed at the wall that the host has
 # not heard about yet would otherwise be switched back. Older than this
-# many seconds counts as not recent.
+# many seconds counts as not recent. The default of a handler's
+# ``read_before_write_s``; a group the host declared steady
+# (``set_steady_groups``) is given the host's own, longer limit.
 SET_READ_BEFORE_WRITE_S: Final[float] = 3.0
 # How many times a host-injected key press (``#N``) is repeated. A real
 # key repeats its telegram while held and modules act on a telegram seen

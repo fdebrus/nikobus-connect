@@ -52,6 +52,18 @@ LEGACY_KEEP_KEY = "legacy_keep"
 MemberSet = frozenset[tuple[str, int, str]]
 
 
+#: Switch-module link modes whose effect is over when the key's telegram
+#: ends: nothing happens to the output afterwards without another
+#: telegram. By the names of the vendor's mode table
+#: (``SWITCH_MODE_MAPPING``): on / off, pushbutton, impulse, light scene.
+_STEADY_SWITCH_MODES: frozenset[str] = frozenset({"M01", "M04", "M05", "M14", "M15"})
+#: "On / Off + operating time": steady only with an operating time of
+#: zero, which leaves nothing to happen later. An install with fifteen
+#: such links on one module, all at ``0s``, uses them as the on and off
+#: keys of two-key controls (2026-11-09).
+_ZERO_TIME_SWITCH_MODES: frozenset[str] = frozenset({"M02", "M03"})
+
+
 # --- member sets -----------------------------------------------------------
 
 
@@ -473,6 +485,83 @@ def cf_cover_members(cf: Mapping[str, Any] | None) -> list[dict[str, Any]]:
 # --- the project file's colour-controller links ----------------------------
 
 
+def _is_steady_switch_link(output: Mapping[str, Any]) -> bool:
+    mode = mode_code(output.get("mode")) or ""
+    if mode in _STEADY_SWITCH_MODES:
+        return True
+    if mode in _ZERO_TIME_SWITCH_MODES:
+        return "".join(str(output.get("t1") or "").split()).lower() == "0s"
+    return False
+
+
+def steady_groups(
+    button_data: Mapping[str, Any] | None, module_data: Mapping[str, Any] | None
+) -> set[tuple[str, int]]:
+    """The output groups that only change when a key telegram is seen.
+
+    A host writes a module six outputs at a time from its own buffer,
+    and reads the group first when the buffer may be behind
+    (``NikobusCommandHandler``). For the groups returned here it need
+    not, between two of its regular refreshes, as long as it forgets a
+    group's state on every press that reaches it: nothing but a key
+    telegram changes their outputs. A group qualifies when
+
+    - it belongs to a switch module whose own link table was read in
+      full (``links_read_at``), so every link on it is known;
+    - every link on it is in a mode with no timer running after the
+      telegram (:data:`_STEADY_SWITCH_MODES`, or an operating time of
+      zero);
+    - no PC-Link calendar channel drives it: what the PC-Link sends
+      when it fires one is not relayed.
+
+    Dimmer groups never qualify (a level may still be moving after the
+    last telegram) and neither do roller groups (a motor stops by its
+    run time). ``(module address, group)`` pairs, group 1 for channels
+    1-6 and 2 for 7-12.
+    """
+    modules = (module_data or {}).get("nikobus_module")
+    steady: set[tuple[str, int]] = set()
+    if not isinstance(modules, Mapping):
+        return steady
+    for address, entry in modules.items():
+        if not isinstance(entry, Mapping) or entry.get("module_type") != "switch_module":
+            continue
+        if not entry.get("links_read_at"):
+            continue
+        channels = entry.get("channels")
+        count = len(channels) if isinstance(channels, list) else 0
+        if count:
+            steady.add((str(address).upper(), 1))
+        if count > 6:
+            steady.add((str(address).upper(), 2))
+
+    buttons = (button_data or {}).get("nikobus_button")
+    if not isinstance(buttons, Mapping):
+        return steady
+    for phys in buttons.values():
+        if not isinstance(phys, Mapping):
+            continue
+        calendar = bool(phys.get("calendar_channel"))
+        for op_point in (phys.get("operation_points") or {}).values():
+            if not isinstance(op_point, Mapping):
+                continue
+            for link in op_point.get("linked_modules") or []:
+                if not isinstance(link, Mapping):
+                    continue
+                module = str(link.get("module_address") or "").upper()
+                for output in link.get("outputs") or []:
+                    if not isinstance(output, Mapping):
+                        continue
+                    channel = output.get("channel")
+                    if not isinstance(channel, int):
+                        # Which group it drives is unknown: neither is steady.
+                        steady -= {(module, 1), (module, 2)}
+                        continue
+                    if calendar or not _is_steady_switch_link(output):
+                        steady.discard((module, 1 if channel <= 6 else 2))
+    return steady
+
+
 def apply_rgb_links(
     modules: dict[str, Any],
     buttons: dict[str, Any],
@@ -585,4 +674,5 @@ __all__ = [
     "is_roller_member",
     "member_set_from_outputs",
     "reconcile_inventory",
+    "steady_groups",
 ]

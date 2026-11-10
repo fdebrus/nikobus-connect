@@ -6,7 +6,7 @@ import asyncio
 import inspect
 import logging
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterable
 from typing import Any
 
 from .const import (
@@ -78,6 +78,13 @@ class NikobusCommandHandler:
         # pushed frame, our own acknowledged write), on the monotonic
         # clock; and the channel writes of a group frame being sent now.
         self._group_known_at: dict[tuple[str, int], float] = {}
+        #: A group whose state is older than this many seconds is read
+        #: before it is written; ``None`` never reads first (a host whose
+        #: interface does not answer state queries).
+        self.read_before_write_s: float | None = SET_READ_BEFORE_WRITE_S
+        # Groups the host declared steady (``set_steady_groups``) and the
+        # age up to which their state is written without a read.
+        self._steady_groups: dict[tuple[str, int], float] = {}
         self._writing_sets: dict[tuple[str, int], dict[int, int]] = {}
 
     async def start(self) -> None:
@@ -272,6 +279,39 @@ class NikobusCommandHandler:
         known = self._group_known_at.get((address.upper(), int(group)))
         return None if known is None else time.monotonic() - known
 
+    def set_steady_groups(self, groups: Iterable[tuple[str, int]], max_age: float) -> None:
+        """Declare the groups whose outputs only change when a key telegram is seen.
+
+        Such a group is written without a read while its state is younger
+        than ``max_age`` seconds (a host passes its own refresh cadence),
+        instead of ``read_before_write_s``. The host keeps its side of
+        the bargain with :meth:`invalidate_group_state` on every press
+        that may have reached the group. Replaces the previous set.
+        """
+        self._steady_groups = {
+            (str(address).upper(), int(group)): float(max_age) for address, group in groups
+        }
+
+    @property
+    def steady_groups(self) -> frozenset[tuple[str, int]]:
+        """The groups declared steady, for a host's diagnostics."""
+        return frozenset(self._steady_groups)
+
+    def invalidate_group_state(self, address: str | None = None, group: int | None = None) -> None:
+        """Forget when a group's state was last known, so its next write reads first.
+
+        For a host that saw something that may have changed outputs
+        behind the buffer: a key press, by a person or its own. One
+        group, both groups of ``address``, or every group when no
+        address is given (a press that cannot be attributed).
+        """
+        if address is None:
+            self._group_known_at.clear()
+            return
+        addr = address.upper()
+        for known_group in (1, 2) if group is None else (int(group),):
+            self._group_known_at.pop((addr, known_group), None)
+
     def apply_group_state(self, address: str, group: int, state_hex: str) -> bool:
         """Store a module group's reported state, keeping writes not yet made.
 
@@ -318,8 +358,12 @@ class NikobusCommandHandler:
         directly; a failed read leaves the buffer as it was and the
         write goes ahead.
         """
+        limit = self.read_before_write_s
+        if limit is None:
+            return
+        limit = self._steady_groups.get((address.upper(), int(group)), limit)
         age = self.group_state_age(address, group)
-        if age is not None and age <= SET_READ_BEFORE_WRITE_S:
+        if age is not None and age <= limit:
             return
         command = make_pc_link_command(0x12 if int(group) == 1 else 0x17, address)
         try:
@@ -678,6 +722,8 @@ class NikobusCommandHandler:
         discarded = self.drain_queue()
         self._queued_get_keys.clear()
         self._pending_set_groups.clear()
+        # Presses made while the line was down were not seen.
+        self._group_known_at.clear()
         if discarded:
             _LOGGER.info(
                 "Command handler reset: %d stale command(s) discarded", discarded
