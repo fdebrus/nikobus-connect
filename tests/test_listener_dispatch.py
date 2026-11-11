@@ -9,6 +9,7 @@ response queue while a caller is waiting (``_awaiting_response``), and
 
 from __future__ import annotations
 
+import warnings
 from unittest.mock import MagicMock
 
 from nikobus_connect.listener import NikobusEventListener
@@ -272,3 +273,23 @@ async def test_awaited_answer_is_not_counted_as_pushed() -> None:
     listener._awaiting_response = True
     await listener._dispatch_message("$1C6C0E00730000FF00008F49C5")
     assert listener.feedback_answers_seen == 0
+
+
+# ---------------------------------------------------------------------------
+# Callbacks
+# ---------------------------------------------------------------------------
+
+
+async def test_a_callback_is_awaited_or_called_without_a_deprecation_warning() -> None:
+    """``asyncio.iscoroutinefunction`` warns on Python 3.14 and goes in 3.16."""
+    seen: list[str] = []
+
+    async def awaited(message: str) -> None:
+        seen.append(f"awaited {message}")
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        await NikobusEventListener._invoke(awaited, "a")
+        await NikobusEventListener._invoke(seen.append, "b")
+        await NikobusEventListener._invoke(None, "c")
+    assert seen == ["awaited a", "b"]
