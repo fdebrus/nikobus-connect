@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 import re
 from collections.abc import Callable
@@ -127,7 +128,7 @@ class NikobusEventListener:
         function. No-op when ``callback`` is ``None``."""
         if callback is None:
             return
-        if asyncio.iscoroutinefunction(callback):
+        if inspect.iscoroutinefunction(callback):
             await callback(*args)
         else:
             callback(*args)

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.57.6
+
+- **No deprecation warning on Python 3.14.** The listener asked `asyncio.iscoroutinefunction` whether a callback is to be awaited, once per frame; Python 3.14 warns on every call and 3.16 removes the function. It asks `inspect.iscoroutinefunction` now. Seen in Nikobus-HA's test run on Python 3.14 (2026-11-11): 468 warnings from that one line. Nothing changes in what the listener does.
+- CI runs the tests on Python 3.14 as well, the version Home Assistant runs on.
+
 ## 0.57.5
 
 - **A group is no longer read before every write.** Since 0.56.1 a group whose state was more than three seconds old was read before it was written, so that an output switched at the wall was not switched back: about half a second before every relay click, on nearly every command. A host can now name the groups where that is not needed between two of its refreshes, `NikobusCommandHandler.set_steady_groups(groups, max_age)`, and report what may have changed outputs behind its buffer, `invalidate_group_state(address=None, group=None)`: one group, a module, or everything for a press it cannot attribute. A steady group is written at once while its state is younger than `max_age`; any other group is read first as before.
