@@ -849,7 +849,10 @@ ROLLER_TIMER_MAPPING: dict[int, list[str | None]] = {
 
 # Roller M06 ("Open with operating time") and M07 ("Close with operating
 # time") use the T1 nibble to encode a PAIRED duration rather than a
-# single operating time. Format is ``<long-press-time> / <short-press-time>``.
+# single operating time. Format is ``<run time> / <operation time>``:
+# how long the motor runs, and how long the key has to be held before
+# it starts (the vendor manual's table "Run times and operation times
+# for M6 and M7", PMNikobus_EN R07244).
 #
 # Per Niko ParamBase ``S_DB_ROLLUIK_T3`` (product.mdb KP=6). Used only for
 # mode bytes 0x05 (M06) and 0x06 (M07) — the regular operating-time modes
