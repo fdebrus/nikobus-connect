@@ -30,7 +30,7 @@ from .mapping import (
     TWO_BUTTON_LAYOUTS,
     TWO_BUTTON_PLATE_KEYS,
 )
-from .meaning import LinkMeaning, describe_link
+from .meaning import LinkMeaning, describe_link, key_position
 from .protocol import is_motion_detector, motion_detector_bus_addresses
 
 __all__ = [
@@ -64,6 +64,7 @@ __all__ = [
     "find_operation_point",
     "has_per_plate_key_layout",
     "is_motion_detector",
+    "key_position",
     "motion_detector_bus_addresses",
     "two_button_bus_addresses",
 ]

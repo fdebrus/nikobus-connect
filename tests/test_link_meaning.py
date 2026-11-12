@@ -16,6 +16,7 @@ from nikobus_connect.discovery import (
     LinkMeaning,
     describe_link,
     dimmer_decoder,
+    key_position,
     shutter_decoder,
     switch_decoder,
 )
@@ -178,3 +179,43 @@ def test_missing_value_is_not_invented() -> None:
 )
 def test_what_the_manuals_do_not_cover_is_not_explained(module_type: str | None, mode: str | None) -> None:
     assert describe_link(module_type, mode) is None
+
+
+@pytest.mark.parametrize(
+    ("key", "position"),
+    [
+        pytest.param("1A", "upper_left", id="upper-left"),
+        pytest.param("1b", "lower_left", id="lower-left"),
+        pytest.param("2C", "upper_right", id="second-half-of-an-eight-key-plate"),
+        pytest.param("1D", "lower_right", id="lower-right"),
+        pytest.param("IR:02A", None, id="an-ir-code-has-no-place"),
+        pytest.param(None, None, id="no-key"),
+    ],
+)
+def test_a_keys_place_on_its_plate(key: str | None, position: str | None) -> None:
+    assert key_position(key) == position
+
+
+@pytest.mark.parametrize(
+    ("module_type", "mode_raw", "key", "said"),
+    [
+        pytest.param("switch_module", 0, "1C", "This key switches the output on;", id="switch-upper"),
+        pytest.param("switch_module", 0, "1D", "This key switches the output off;", id="switch-lower"),
+        pytest.param("dimmer_module", 0, "1A", "holding it dims up", id="dimmer-upper"),
+        pytest.param("dimmer_module", 0, "1B", "holding it dims down", id="dimmer-lower"),
+        pytest.param("roller_module", 0, "2A", "This key opens the shutter", id="roller-upper"),
+        pytest.param("roller_module", 0, "2B", "This key closes the shutter", id="roller-lower"),
+        pytest.param("dimmer_module", 8, "1C", "Holding this key dims the output up.", id="preset-upper-right"),
+        pytest.param("roller_module", 4, "1D", "This key stops the shutter.", id="rf-lower-right"),
+        pytest.param("switch_module", 0, "IR:02A", "Two keys: the upper one", id="an-ir-code-keeps-the-pair"),
+        pytest.param("switch_module", 5, "1C", "Switches the output on at once", id="a-one-key-mode-is-unchanged"),
+    ],
+)
+def test_a_mode_on_several_keys_is_said_for_the_key_it_is_on(
+    module_type: str, mode_raw: int, key: str, said: str
+) -> None:
+    record = _record(module_type, mode_raw, 2, 2)
+    meaning = describe_link(module_type, record["M"], record["T1"], record["T2"], key=key)
+    assert meaning is not None
+    assert said in meaning.summary
+    assert "{" not in meaning.summary

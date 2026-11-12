@@ -36,6 +36,27 @@ DIM_TIME = "dim_time"
 DIM_ON_TIME = "dim_on_time"
 DIM_OFF_TIME = "dim_off_time"
 
+UPPER = "upper"
+LOWER = "lower"
+UPPER_LEFT = "upper_left"
+LOWER_LEFT = "lower_left"
+UPPER_RIGHT = "upper_right"
+LOWER_RIGHT = "lower_right"
+
+#: Where a key sits in its group of four, by the letter its label ends
+#: in: A upper left, B lower left, C upper right, D lower right. A
+#: two-key plate has A over B.
+#:
+#: From the button mappings of the openHAB Nikobus binding's
+#: documentation, which draws the four-key plate with buttons 3 and 1
+#: on top and 4 and 2 below and names them A, B, C, D in that order.
+#: It agrees with one install whose owner named every key by what it
+#: does: 1A "up" and 1B "down", 1C "on" and 1D "off", 2A "open" and 2B
+#: "close" (2026-11-12). Not checked on a plate of every type; an IR
+#: code is no key of a plate and has no place.
+_POSITIONS: dict[str, str] = {"A": UPPER_LEFT, "B": LOWER_LEFT, "C": UPPER_RIGHT, "D": LOWER_RIGHT}
+_KEY_LABEL_RE = re.compile(r"^[12][A-D]$")
+
 _RUN_AND_HOLD = "run_and_hold"
 _DIM_CURVE = "dim_curve"
 
@@ -47,7 +68,7 @@ class LinkMeaning:
     #: The vendor's mode code, ``"M06"``.
     mode: str
     #: How many keys of the plate the mode takes: 1, 2 (upper and
-    #: lower) or 4. The record does not say which key is which.
+    #: lower) or 4.
     keys: int
     #: One or two sentences on what a press does to the output, with
     #: the link's own values in them.
@@ -170,6 +191,59 @@ _MODES: dict[str, dict[str, _Mode]] = {
     "roller_module": _ROLLER,
 }
 
+#: What one key of a two- or four-key mode does, by where it sits on the
+#: plate: the same sentences as above, split per key.
+_BY_KEY: dict[str, dict[str, dict[str, str]]] = {
+    "switch_module": {
+        "M01": {
+            UPPER: "This key switches the output on; the lower key of the pair switches it off.",
+            LOWER: "This key switches the output off; the upper key of the pair switches it on.",
+        },
+        "M15": {
+            UPPER: "A short press on this key recalls the state stored for this output, a press of more "
+            "than 3 s stores its present state; the lower key of the pair switches it off.",
+            LOWER: "This key switches the output off; the upper key of the pair recalls the light scene.",
+        },
+    },
+    "dimmer_module": {
+        "M01": {
+            UPPER: "A short press on this key switches the output on at its last level, holding it dims up; "
+            "the lower key of the pair switches off and dims down.",
+            LOWER: "A short press on this key switches the output off, holding it dims down; "
+            "the upper key of the pair switches on and dims up.",
+        },
+        "M02": {
+            UPPER: "A short press on this key switches the output on at its last level; a long press dims.",
+            LOWER: "A short press on this key switches the output off; a long press dims.",
+        },
+        "M03": {
+            UPPER_LEFT: "A short press on this key recalls the level stored for this output; "
+            "holding it stores its present level.",
+            LOWER_LEFT: "This key switches the light scene off.",
+            UPPER_RIGHT: "Holding this key dims the whole scene up.",
+            LOWER_RIGHT: "Holding this key dims the whole scene down.",
+        },
+        "M11": {
+            UPPER_LEFT: "This key sets the output to {level}, whatever its last level.",
+            LOWER_LEFT: "This key dims the output off.",
+            UPPER_RIGHT: "Holding this key dims the output up.",
+            LOWER_RIGHT: "Holding this key dims the output down.",
+        },
+    },
+    "roller_module": {
+        "M01": {
+            UPPER: "This key opens the shutter, and stops it while it moves; the lower key of the pair closes it.",
+            LOWER: "This key closes the shutter, and stops it while it moves; the upper key of the pair opens it.",
+        },
+        "M05": {
+            UPPER_LEFT: "This key opens the shutter.",
+            LOWER_LEFT: "This key closes the shutter.",
+            UPPER_RIGHT: "This key stops the shutter.",
+            LOWER_RIGHT: "This key stops the shutter.",
+        },
+    },
+}
+
 _MISSING: dict[str, str] = {OFF_AFTER: "the set time", ON_AFTER: "the set time", LEVEL: "its preset level"}
 
 _DURATION_RE = re.compile(r"^\s*(\d+(?:[.,]\d+)?)\s*(s|m)", re.IGNORECASE)
@@ -248,8 +322,26 @@ def _parameters(spec: _Mode, t1: str | None, t2: str | None) -> dict[str, str]:
     return values
 
 
-def _summary(spec: _Mode, values: dict[str, str]) -> str:
-    parts = [spec.text.format_map({**_MISSING, **values})]
+def key_position(key: str | None) -> str | None:
+    """Where a key sits on its plate, from its label: ``"1C"`` is upper right.
+
+    ``None`` for anything that is not a key of a plate, an IR code among them.
+    """
+    label = (key or "").strip().upper()
+    return _POSITIONS[label[1]] if _KEY_LABEL_RE.match(label) else None
+
+
+def _text_for_key(module_type: str, code: str, spec: _Mode, position: str | None) -> str:
+    """The sentence for this key where the mode gives each key its own part, else the mode's."""
+    by_position = _BY_KEY.get(module_type, {}).get(code)
+    if by_position is None or position is None:
+        return spec.text
+    # A two-key mode knows upper and lower only.
+    return by_position.get(position) or by_position.get(position.partition("_")[0]) or spec.text
+
+
+def _summary(text: str, values: dict[str, str]) -> str:
+    parts = [text.format_map({**_MISSING, **values})]
     if HOLD_TIME in values:
         parts.append(f"The key has to be held for {values[HOLD_TIME]} first.")
     if RUN_TIME in values:
@@ -265,7 +357,12 @@ def _summary(spec: _Mode, values: dict[str, str]) -> str:
 
 
 def describe_link(
-    module_type: str | None, mode: str | None, t1: str | None = None, t2: str | None = None
+    module_type: str | None,
+    mode: str | None,
+    t1: str | None = None,
+    t2: str | None = None,
+    *,
+    key: str | None = None,
 ) -> LinkMeaning | None:
     """What a link does, from the fields a decoded link record holds.
 
@@ -274,10 +371,15 @@ def describe_link(
     code (``"M06 (Delayed off (up to 2h))"`` or ``"M06"``), ``t1`` and
     ``t2`` the labels the decoder wrote. ``None`` for a module type or
     a mode the manuals do not cover, the colour controller's among them.
+
+    With ``key``, the label of the key the link is on (``"1C"``), a mode
+    that takes two or four keys is said for that key: what it does, not
+    what the pair does.
     """
     code = mode_code(mode)
     spec = _MODES.get(module_type or "", {}).get(code or "")
     if spec is None or code is None:
         return None
     values = _parameters(spec, t1, t2)
-    return LinkMeaning(mode=code, keys=spec.keys, summary=_summary(spec, values), parameters=values)
+    text = _text_for_key(module_type or "", code, spec, key_position(key))
+    return LinkMeaning(mode=code, keys=spec.keys, summary=_summary(text, values), parameters=values)

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.57.8
+
+- **A link on several keys is said for the key it is on.** `describe_link(..., key="1C")` takes the label of the key the link is on. A mode that takes two or four keys then says what that key does ("This key switches the output on; the lower key of the pair switches it off.") instead of what the pair does. Without `key`, and for an IR code, the sentence is the pair's as before.
+- **`discovery.key_position(label)`** says where a key sits in its group of four: A upper left, B lower left, C upper right, D lower right; a two-key plate has A over B. From the button mappings in the documentation of the openHAB Nikobus binding, which draws the four-key plate with buttons 3 and 1 on top and 4 and 2 below and names them A, B, C, D in that order. It agrees with one install whose owner named every key by what it does: 1A "up" and 1B "down", 1C "on" and 1D "off", 2A "open" and 2B "close" (2026-11-12). Not checked on a plate of every type.
+
 ## 0.57.7
 
 - **A link said in words: `discovery.describe_link(module_type, mode, t1, t2)`.** A link record carries a mode and the two values the vendor calls T1 and T2, after a module's setting wheels; what a wheel sets depends on the module and the mode, and until now a host got the labels (`"2m"`, `"4,0 V"`) without that. The function returns a `LinkMeaning`: the mode code, how many keys of the plate the mode takes, one or two sentences on what a press does to the output with the link's own values in them, and the values under what they are: `hold_time`, `off_after`, `on_after`, `run_time`, `level`, `dim_time`, or `dim_on_time` and `dim_off_time`. For a switch module's "delayed off" at `2m` that is `{"off_after": "2 min"}` and "Switches the output on at once, and off again after 2 min."
