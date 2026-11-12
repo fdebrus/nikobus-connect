@@ -27,7 +27,8 @@ PC-Link protocol over TCP for testing without hardware.
 - `discovery/` PC-Link inventory and per-module link-table scan
   (`discovery.py`), decoders per module family, `mapping.py` (device types,
   key layouts, modes), `fileio.py` (merging into the host's stores),
-  `store.py` / `progress.py` (pure read-back helpers for a host).
+  `store.py` / `progress.py` (pure read-back helpers for a host), `meaning.py`
+  (what a link's mode and T1 / T2 mean, from the vendor manuals).
 - `nkb/` reader for the vendor `.nkb` project file (vendored Access parser in
   `nkb/_access_parser`, not linted or type-checked).
 - `PROTOCOL.md` the protocol notes. `CHANGELOG.md` one entry per release.

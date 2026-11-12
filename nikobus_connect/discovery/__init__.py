@@ -30,6 +30,7 @@ from .mapping import (
     TWO_BUTTON_LAYOUTS,
     TWO_BUTTON_PLATE_KEYS,
 )
+from .meaning import LinkMeaning, describe_link
 from .protocol import is_motion_detector, motion_detector_bus_addresses
 
 __all__ = [
@@ -55,7 +56,9 @@ __all__ = [
     "DiscoveryProgress",
     "InventoryQueryType",
     "InventoryResult",
+    "LinkMeaning",
     "NikobusDiscovery",
+    "describe_link",
     "find_ir_operation_point",
     "find_module",
     "find_operation_point",

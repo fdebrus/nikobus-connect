@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.57.7
+
+- **A link said in words: `discovery.describe_link(module_type, mode, t1, t2)`.** A link record carries a mode and the two values the vendor calls T1 and T2, after a module's setting wheels; what a wheel sets depends on the module and the mode, and until now a host got the labels (`"2m"`, `"4,0 V"`) without that. The function returns a `LinkMeaning`: the mode code, how many keys of the plate the mode takes, one or two sentences on what a press does to the output with the link's own values in them, and the values under what they are: `hold_time`, `off_after`, `on_after`, `run_time`, `level`, `dim_time`, or `dim_on_time` and `dim_off_time`. For a switch module's "delayed off" at `2m` that is `{"off_after": "2 min"}` and "Switches the output on at once, and off again after 2 min."
+- Every sentence and every parameter is the vendor manual's (PMNikobus_EN R07244, chapter 4, the modes of the switch module, the shutter module and the dimcontroller; the compact dim controller's leaflet PM005-00802 for its M13 and M14). Where the manuals say nothing about a wheel in a mode, the value is left out: the dimmer's blinking mode ignores both wheels, and nothing is said of the colour controller's modes or of a switch module's sequencer time, which the decoder does not label.
+- A preset is given as a share of full as well, `"40 % (4,0 V)"`. The manual's example is 5 V for 50 %; one dimmer output with a "preset on" link at 4,0 V read back `0x66` of `0xFF` after the key's telegram (2026-11-11), which is 40 %. One output on one install.
+- A hold time of `0s` is no condition and is left out. The record does not say which key of a two- or four-key mode is the upper one, so the sentences speak of "the upper one" as the manual does.
+- The comment on the shutter module's M06 / M07 value pair called it long-press and short-press time; by the manual's table it is the run time and the time the key has to be held. Labels and decoding are unchanged.
+
 ## 0.57.6
 
 - **No deprecation warning on Python 3.14.** The listener asked `asyncio.iscoroutinefunction` whether a callback is to be awaited, once per frame; Python 3.14 warns on every call and 3.16 removes the function. It asks `inspect.iscoroutinefunction` now. Seen in Nikobus-HA's test run on Python 3.14 (2026-11-11): 468 warnings from that one line. Nothing changes in what the listener does.
