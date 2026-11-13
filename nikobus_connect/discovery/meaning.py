@@ -20,9 +20,10 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from typing import Any
 
 from ..nkb.parser import mode_code
-from .mapping import DIMMER_T1_1
+from .mapping import DEVICE_TYPES, DIMMER_T1_1
 
 #: How long the key has to be held before the link acts; the manuals'
 #: "operation time", meant for master functions.
@@ -56,6 +57,55 @@ LOWER_RIGHT = "lower_right"
 #: code is no key of a plate and has no place.
 _POSITIONS: dict[str, str] = {"A": UPPER_LEFT, "B": LOWER_LEFT, "C": UPPER_RIGHT, "D": LOWER_RIGHT}
 _KEY_LABEL_RE = re.compile(r"^[12][A-D]$")
+
+UPPER_MID_LEFT = "upper_mid_left"
+LOWER_MID_LEFT = "lower_mid_left"
+UPPER_MID_RIGHT = "upper_mid_right"
+LOWER_MID_RIGHT = "lower_mid_right"
+
+#: Where each key sits on a wall plate, by the number of keys it has.
+#: A two-key plate has A over B; a four-key plate A and B on the left,
+#: C and D on the right; an eight-key plate four columns, from the
+#: left 1A / 1B, 1C / 1D, 2A / 2B, 2C / 2D, the first of each on top.
+#:
+#: From the vendor manual's drawings of the plates 4-072, 4-074 and
+#: 4-078 (shared by the maintainer, 2026-11-13), which agree with the
+#: grids in the button mappings of the openHAB Nikobus binding's
+#: documentation: "3 1 / 4 2" with 3 = A, 4 = B, 1 = C, 2 = D, and
+#: "7 5 3 1 / 8 6 4 2" with 7 = 1A, 5 = 1C, 3 = 2A, 1 = 2C. Taken to
+#: hold for the other plates with as many keys (feedback LEDs, IR
+#: receiver, 4*-082, 4*-084); not checked on one of each.
+_PLATE_POSITIONS: dict[int, dict[str, str]] = {
+    2: {"1A": UPPER, "1B": LOWER},
+    4: {"1A": UPPER_LEFT, "1B": LOWER_LEFT, "1C": UPPER_RIGHT, "1D": LOWER_RIGHT},
+    8: {
+        "1A": UPPER_LEFT,
+        "1B": LOWER_LEFT,
+        "1C": UPPER_MID_LEFT,
+        "1D": LOWER_MID_LEFT,
+        "2A": UPPER_MID_RIGHT,
+        "2B": LOWER_MID_RIGHT,
+        "2C": UPPER_RIGHT,
+        "2D": LOWER_RIGHT,
+    },
+}
+#: The wall plates, by device-type byte. An interface, a transmitter or
+#: a detector has as many "keys" but no plate they sit on.
+_PLATE_KEY_COUNT: dict[str, int] = {
+    "04": 2,
+    "05": 2,
+    "3F": 2,
+    "10": 2,
+    "06": 4,
+    "40": 4,
+    "11": 4,
+    "0C": 4,
+    "12": 8,
+    "41": 8,
+}
+_PLATE_KEY_COUNT_BY_MODEL: dict[str, int] = {
+    str(DEVICE_TYPES[device_type]["Model"]): count for device_type, count in _PLATE_KEY_COUNT.items()
+}
 
 _RUN_AND_HOLD = "run_and_hold"
 _DIM_CURVE = "dim_curve"
@@ -329,6 +379,25 @@ def key_position(key: str | None) -> str | None:
     """
     label = (key or "").strip().upper()
     return _POSITIONS[label[1]] if _KEY_LABEL_RE.match(label) else None
+
+
+def plate_key_position(entry: Any, key: str | None) -> str | None:
+    """Where a key sits on its wall plate: ``"upper_left"``, or ``"upper"`` on a two-key plate.
+
+    ``entry`` is the plate's entry in the button store. The plate is
+    known by its stored device type, or by its model for a store
+    written without one. ``None`` for anything that is not a key of a
+    wall plate: an interface's input, a transmitter, a detector, an IR
+    code.
+    """
+    if not isinstance(entry, dict):
+        return None
+    count = _PLATE_KEY_COUNT.get(str(entry.get("device_type") or "").upper())
+    if count is None:
+        count = _PLATE_KEY_COUNT_BY_MODEL.get(str(entry.get("model") or "").strip())
+    if count is None:
+        return None
+    return _PLATE_POSITIONS[count].get((key or "").strip().upper())
 
 
 def _text_for_key(module_type: str, code: str, spec: _Mode, position: str | None) -> str:
