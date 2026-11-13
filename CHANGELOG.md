@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.57.9
+
+- **`discovery.plate_key_position(entry, key)`** says where a key sits on its wall plate, from the plate's entry in the button store and the key's label. A two-key plate has `upper` and `lower`; a four-key plate `upper_left`, `lower_left`, `upper_right`, `lower_right`; an eight-key plate four columns, from the left 1A / 1B, 1C / 1D, 2A / 2B, 2C / 2D, with `upper_mid_left`, `upper_mid_right` and their lower twins for the two in the middle. `None` for what is not a key of a wall plate: an interface's input, an RF transmitter, a motion detector, an IR code.
+- The layouts are the vendor manual's drawings of the plates 4-072, 4-074 and 4-078 (shared by the maintainer, 2026-11-13). They agree with the grids in the button mappings of the openHAB Nikobus binding's documentation, "3 1 / 4 2" and "7 5 3 1 / 8 6 4 2". They are taken to hold for the other plates with as many keys (05-061, 05-060-02, 4*-082; 05-064-02, 4*-084, 05-09x; 05-078-02), which has not been checked on one of each.
+- `key_position(label)` is unchanged: it says where a key sits in its group of four, which is what `describe_link` needs to tell the upper key of a pair from the lower one.
+
 ## 0.57.8
 
 - **A link on several keys is said for the key it is on.** `describe_link(..., key="1C")` takes the label of the key the link is on. A mode that takes two or four keys then says what that key does ("This key switches the output on; the lower key of the pair switches it off.") instead of what the pair does. Without `key`, and for an IR code, the sentence is the pair's as before.
