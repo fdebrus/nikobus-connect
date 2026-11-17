@@ -326,11 +326,16 @@ def derive_pc_logic_input_physicals(
     (1-indexed). The two input-module families use DIFFERENT firmware
     schemes — both hardware-validated from wire captures:
 
-    * ``pc_logic`` (05-201): ``0x600000 | ((addr >> 1) << 4) | slot``.
-      Validated on three installs: ``940C → 64A061..64A066`` (12 bus
-      events, 2026-05-18), ``8DC8 → 646E41..646E46``, and ``8806``
-      (issue #485 — its slot-2 pair ``13008B/53008B`` captured from a
-      physical contact matches this scheme exactly).
+    * ``pc_logic`` (05-201): ``0x600000 | (addr << 3) | slot``.
+      Validated on three installs with an even address: ``940C →
+      64A061..64A066`` (12 bus events, 2026-05-18), ``8DC8 →
+      646E41..646E46``, and ``8806`` (issue #485 — its slot-2 pair
+      ``13008B/53008B`` captured from a physical contact matches this
+      scheme exactly); and on one with an odd address, ``8F71 →
+      647B89..647B8E`` (Nikobus-HA #592, 2026-11-13: contacts on
+      inputs 1 and 2 send ``24778B/64778B`` and ``14778B/54778B``).
+      The address's lowest bit lands on bit 3, so an odd address has
+      room for slots 1 to 7 only; the module has six inputs.
     * ``interface_module`` (05-206): ``0x180000 + addr + slot``.
       Derived and validated from issue #485's captures on unit
       ``0548``: slot 1 emits ``24A806/64A806`` and slot 2 emits
@@ -371,7 +376,7 @@ def derive_pc_logic_input_physicals(
             for slot in range(1, channel_count + 1)
         ]
 
-    base = 0x600000 | ((addr >> 1) << 4)
+    base = 0x600000 | (addr << 3)
     return [f"{base | slot:06X}" for slot in range(1, channel_count + 1)]
 
 
@@ -382,9 +387,9 @@ def pc_logic_address_for_input(input_physical: str) -> str | None:
     address it belongs to (canonical 4-hex form) — or ``None`` if the
     address doesn't fit the PC-Logic input pattern.
 
-    Assumes the PC-Logic address is even (bit 0 = 0), which holds on
-    all observed installs and matches Nikobus's 16-bit module-address
-    convention.
+    The slot is the lowest three bits and the module address the
+    sixteen above them, so an odd module address is given back as it
+    is (Nikobus-HA #592, module ``8F71``).
     """
 
     try:
@@ -398,18 +403,10 @@ def pc_logic_address_for_input(input_physical: str) -> str | None:
     if (addr >> 20) & 0xF != 0x6:
         return None
 
-    # Slot index lives in the low nibble, 1..N.
-    slot = addr & 0x0F
-    if not (1 <= slot <= 16):
+    if addr & 0x07 == 0:
         return None
 
-    # Recover (pc_logic_addr >> 1) from bits 4..19 of the physical.
-    half_addr = (addr >> 4) & 0xFFFF
-    pc_logic = half_addr << 1
-    if not (0 <= pc_logic <= 0xFFFF):
-        return None
-
-    return f"{pc_logic:04X}"
+    return f"{(addr >> 3) & 0xFFFF:04X}"
 
 
 def pc_logic_input_slot_index(input_physical: str) -> int | None:
@@ -421,10 +418,9 @@ def pc_logic_input_slot_index(input_physical: str) -> int | None:
         return None
     if (addr >> 20) & 0xF != 0x6:
         return None
-    slot = addr & 0x0F
-    if not (1 <= slot <= 16):
-        return None
-    return slot
+    # Bit 3 is the lowest bit of the module address, not part of the slot.
+    slot = addr & 0x07
+    return slot or None
 
 
 def is_known_button_canonical(

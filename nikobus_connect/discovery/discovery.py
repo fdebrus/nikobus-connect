@@ -1846,7 +1846,7 @@ class NikobusDiscovery:
                     if stale:
                         _LOGGER.info(
                             "Purged %d stale synthesized input(s) for %s %s "
-                            "(pre-0.34.0 address scheme): %s",
+                            "(an earlier address scheme): %s",
                             len(stale),
                             module_type,
                             module_addr,
