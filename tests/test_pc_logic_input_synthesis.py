@@ -733,3 +733,64 @@ def test_synthesis_purges_pre_0_34_interface_entries(tmp_path):
     # Corrected interface physicals synthesized for the merge to land:
     assert "180549" in discovery.discovered_devices
     assert "18054A" in discovery.discovered_devices
+
+
+def test_issue_592_pc_logic_at_an_odd_address_matches_captured_frames(tmp_path):
+    """Nikobus-HA #592: the PC-Logic at 8F71 sends 24778B / 64778B for a
+    contact on input 1 and 14778B / 54778B on input 2. With the
+    address's lowest bit dropped the store held 20778B / 60778B and
+    10778B / 50778B, which the module never sends."""
+
+    discovery = _make_discovery(tmp_path)
+    discovery.discovered_devices = {
+        "8F71": {
+            "category": "Module",
+            "module_type": "pc_logic",
+            "channels": 6,
+            "channels_count": 6,
+            "address": "8F71",
+        }
+    }
+    discovery._synthesize_pc_logic_inputs()
+    button_data: dict = {"nikobus_button": {}}
+    merge_discovered_buttons(button_data, discovery.discovered_devices, KEY_MAPPING, convert_nikobus_address)
+
+    buttons = button_data["nikobus_button"]
+    assert sorted(buttons) == ["647B89", "647B8A", "647B8B", "647B8C", "647B8D", "647B8E"]
+    frames = {
+        physical: {key: point["bus_address"] for key, point in entry["operation_points"].items()}
+        for physical, entry in buttons.items()
+    }
+    assert frames["647B89"] == {"1A": "24778B", "1B": "64778B"}
+    assert frames["647B8A"] == {"1A": "14778B", "1B": "54778B"}
+    assert [buttons[physical]["pc_logic_slot_index"] for physical in sorted(buttons)] == [1, 2, 3, 4, 5, 6]
+
+
+def test_issue_592_an_input_of_an_odd_address_gives_its_module_back():
+    for slot, physical in enumerate(derive_pc_logic_input_physicals("8F71"), start=1):
+        assert pc_logic_address_for_input(physical) == "8F71", physical
+        assert pc_logic_input_slot_index(physical) == slot, physical
+
+
+def test_issue_592_inputs_stored_under_the_dropped_bit_are_replaced(tmp_path):
+    """A store written before the fix holds 647B81..86 for module 8F71."""
+
+    discovery = _make_discovery(tmp_path)
+    discovery._button_data = {
+        "nikobus_button": {
+            f"647B8{slot}": {"pc_logic_parent_address": "8F71", "pc_logic_slot_index": slot}
+            for slot in range(1, 7)
+        }
+    }
+    discovery.discovered_devices = {
+        "8F71": {
+            "category": "Module",
+            "module_type": "pc_logic",
+            "channels": 6,
+            "channels_count": 6,
+            "address": "8F71",
+        }
+    }
+    discovery._synthesize_pc_logic_inputs()
+    assert discovery._button_data["nikobus_button"] == {}
+    assert "647B89" in discovery.discovered_devices

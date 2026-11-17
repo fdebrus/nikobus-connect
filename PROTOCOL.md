@@ -493,11 +493,15 @@ Controllers with logical inputs compute the bus addresses of those
 inputs from their **own module address and a slot index**
 (`discovery/protocol.py: derive_pc_logic_input_physicals`):
 
-**PC-Logic (05-201)** — validated on three independent installs:
+**PC-Logic (05-201)** — validated on three installs with an even
+module address and one with an odd one (`8F71`, Nikobus-HA #592):
 
 ```
-input_physical = 0x600000 | ((module_addr >> 1) << 4) | slot     # slot = 1..6
+input_physical = 0x600000 | (module_addr << 3) | slot            # slot = 1..6
 ```
+
+The address's lowest bit lands on bit 3 of the input address, just
+above the slot.
 
 **Modular Interface (05-206)** — validated on two installs:
 

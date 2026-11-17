@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.57.10
+
+- **The inputs of a PC-Logic at an odd address are found.** The addresses of a PC-Logic's six inputs are computed from the module's own address, and the computation dropped the address's lowest bit. For a module at an even address nothing changes; for one at an odd address every input was put eight below where the module sends, so a contact fired a press with no module behind it and the input's entities never reacted. Reported in Nikobus-HA #592 (2026-11-13) for a 05-201 at `8F71`: contacts on inputs 1 and 2 send `24778B` / `64778B` and `14778B` / `54778B`, where the store held `20778B` / `60778B` and `10778B` / `50778B`. The inputs are now at `647B89` to `647B8E`. One module, two of its six inputs captured; the other four follow from the same computation.
+- The three installs the computation was validated on (`940C`, `8DC8`, `8806`) have even addresses and give the same addresses as before.
+- `pc_logic_address_for_input` and `pc_logic_input_slot_index` read an input of an odd address back to its module and slot. The slot is the lowest three bits now, 1 to 7; the module has six inputs.
+- A discovery replaces the inputs stored at the wrong addresses, as it does for other inputs derived by an earlier scheme. A host that keys entities on those addresses gets new entities for them.
+
 ## 0.57.9
 
 - **`discovery.plate_key_position(entry, key)`** says where a key sits on its wall plate, from the plate's entry in the button store and the key's label. A two-key plate has `upper` and `lower`; a four-key plate `upper_left`, `lower_left`, `upper_right`, `lower_right`; an eight-key plate four columns, from the left 1A / 1B, 1C / 1D, 2A / 2B, 2C / 2D, with `upper_mid_left`, `upper_mid_right` and their lower twins for the two in the middle. `None` for what is not a key of a wall plate: an interface's input, an RF transmitter, a motion detector, an IR code.
